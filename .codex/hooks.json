@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/src/client/hook.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Checking the Synapse inbox"
+          }
+        ]
+      }
+    ]
+  }
+}
