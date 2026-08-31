@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import { DISPATCHER_PROMPT } from "../../src/client/dispatcher.mjs";
 import { addJob, readState } from "../../src/client/store.mjs";
 
 const hookPath = resolve("src/client/hook.mjs");
@@ -96,4 +97,55 @@ test("the project hook runs only from the main checkout", async () => {
 
   assert.match(stdout, /route me/);
   assert.equal((await readState(statePath)).jobs[0].status, "routing");
+});
+
+test("an automatic dispatcher tick does not compete with dispatcher-next", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-tick-hook-test-"));
+  const statePath = join(directory, "state.json");
+
+  await addJob(statePath, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "route me on the scheduled path",
+    projectRoot: "/tmp/example-project",
+  });
+
+  const { stdout } = await runHook({
+    env: {
+      ...process.env,
+      SYNAPSE_STATE_PATH: statePath,
+      SYNAPSE_PROJECT_ROOT: "/tmp/example-project",
+    },
+    input: JSON.stringify({
+      session_id: "dispatcher-thread",
+      cwd: "/tmp/example-project",
+      hook_event_name: "UserPromptSubmit",
+      prompt: DISPATCHER_PROMPT,
+    }),
+  });
+
+  assert.equal(stdout, "");
+  assert.equal((await readState(statePath)).jobs[0].status, "pending");
+});
+
+test("a normal prompt gets no empty-inbox dispatcher context", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-normal-hook-test-"));
+  const statePath = join(directory, "state.json");
+
+  const { stdout } = await runHook({
+    env: {
+      ...process.env,
+      SYNAPSE_STATE_PATH: statePath,
+      SYNAPSE_PROJECT_ROOT: "/tmp/example-project",
+    },
+    input: JSON.stringify({
+      session_id: "owner-thread",
+      cwd: "/tmp/example-project",
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Continue my regular task",
+    }),
+  });
+
+  assert.equal(stdout, "");
 });

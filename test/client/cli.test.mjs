@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   parseArguments,
+  nextDispatcherDelivery,
   resolveProjectRoot,
   sendTask,
 } from "../../src/client/cli.mjs";
+import { DISPATCHER_PROMPT } from "../../src/client/dispatcher.mjs";
 
 test("the CLI parses a channel and multi-word task", () => {
   assert.deepEqual(
@@ -61,6 +63,42 @@ test("the CLI parses the internal native-delivery acknowledgement", () => {
       projectId: "project-1",
     },
   );
+});
+
+test("the CLI exposes the exact scheduled dispatcher prompt", () => {
+  assert.deepEqual(parseArguments(["dispatcher-prompt"]), {
+    command: "dispatcher-prompt",
+  });
+  assert.match(DISPATCHER_PROMPT, /automatic Synapse dispatcher cycle/);
+  assert.match(DISPATCHER_PROMPT, /route-inbox\/SKILL\.md/);
+});
+
+test("the CLI leases one delivery for the scheduled dispatcher", async () => {
+  let receivedOptions = null;
+  const payload = { jobId: "job-1", task: "do the thing" };
+
+  const result = await nextDispatcherDelivery(
+    { projectRoot: "/tmp/example-project" },
+    {
+      statePath: "/tmp/test-state.json",
+      reserveDelivery: async (_path, options) => {
+        receivedOptions = options;
+        return payload;
+      },
+    },
+  );
+
+  assert.deepEqual(receivedOptions, { projectRoot: "/tmp/example-project" });
+  assert.deepEqual(result, { status: "delivery", payload });
+});
+
+test("the CLI reports an empty scheduled dispatcher cycle", async () => {
+  const result = await nextDispatcherDelivery(
+    { projectRoot: "/tmp/example-project" },
+    { reserveDelivery: async () => null },
+  );
+
+  assert.deepEqual(result, { status: "empty" });
 });
 
 test("send queues a task without starting a detached Codex writer", async () => {

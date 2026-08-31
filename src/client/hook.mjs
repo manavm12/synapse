@@ -1,4 +1,5 @@
 import { PROJECT_ROOT, STATE_PATH } from "./config.mjs";
+import { isDispatcherPrompt } from "./dispatcher.mjs";
 import { reserveNextDesktopDelivery } from "./store.mjs";
 
 async function readStdin() {
@@ -11,7 +12,10 @@ async function readStdin() {
 
 const input = JSON.parse((await readStdin()) || "{}");
 const projectRoot = process.env.SYNAPSE_PROJECT_ROOT ?? PROJECT_ROOT;
-const metadata = await reserveNextDesktopDelivery(STATE_PATH, { projectRoot });
+const dispatcherPrompt = isDispatcherPrompt(input.prompt);
+const metadata = dispatcherPrompt
+  ? null
+  : await reserveNextDesktopDelivery(STATE_PATH, { projectRoot });
 
 if (metadata) {
   const payload = {

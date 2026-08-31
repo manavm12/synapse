@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { PROJECT_ROOT, STATE_PATH } from "./config.mjs";
+import { DISPATCHER_PROMPT } from "./dispatcher.mjs";
 import {
   acknowledgeDesktopDelivery,
   addJob as addStoredJob,
+  reserveNextDesktopDelivery,
 } from "./store.mjs";
 
 function usage() {
@@ -11,6 +13,8 @@ function usage() {
     "Usage:",
     '  npm run synapse -- send <channel-id> "<task>"',
     '  npm run synapse -- send <channel-id> --project <name-or-path> "<task>"',
+    "  npm run synapse -- dispatcher-prompt",
+    "  npm run synapse -- dispatcher-next",
     "  npm run synapse -- acknowledge <job-id> <delivery-id> <thread-id> <host-id> <project-id>",
     "",
     "send queues the message for a Synapse-enabled Codex project task.",
@@ -21,6 +25,18 @@ function usage() {
 export function parseArguments(arguments_) {
   if (arguments_.includes("--help") || arguments_.includes("-h")) {
     return { command: "help" };
+  }
+  if (arguments_[0] === "dispatcher-prompt") {
+    if (arguments_.length !== 1) {
+      throw new Error(usage());
+    }
+    return { command: "dispatcher-prompt" };
+  }
+  if (arguments_[0] === "dispatcher-next") {
+    if (arguments_.length !== 1) {
+      throw new Error(usage());
+    }
+    return { command: "dispatcher-next" };
   }
   if (arguments_[0] === "acknowledge") {
     const [command, jobId, deliveryId, threadId, hostId, projectId, ...extra] =
@@ -82,10 +98,30 @@ export async function sendTask(
   return { ...metadata, delivery: "codex-project" };
 }
 
+export async function nextDispatcherDelivery(
+  { projectRoot = PROJECT_ROOT } = {},
+  {
+    statePath = STATE_PATH,
+    reserveDelivery = reserveNextDesktopDelivery,
+  } = {},
+) {
+  const payload = await reserveDelivery(statePath, { projectRoot });
+  return payload ? { status: "delivery", payload } : { status: "empty" };
+}
+
 export async function main(arguments_ = process.argv.slice(2)) {
   const parsed = parseArguments(arguments_);
   if (parsed.command === "help") {
     process.stdout.write(`${usage()}\n`);
+    return;
+  }
+  if (parsed.command === "dispatcher-prompt") {
+    process.stdout.write(`${DISPATCHER_PROMPT}\n`);
+    return;
+  }
+  if (parsed.command === "dispatcher-next") {
+    const result = await nextDispatcherDelivery();
+    process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
   if (parsed.command === "acknowledge") {
@@ -114,7 +150,7 @@ export async function main(arguments_ = process.argv.slice(2)) {
       `Queued: ${summary.jobId}`,
       `Channel: ${summary.channelId}`,
       `Project: ${resolveProjectRoot(parsed.project)}`,
-      "Delivery: the next prompt in the Synapse-enabled Codex project task will route it.",
+      "Delivery: the automatic Synapse Dispatcher will route it on its next scheduled check.",
       "",
     ].join("\n"),
   );
