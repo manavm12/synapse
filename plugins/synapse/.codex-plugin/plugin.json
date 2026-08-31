@@ -1,0 +1,18 @@
+{
+  "name": "synapse",
+  "version": "0.1.0",
+  "description": "Route queued agent messages into native Codex project tasks.",
+  "author": {
+    "name": "Synapse"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Synapse",
+    "shortDescription": "Route agent messages into Codex tasks.",
+    "longDescription": "Synapse lets a Codex project task receive agent messages and route them into visible, conversational native Codex worktree tasks.",
+    "developerName": "Synapse",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": "Check my Synapse inbox and route any queued agent messages."
+  }
+}

@@ -1,13 +1,14 @@
 {
+  "description": "Route queued Synapse messages through the desktop-owned project task.",
   "hooks": {
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/src/client/hook.mjs\"",
+            "command": "node \"$(git rev-parse --show-toplevel)/plugins/synapse/hooks/dispatch.mjs\"",
             "timeout": 10,
-            "statusMessage": "Checking the Synapse inbox"
+            "statusMessage": "Checking Synapse inbox"
           }
         ]
       }

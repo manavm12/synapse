@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  acknowledgeDesktopDelivery,
   addJob,
   claimTask,
   completeTask,
@@ -12,7 +13,9 @@ import {
   failTask,
   getChannel,
   readState,
+  releaseDesktopDelivery,
   reserveDeadJobRecovery,
+  reserveNextDesktopDelivery,
   reserveNextJob,
   setJobTurn,
   setJobWorker,
@@ -55,6 +58,7 @@ test("a child can claim and complete the hidden task", async () => {
     channelId: "channel-1",
     sender: "person-a",
     task: "write the proof file",
+    projectRoot: "/tmp/example-project",
   });
   const dispatch = await reserveNextJob(path);
 
@@ -65,6 +69,136 @@ test("a child can claim and complete the hidden task", async () => {
   assert.equal(claim.task, "write the proof file");
   assert.equal(state.jobs[0].status, "completed");
   assert.equal(state.jobs[0].result, "proof written");
+});
+
+test("a desktop owner leases and acknowledges a native task delivery", async () => {
+  const path = await statePath();
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "write the proof file",
+    projectRoot: "/tmp/example-project",
+  });
+
+  const delivery = await reserveNextDesktopDelivery(path, {
+    createDeliveryId: () => "delivery-1",
+    projectRoot: "/tmp/example-project",
+  });
+  assert.equal(delivery.task, "write the proof file");
+  assert.equal(await reserveNextDesktopDelivery(path), null);
+
+  const result = await acknowledgeDesktopDelivery(
+    path,
+    "job-1",
+    "delivery-1",
+    {
+      threadId: "thread-1",
+      hostId: "local",
+      projectId: "project-1",
+    },
+  );
+  const state = await readState(path);
+
+  assert.equal(result.status, "completed");
+  assert.equal(state.jobs[0].result, "Delivered to the Codex project task");
+  assert.deepEqual(state.channels["channel-1"], {
+    threadId: "thread-1",
+    hostId: "local",
+    projectId: "project-1",
+    projectRoot: "/tmp/example-project",
+    worktreePath: null,
+  });
+});
+
+test("a desktop owner cannot lease a message attached to another project", async () => {
+  const path = await statePath();
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+    projectRoot: "/tmp/project-a",
+  });
+
+  assert.equal(
+    await reserveNextDesktopDelivery(path, { projectRoot: "/tmp/project-b" }),
+    null,
+  );
+  assert.equal((await readState(path)).jobs[0].status, "pending");
+});
+
+test("a legacy App Server channel is migrated to a new native task", async () => {
+  const path = await statePath();
+  await setChannelThread(path, "channel-1", {
+    threadId: "legacy-thread",
+    worktreePath: "/tmp/legacy-worktree",
+  });
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+    projectRoot: "/tmp/example-project",
+  });
+
+  const delivery = await reserveNextDesktopDelivery(path, {
+    projectRoot: "/tmp/example-project",
+  });
+
+  assert.equal(delivery.channel.threadId, null);
+  assert.equal(delivery.channel.hostId, null);
+});
+
+test("an expired desktop delivery is retried with a new lease", async () => {
+  const path = await statePath();
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+  });
+  const first = await reserveNextDesktopDelivery(path, {
+    now: 1_000,
+    deliveryLeaseMs: 100,
+    createDeliveryId: () => "delivery-1",
+  });
+  const second = await reserveNextDesktopDelivery(path, {
+    now: 1_101,
+    deliveryLeaseMs: 100,
+    createDeliveryId: () => "delivery-2",
+  });
+
+  assert.equal(first.deliveryId, "delivery-1");
+  assert.equal(second.deliveryId, "delivery-2");
+  await assert.rejects(
+    () =>
+      acknowledgeDesktopDelivery(path, "job-1", "delivery-1", {
+        threadId: "thread-1",
+        hostId: "local",
+        projectId: "project-1",
+      }),
+    /Stale desktop delivery/,
+  );
+});
+
+test("a failed native delivery can be released for retry", async () => {
+  const path = await statePath();
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+  });
+  const delivery = await reserveNextDesktopDelivery(path, {
+    createDeliveryId: () => "delivery-1",
+  });
+
+  assert.equal(
+    await releaseDesktopDelivery(path, "job-1", delivery.deliveryId),
+    true,
+  );
+  assert.equal((await readState(path)).jobs[0].status, "pending");
 });
 
 test("a task cannot be claimed by a second caller", async () => {
@@ -373,5 +507,7 @@ test("follow-up jobs reuse the channel thread", async () => {
   const metadata = await reserveNextJob(path);
 
   assert.equal(channel.threadId, "thread-123");
+  assert.equal(channel.hostId, null);
+  assert.equal(channel.projectRoot, null);
   assert.equal(metadata.jobId, "job-2");
 });

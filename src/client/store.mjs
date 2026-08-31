@@ -6,7 +6,13 @@ import { acquireProcessLock, processIsRunning } from "./process-lock.mjs";
 
 const EMPTY_STATE = Object.freeze({ version: 1, channels: {}, jobs: [] });
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9._:-]{1,128}$/;
-const ACTIVE_CHANNEL_STATUSES = new Set(["dispatched", "claimed", "recovering", "blocked"]);
+const ACTIVE_CHANNEL_STATUSES = new Set([
+  "routing",
+  "dispatched",
+  "claimed",
+  "recovering",
+  "blocked",
+]);
 
 function freshState() {
   return structuredClone(EMPTY_STATE);
@@ -66,6 +72,25 @@ function resetDispatch(job) {
   job.recoveryLeaseExpiresAt = null;
 }
 
+function resetDesktopDelivery(job) {
+  job.status = "pending";
+  job.deliveryId = null;
+  job.deliveryStartedAt = null;
+  job.deliveryLeaseExpiresAt = null;
+}
+
+function recoverExpiredDesktopDeliveries(state, now) {
+  for (const job of state.jobs) {
+    if (
+      job.status !== "routing" ||
+      Date.parse(job.deliveryLeaseExpiresAt) > now
+    ) {
+      continue;
+    }
+    resetDesktopDelivery(job);
+  }
+}
+
 function recoverExpiredUnownedDispatches(state, now) {
   for (const job of state.jobs) {
     if (!["dispatched", "claimed"].includes(job.status)) {
@@ -113,7 +138,10 @@ export async function resetState(path) {
   await writeState(path, freshState());
 }
 
-export async function addJob(path, { id, channelId, sender, task }) {
+export async function addJob(
+  path,
+  { id, channelId, sender, task, projectRoot = null },
+) {
   requireIdentifier(id, "job ID");
   requireIdentifier(channelId, "channel ID");
   requireIdentifier(sender, "sender");
@@ -121,12 +149,26 @@ export async function addJob(path, { id, channelId, sender, task }) {
     if (state.jobs.some((job) => job.id === id)) {
       throw new Error(`Job already exists: ${id}`);
     }
-    state.channels[channelId] ??= { threadId: null, worktreePath: null };
+    const channel = state.channels[channelId];
+    if (channel?.projectRoot && projectRoot && channel.projectRoot !== projectRoot) {
+      throw new Error(
+        `Channel ${channelId} is attached to ${channel.projectRoot}, not ${projectRoot}`,
+      );
+    }
+    state.channels[channelId] ??= {
+      threadId: null,
+      hostId: null,
+      projectId: null,
+      projectRoot,
+      worktreePath: null,
+    };
+    state.channels[channelId].projectRoot ??= projectRoot;
     const job = {
       id,
       channelId,
       sender,
       task,
+      projectRoot,
       status: "pending",
       createdAt: new Date().toISOString(),
       dispatchedAt: null,
@@ -145,9 +187,112 @@ export async function addJob(path, { id, channelId, sender, task }) {
       recoveryId: null,
       recoveryStartedAt: null,
       recoveryLeaseExpiresAt: null,
+      deliveryId: null,
+      deliveryStartedAt: null,
+      deliveryLeaseExpiresAt: null,
     };
     state.jobs.push(job);
     return publicMetadata(job);
+  });
+}
+
+export async function reserveNextDesktopDelivery(
+  path,
+  {
+    now = Date.now(),
+    deliveryLeaseMs = 5 * 60_000,
+    createDeliveryId = randomUUID,
+    projectRoot = null,
+  } = {},
+) {
+  return mutateState(path, (state) => {
+    recoverExpiredDesktopDeliveries(state, now);
+    const activeChannels = new Set(
+      state.jobs
+        .filter((candidate) => ACTIVE_CHANNEL_STATUSES.has(candidate.status))
+        .map((candidate) => candidate.channelId),
+    );
+    const job = state.jobs.find(
+      (candidate) =>
+        candidate.status === "pending" &&
+        !activeChannels.has(candidate.channelId) &&
+        (!projectRoot || candidate.projectRoot === projectRoot),
+    );
+    if (!job) {
+      return null;
+    }
+    job.status = "routing";
+    job.deliveryId = createDeliveryId();
+    job.deliveryStartedAt = new Date(now).toISOString();
+    job.deliveryLeaseExpiresAt = new Date(now + deliveryLeaseMs).toISOString();
+    const channel = structuredClone(state.channels[job.channelId]);
+    // Threads created by the retired detached App Server have no native
+    // project identity. Migrate the channel by creating one native task.
+    if (!channel.projectId) {
+      channel.threadId = null;
+      channel.hostId = null;
+    }
+    return {
+      jobId: job.id,
+      channelId: job.channelId,
+      sender: job.sender,
+      task: job.task,
+      deliveryId: job.deliveryId,
+      projectRoot: job.projectRoot,
+      channel,
+    };
+  });
+}
+
+export async function acknowledgeDesktopDelivery(
+  path,
+  jobId,
+  deliveryId,
+  { threadId, hostId, projectId },
+) {
+  requireIdentifier(threadId, "thread ID");
+  requireIdentifier(hostId, "host ID");
+  requireIdentifier(projectId, "project ID");
+  return mutateState(path, (state) => {
+    const job = state.jobs.find((candidate) => candidate.id === jobId);
+    if (!job) {
+      throw new Error(`Unknown job: ${jobId}`);
+    }
+    if (job.status !== "routing" || job.deliveryId !== deliveryId) {
+      throw new Error(`Stale desktop delivery for job ${jobId}`);
+    }
+    const existing = state.channels[job.channelId] ?? {};
+    state.channels[job.channelId] = {
+      ...existing,
+      threadId,
+      hostId,
+      projectId,
+      projectRoot: job.projectRoot ?? existing.projectRoot ?? null,
+      worktreePath: existing.worktreePath ?? null,
+    };
+    job.status = "completed";
+    job.completedAt = new Date().toISOString();
+    job.workerFinishedAt = job.completedAt;
+    job.threadId = threadId;
+    job.result = "Delivered to the Codex project task";
+    job.deliveryLeaseExpiresAt = null;
+    return {
+      ...publicMetadata(job),
+      threadId,
+      hostId,
+      projectId,
+    };
+  });
+}
+
+export async function releaseDesktopDelivery(path, jobId, deliveryId) {
+  return mutateState(path, (state) => {
+    const job = state.jobs.find((candidate) => candidate.id === jobId);
+    if (!job || job.status !== "routing" || job.deliveryId !== deliveryId) {
+      return false;
+    }
+    resetDesktopDelivery(job);
+    return true;
   });
 }
 
@@ -393,9 +538,25 @@ export async function getChannel(path, channelId) {
   return state.channels[channelId] ?? null;
 }
 
-export async function setChannelThread(path, channelId, { threadId, worktreePath }) {
+export async function setChannelThread(
+  path,
+  channelId,
+  {
+    threadId,
+    worktreePath,
+    hostId = null,
+    projectId = null,
+    projectRoot = null,
+  },
+) {
   return mutateState(path, (state) => {
-    state.channels[channelId] = { threadId, worktreePath };
+    state.channels[channelId] = {
+      threadId,
+      hostId,
+      projectId,
+      projectRoot,
+      worktreePath,
+    };
     return structuredClone(state.channels[channelId]);
   });
 }
