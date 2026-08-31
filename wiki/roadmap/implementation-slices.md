@@ -38,14 +38,14 @@ Test on macOS first. Do not build Postgres, accounts, production memory, or the 
 
 The local spike passed on 2026-08-29. It proved metadata-only parent delivery, hidden MCP task claim, separate worktree execution, duplicate prevention, and a two-turn follow-up on the same Codex thread.
 
-Persistent follow-ups require one shared Codex App Server process because independently launched App Server instances conflict on the thread's active writer. This is Codex infrastructure rather than a Synapse task runner.
+Persistent follow-ups require one shared Codex App Server process while Synapse jobs are active because independently launched App Server instances conflict on the thread's active writer. When the last worker finishes, Synapse stops that process so the desktop can load the completed child thread; the next job starts it again and resumes the stored thread.
 
 ### Client baseline accepted
 
-The V1 client supervises one project-namespaced Unix-socket App Server process. The verified spike has been promoted into the root Node package, and the obsolete spike directory has been removed from the repository.
+The V1 client supervises one project-namespaced Unix-socket App Server process while work is active and releases it at the idle boundary. The verified spike has been promoted into the root Node package, and the obsolete spike directory has been removed from the repository.
 
 The baseline keeps parent context metadata-only, fences every dispatch attempt with a unique token, runs one active job per channel, recovers dead workers and stale locks, hashes worktree and log paths, preserves one Codex thread and worktree per channel, and marks failed workers explicitly. The local JSON job store and task MCP server remain Slice 1 test scaffolding and will be replaced by the relay boundary in the messaging slice.
 
-Acceptance evidence on macOS: 22 unit tests pass, dependency audit reports zero vulnerabilities, and the isolated two-turn live probe completes both jobs on the same Codex thread. The probe leaves the default client state, Git worktree count, runtime directories, and processes unchanged.
+Acceptance evidence on macOS: 37 unit and integration tests pass, dependency audit reports zero vulnerabilities, and the isolated two-turn live probe completes both jobs on the same Codex thread. The probe leaves the default client state, Git worktree count, runtime directories, and processes unchanged.
 
 The implementation is published in GitHub pull request [#1](https://github.com/manavm12/synapse/pull/1).

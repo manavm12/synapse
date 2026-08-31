@@ -1,6 +1,9 @@
 import { APP_SERVER_SOCKET, MCP_SERVER_PATH, STATE_PATH } from "./config.mjs";
 import { AppServerClient } from "./app-server-client.mjs";
-import { ensureSharedAppServer } from "./shared-app-server.mjs";
+import {
+  ensureSharedAppServer,
+  stopSharedAppServerIfIdle,
+} from "./shared-app-server.mjs";
 import {
   failTask,
   finishJobWorker,
@@ -113,6 +116,7 @@ export async function executeJob({
   dispatchId,
   statePath = STATE_PATH,
   run = runWorker,
+  releaseServer = null,
 }) {
   try {
     const result = await run({ jobId, channelId, dispatchId });
@@ -129,6 +133,12 @@ export async function executeJob({
     await failTask(statePath, jobId, dispatchId, error.message);
     throw error;
   } finally {
+    const release = releaseServer ?? (run === runWorker ? stopSharedAppServerIfIdle : null);
+    if (release) {
+      await release({ statePath, jobId, dispatchId }).catch((error) => {
+        process.stderr.write(`Failed to release Codex App Server: ${error.message}\n`);
+      });
+    }
     await finishJobWorker(statePath, jobId, dispatchId);
   }
 }

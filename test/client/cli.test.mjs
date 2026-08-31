@@ -42,6 +42,7 @@ test("the CLI dispatches a task and reports its project thread and worktree", as
       },
       wait: async () => {
         storedJob.status = "completed";
+        storedJob.workerFinishedAt = "2026-08-31T00:00:00.000Z";
         storedJob.result = "proof created";
       },
       onStatus: ({ status }) => statuses.push(status),

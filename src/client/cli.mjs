@@ -74,7 +74,7 @@ export async function sendTask(
       onStatus({ jobId, status: job.status });
       previousStatus = job.status;
     }
-    if (job.status === "completed") {
+    if (job.status === "completed" && job.workerFinishedAt) {
       const channel = await getChannel(statePath, channelId);
       return {
         jobId,

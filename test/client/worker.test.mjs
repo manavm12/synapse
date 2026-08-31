@@ -97,3 +97,45 @@ test("a late worker error does not overwrite an already completed job", async ()
   assert.equal(job.status, "completed");
   assert.ok(job.workerFinishedAt);
 });
+
+test("a real worker releases App Server ownership before marking itself finished", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-worker-test-"));
+  const statePath = join(directory, "state.json");
+  await addJob(statePath, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+  });
+  const dispatch = await reserveNextJob(statePath);
+  const observations = [];
+
+  await executeJob({
+    jobId: "job-1",
+    channelId: "channel-1",
+    dispatchId: dispatch.dispatchId,
+    statePath,
+    run: async () => {
+      await claimTask(statePath, "job-1", dispatch.dispatchId);
+      await completeTask(statePath, "job-1", dispatch.dispatchId, "done");
+    },
+    releaseServer: async (assignment) => {
+      observations.push({
+        assignment,
+        workerFinishedAt: (await readState(statePath)).jobs[0].workerFinishedAt,
+      });
+    },
+  });
+
+  assert.deepEqual(observations, [
+    {
+      assignment: {
+        statePath,
+        jobId: "job-1",
+        dispatchId: dispatch.dispatchId,
+      },
+      workerFinishedAt: null,
+    },
+  ]);
+  assert.ok((await readState(statePath)).jobs[0].workerFinishedAt);
+});

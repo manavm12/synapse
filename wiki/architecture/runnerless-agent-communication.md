@@ -26,6 +26,6 @@ The thread-spawn spike passed locally on macOS on 2026-08-29. A `UserPromptSubmi
 Two implementation constraints were confirmed:
 
 - State-changing MCP tools are rejected under `approvalPolicy: "never"`. The spike succeeded with `approvalPolicy: "on-request"` and `approvalsReviewer: "auto_review"`.
-- Separate short-lived App Server processes cannot resume the same persisted thread because Codex keeps a single active writer. The working spike launches one shared Codex App Server on a Unix socket and lets short-lived hook workers connect to it over WebSocket.
+- Separate simultaneous App Server processes cannot resume the same persisted thread because Codex keeps a single active writer. Synapse launches one shared App Server on a Unix socket while jobs are active, lets short-lived hook workers connect over WebSocket, and stops it at the idle boundary so the desktop can take ownership of completed threads.
 
-This means the MVP can avoid a custom Synapse task runner, but it still needs access to a persistent Codex control process. Production should reuse the desktop app's existing App Server if an integration path is available; otherwise Synapse must launch and supervise this lightweight local Codex process.
+This means the MVP can avoid a custom Synapse task runner, but it still needs access to a Codex control process while work is active. Production should reuse the desktop app's existing App Server if an integration path is available; until then Synapse launches the lightweight local process for active work and hands ownership back to the desktop when idle.
