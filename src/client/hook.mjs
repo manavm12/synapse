@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { RUNTIME_ROOT, STATE_PATH, WORKER_PATH } from "./config.mjs";
 import { dispatchInbox } from "./dispatch.mjs";
+import { interruptTurnForRecovery } from "./recovery.mjs";
 import { setJobWorker } from "./store.mjs";
 
 async function readStdin() {
@@ -53,6 +54,7 @@ await readStdin();
 const metadata = await dispatchInbox({
   statePath: STATE_PATH,
   spawnWorker: spawnDetachedWorker,
+  recoverWorker: interruptTurnForRecovery,
 });
 
 if (metadata) {

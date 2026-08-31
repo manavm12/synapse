@@ -8,10 +8,13 @@ import {
   addJob,
   claimTask,
   completeTask,
+  completeDeadJobRecovery,
   failTask,
   getChannel,
   readState,
+  reserveDeadJobRecovery,
   reserveNextJob,
+  setJobTurn,
   setJobWorker,
   setChannelThread,
 } from "../../src/client/store.mjs";
@@ -171,7 +174,79 @@ test("concurrent mutations do not lose jobs while recovering a stale lock", asyn
   assert.equal(new Set(state.jobs.map((job) => job.id)).size, 10);
 });
 
-test("a job owned by a dead worker can be dispatched again", async () => {
+test("a dead worker's turn is recovered before its job can be dispatched again", async () => {
+  const path = await statePath();
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+  });
+  const dispatch = await reserveNextJob(path, {
+    createDispatchId: () => "dispatch-1",
+  });
+  await setJobWorker(path, "job-1", dispatch.dispatchId, 2147483647);
+  await setJobTurn(path, "job-1", dispatch.dispatchId, {
+    threadId: "thread-1",
+    turnId: "turn-1",
+  });
+
+  const recovery = await reserveDeadJobRecovery(path, {
+    createRecoveryId: () => "recovery-1",
+  });
+
+  assert.deepEqual(recovery, {
+    jobId: "job-1",
+    channelId: "channel-1",
+    dispatchId: "dispatch-1",
+    recoveryId: "recovery-1",
+    threadId: "thread-1",
+    turnId: "turn-1",
+  });
+  assert.equal(await reserveNextJob(path), null);
+  assert.equal(
+    await completeDeadJobRecovery(
+      path,
+      "job-1",
+      "dispatch-1",
+      "recovery-1",
+    ),
+    true,
+  );
+  const retried = await reserveNextJob(path, {
+    createDispatchId: () => "dispatch-2",
+  });
+  assert.equal(retried.jobId, "job-1");
+  assert.equal(retried.dispatchId, "dispatch-2");
+});
+
+test("a dead worker without a recorded turn blocks its channel", async () => {
+  const path = await statePath();
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+  });
+  await addJob(path, {
+    id: "job-2",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "follow-up",
+  });
+  const dispatch = await reserveNextJob(path);
+  await setJobWorker(path, "job-1", dispatch.dispatchId, 2147483647);
+
+  assert.equal(await reserveDeadJobRecovery(path), null);
+  assert.equal(await reserveNextJob(path), null);
+
+  const state = await readState(path);
+  assert.equal(state.jobs[0].status, "blocked");
+  assert.match(state.jobs[0].error, /could be identified safely/);
+  assert.equal(state.jobs[1].status, "pending");
+});
+
+test("a task assignment cannot cross its server-bound channel", async () => {
   const path = await statePath();
   await addJob(path, {
     id: "job-1",
@@ -180,9 +255,12 @@ test("a job owned by a dead worker can be dispatched again", async () => {
     task: "task",
   });
   const dispatch = await reserveNextJob(path);
-  await setJobWorker(path, "job-1", dispatch.dispatchId, 2147483647);
 
-  assert.equal((await reserveNextJob(path)).jobId, "job-1");
+  await assert.rejects(
+    () => claimTask(path, "job-1", dispatch.dispatchId, "channel-2"),
+    /does not belong to channel channel-2/,
+  );
+  assert.equal((await readState(path)).jobs[0].status, "dispatched");
 });
 
 test("an unowned dispatch is retried after its startup lease expires", async () => {

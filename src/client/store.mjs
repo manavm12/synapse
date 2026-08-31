@@ -6,6 +6,7 @@ import { acquireProcessLock, processIsRunning } from "./process-lock.mjs";
 
 const EMPTY_STATE = Object.freeze({ version: 1, channels: {}, jobs: [] });
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9._:-]{1,128}$/;
+const ACTIVE_CHANNEL_STATUSES = new Set(["dispatched", "claimed", "recovering", "blocked"]);
 
 function freshState() {
   return structuredClone(EMPTY_STATE);
@@ -58,17 +59,21 @@ function resetDispatch(job) {
   job.workerPid = null;
   job.workerStartedAt = null;
   job.workerFinishedAt = null;
+  job.threadId = null;
+  job.turnId = null;
+  job.recoveryId = null;
+  job.recoveryStartedAt = null;
 }
 
-function recoverDeadWorkers(state, now) {
+function recoverExpiredUnownedDispatches(state, now) {
   for (const job of state.jobs) {
     if (!["dispatched", "claimed"].includes(job.status)) {
       continue;
     }
-    if (job.workerPid && processIsRunning(job.workerPid)) {
+    if (job.workerPid) {
       continue;
     }
-    if (!job.workerPid && Date.parse(job.dispatchLeaseExpiresAt) > now) {
+    if (Date.parse(job.dispatchLeaseExpiresAt) > now) {
       continue;
     }
     resetDispatch(job);
@@ -117,6 +122,10 @@ export async function addJob(path, { id, channelId, sender, task }) {
       workerPid: null,
       workerStartedAt: null,
       workerFinishedAt: null,
+      threadId: null,
+      turnId: null,
+      recoveryId: null,
+      recoveryStartedAt: null,
     };
     state.jobs.push(job);
     return publicMetadata(job);
@@ -132,10 +141,10 @@ export async function reserveNextJob(
   } = {},
 ) {
   return mutateState(path, (state) => {
-    recoverDeadWorkers(state, now);
+    recoverExpiredUnownedDispatches(state, now);
     const activeChannels = new Set(
       state.jobs
-        .filter((candidate) => ["dispatched", "claimed"].includes(candidate.status))
+        .filter((candidate) => ACTIVE_CHANNEL_STATUSES.has(candidate.status))
         .map((candidate) => candidate.channelId),
     );
     const job = state.jobs.find(
@@ -164,7 +173,7 @@ export async function releaseJob(path, jobId, dispatchId) {
   });
 }
 
-export async function claimTask(path, jobId, dispatchId) {
+export async function claimTask(path, jobId, dispatchId, expectedChannelId = null) {
   return mutateState(path, (state) => {
     const job = state.jobs.find((candidate) => candidate.id === jobId);
     if (!job) {
@@ -175,6 +184,9 @@ export async function claimTask(path, jobId, dispatchId) {
     }
     if (job.dispatchId !== dispatchId) {
       throw new Error(`Stale dispatch attempt for job ${jobId}`);
+    }
+    if (expectedChannelId && job.channelId !== expectedChannelId) {
+      throw new Error(`Job ${jobId} does not belong to channel ${expectedChannelId}`);
     }
     job.status = "claimed";
     job.claimedAt ??= new Date().toISOString();
@@ -223,6 +235,92 @@ export async function setJobWorker(path, jobId, dispatchId, pid) {
   });
 }
 
+export async function setJobTurn(path, jobId, dispatchId, { threadId, turnId }) {
+  requireIdentifier(threadId, "thread ID");
+  requireIdentifier(turnId, "turn ID");
+  return mutateState(path, (state) => {
+    const job = state.jobs.find((candidate) => candidate.id === jobId);
+    if (!job || !["dispatched", "claimed", "completed"].includes(job.status)) {
+      throw new Error(`Job ${jobId} is not ready for a turn`);
+    }
+    if (job.dispatchId !== dispatchId) {
+      throw new Error(`Stale dispatch attempt for job ${jobId}`);
+    }
+    job.threadId = threadId;
+    job.turnId = turnId;
+  });
+}
+
+export async function reserveDeadJobRecovery(
+  path,
+  { createRecoveryId = randomUUID } = {},
+) {
+  return mutateState(path, (state) => {
+    for (const job of state.jobs) {
+      if (!["dispatched", "claimed"].includes(job.status)) {
+        continue;
+      }
+      if (!job.workerPid || processIsRunning(job.workerPid)) {
+        continue;
+      }
+      if (!job.threadId || !job.turnId) {
+        job.status = "blocked";
+        job.failedAt = new Date().toISOString();
+        job.error = "Worker exited before its Codex turn could be identified safely";
+        job.workerFinishedAt ??= new Date().toISOString();
+        continue;
+      }
+      job.status = "recovering";
+      job.recoveryId = createRecoveryId();
+      job.recoveryStartedAt = new Date().toISOString();
+      return {
+        jobId: job.id,
+        channelId: job.channelId,
+        dispatchId: job.dispatchId,
+        recoveryId: job.recoveryId,
+        threadId: job.threadId,
+        turnId: job.turnId,
+      };
+    }
+    return null;
+  });
+}
+
+export async function completeDeadJobRecovery(path, jobId, dispatchId, recoveryId) {
+  return mutateState(path, (state) => {
+    const job = state.jobs.find((candidate) => candidate.id === jobId);
+    if (
+      !job ||
+      job.status !== "recovering" ||
+      job.dispatchId !== dispatchId ||
+      job.recoveryId !== recoveryId
+    ) {
+      return false;
+    }
+    resetDispatch(job);
+    return true;
+  });
+}
+
+export async function blockDeadJobRecovery(path, jobId, dispatchId, recoveryId, message) {
+  return mutateState(path, (state) => {
+    const job = state.jobs.find((candidate) => candidate.id === jobId);
+    if (
+      !job ||
+      job.status !== "recovering" ||
+      job.dispatchId !== dispatchId ||
+      job.recoveryId !== recoveryId
+    ) {
+      return false;
+    }
+    job.status = "blocked";
+    job.failedAt = new Date().toISOString();
+    job.error = message;
+    job.workerFinishedAt ??= new Date().toISOString();
+    return true;
+  });
+}
+
 export async function finishJobWorker(path, jobId, dispatchId) {
   return mutateState(path, (state) => {
     const job = state.jobs.find((candidate) => candidate.id === jobId);
@@ -237,7 +335,13 @@ export async function finishJobWorker(path, jobId, dispatchId) {
   });
 }
 
-export async function completeTask(path, jobId, dispatchId, result) {
+export async function completeTask(
+  path,
+  jobId,
+  dispatchId,
+  result,
+  expectedChannelId = null,
+) {
   return mutateState(path, (state) => {
     const job = state.jobs.find((candidate) => candidate.id === jobId);
     if (!job) {
@@ -248,6 +352,9 @@ export async function completeTask(path, jobId, dispatchId, result) {
     }
     if (job.dispatchId !== dispatchId) {
       throw new Error(`Stale dispatch attempt for job ${jobId}`);
+    }
+    if (expectedChannelId && job.channelId !== expectedChannelId) {
+      throw new Error(`Job ${jobId} does not belong to channel ${expectedChannelId}`);
     }
     job.status = "completed";
     job.completedAt = new Date().toISOString();

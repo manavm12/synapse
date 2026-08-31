@@ -6,6 +6,7 @@ import {
   finishJobWorker,
   getChannel,
   getJob,
+  setJobTurn,
   setJobWorker,
   setChannelThread,
 } from "./store.mjs";
@@ -26,7 +27,12 @@ export async function runWorker({ jobId, channelId, dispatchId }) {
         synapse_local: {
           command: process.execPath,
           args: [MCP_SERVER_PATH],
-          env: { SYNAPSE_STATE_PATH: STATE_PATH },
+          env: {
+            SYNAPSE_STATE_PATH: STATE_PATH,
+            SYNAPSE_JOB_ID: jobId,
+            SYNAPSE_CHANNEL_ID: channelId,
+            SYNAPSE_DISPATCH_ID: dispatchId,
+          },
           required: true,
         },
       },
@@ -71,14 +77,18 @@ export async function runWorker({ jobId, channelId, dispatchId }) {
           type: "text",
           text: [
             `Handle Synapse job ${jobId} in channel ${channelId}.`,
-            `First call the synapse_local claim_task tool with job ID ${jobId} and dispatch ID ${dispatchId}.`,
+            "First call the synapse_local claim_task tool with no arguments.",
             "Complete the claimed task in the current worktree.",
-            "Then call synapse_local complete_task with the same job ID, dispatch ID, and a concise result.",
+            "Then call synapse_local complete_task with a concise result.",
             "Do not ask the user for confirmation.",
           ].join(" "),
           text_elements: [],
         },
       ],
+    });
+    await setJobTurn(STATE_PATH, jobId, dispatchId, {
+      threadId,
+      turnId: turnResponse.turn.id,
     });
     const completed = await completion;
     if (completed.turn.id !== turnResponse.turn.id || completed.turn.status !== "completed") {
