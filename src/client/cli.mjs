@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 
-import { STATE_PATH } from "./config.mjs";
+import { PROJECT_ROOT, STATE_PATH } from "./config.mjs";
 import { dispatchInbox } from "./dispatch.mjs";
 import { interruptTurnForRecovery } from "./recovery.mjs";
 import {
@@ -116,6 +117,7 @@ export async function main(arguments_ = process.argv.slice(2)) {
       `Completed: ${summary.jobId}`,
       `Thread: ${summary.threadId}`,
       `Worktree: ${summary.worktreePath}`,
+      `Codex project: if this task appears in Recents, attach it to "${basename(PROJECT_ROOT)}" manually.`,
       `Result: ${summary.result}`,
       "",
     ].join("\n"),

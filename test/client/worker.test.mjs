@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { executeJob } from "../../src/client/worker.mjs";
+import {
+  executeJob,
+  SYNAPSE_DEVELOPER_INSTRUCTIONS,
+  taskTurnInput,
+} from "../../src/client/worker.mjs";
 import {
   addJob,
   claimTask,
@@ -12,6 +16,25 @@ import {
   readState,
   reserveNextJob,
 } from "../../src/client/store.mjs";
+
+test("the visible turn contains only the user's task", () => {
+  const task = "Explain Synapse and create a small Markdown file";
+
+  assert.deepEqual(taskTurnInput(task), [
+    {
+      type: "text",
+      text: task,
+      text_elements: [],
+    },
+  ]);
+  assert.doesNotMatch(taskTurnInput(task)[0].text, /claim_task|complete_task|job/i);
+  assert.match(SYNAPSE_DEVELOPER_INSTRUCTIONS, /claim_task/);
+  assert.match(SYNAPSE_DEVELOPER_INSTRUCTIONS, /complete_task/);
+});
+
+test("an empty task cannot be started", () => {
+  assert.throws(() => taskTurnInput("   "), /non-empty string/);
+});
 
 test("a worker error marks its dispatched job failed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "synapse-worker-test-"));

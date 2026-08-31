@@ -15,9 +15,39 @@ import {
 } from "./store.mjs";
 import { ensureWorktree } from "./worktree.mjs";
 
+export const SYNAPSE_DEVELOPER_INSTRUCTIONS = [
+  "This Codex task is being executed through Synapse.",
+  "Before doing any work, call the synapse_local claim_task tool with no arguments to claim the current assignment.",
+  "The user message contains the complete task to perform in the current worktree.",
+  "After completing the task, call synapse_local complete_task with a concise result.",
+  "Do not ask the user for confirmation unless the task itself genuinely requires a user decision.",
+].join(" ");
+
+export function taskTurnInput(task) {
+  if (typeof task !== "string" || !task.trim()) {
+    throw new Error("Synapse task must be a non-empty string");
+  }
+  return [
+    {
+      type: "text",
+      text: task,
+      text_elements: [],
+    },
+  ];
+}
+
 export async function runWorker({ jobId, channelId, dispatchId }) {
   const worktreePath = await ensureWorktree(channelId);
   const channel = await getChannel(STATE_PATH, channelId);
+  const job = await getJob(STATE_PATH, jobId);
+  if (
+    !job ||
+    job.channelId !== channelId ||
+    job.dispatchId !== dispatchId ||
+    !["dispatched", "claimed"].includes(job.status)
+  ) {
+    throw new Error(`Worker assignment is stale or invalid for ${jobId}`);
+  }
   await ensureSharedAppServer();
   const client = new AppServerClient({ socketPath: APP_SERVER_SOCKET });
   let threadId = null;
@@ -49,6 +79,7 @@ export async function runWorker({ jobId, channelId, dispatchId }) {
           approvalsReviewer: "auto_review",
           sandbox: "workspace-write",
           config,
+          developerInstructions: SYNAPSE_DEVELOPER_INSTRUCTIONS,
         })
       : await client.request("thread/start", {
           cwd: worktreePath,
@@ -56,6 +87,7 @@ export async function runWorker({ jobId, channelId, dispatchId }) {
           approvalsReviewer: "auto_review",
           sandbox: "workspace-write",
           config,
+          developerInstructions: SYNAPSE_DEVELOPER_INSTRUCTIONS,
           serviceName: "synapse-client",
           ephemeral: false,
         });
@@ -75,19 +107,7 @@ export async function runWorker({ jobId, channelId, dispatchId }) {
     );
     const turnResponse = await client.request("turn/start", {
       threadId,
-      input: [
-        {
-          type: "text",
-          text: [
-            `Handle Synapse job ${jobId} in channel ${channelId}.`,
-            "First call the synapse_local claim_task tool with no arguments.",
-            "Complete the claimed task in the current worktree.",
-            "Then call synapse_local complete_task with a concise result.",
-            "Do not ask the user for confirmation.",
-          ].join(" "),
-          text_elements: [],
-        },
-      ],
+      input: taskTurnInput(job.task),
     });
     await setJobTurn(STATE_PATH, jobId, dispatchId, {
       threadId,
