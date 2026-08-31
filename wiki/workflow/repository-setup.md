@@ -17,4 +17,12 @@ The global GitHub CLI account may remain `manav-tf`; repository pushes use the S
 
 The project requires Node.js 24 or newer. Install dependencies with `npm install`, run the unit suite with `npm test`, and run the live Codex probe with `npm run probe:live` when validating thread reuse and App Server behavior.
 
+Submit a task manually with:
+
+```text
+npm run synapse -- send <channel-id> "<task>"
+```
+
+The command waits for completion and prints the job ID, Codex thread ID, channel worktree, and result. A channel ID is the durable routing key: its first task creates a detached Git worktree and a Codex thread whose working directory is that worktree, while later tasks with the same channel ID resume both. A different channel ID receives a different worktree and thread. The worktree is still a checkout of this repository, so the child is project-scoped rather than a general unanchored task.
+
 For another device, clone the repository, install dependencies, and open the repository root as a Codex project. The committed `wiki/` directory is the durable handoff context; machine-local credentials, MCP authentication, and global Codex skills still require separate setup.
