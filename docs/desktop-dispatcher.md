@@ -18,7 +18,8 @@ detached App Server.
 
 The main-checkout restriction is intentional. The dispatcher runs directly in
 the saved project. Delivered child tasks run in linked Git worktrees, where the
-hook exits without recursively consuming another queued message.
+hook exits without recursively consuming another queued message. New channel
+worktrees start from the main checkout's current working-tree state.
 
 ## One-time setup
 

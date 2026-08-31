@@ -70,6 +70,7 @@ test("the hook asks the owner to route the exact task through native Codex tools
   assert.match(context, /codex_app__send_message_to_thread/);
   assert.match(context, /write the proof file/);
   assert.match(context, /prompt exactly equal to payload\.task/);
+  assert.match(context, /startingState is `working-tree`/);
   assert.equal((await readState(statePath)).jobs[0].status, "routing");
 });
 
