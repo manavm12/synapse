@@ -220,6 +220,42 @@ test("a dead worker's turn is recovered before its job can be dispatched again",
   assert.equal(retried.dispatchId, "dispatch-2");
 });
 
+test("an expired dead-worker recovery can be claimed again", async () => {
+  const path = await statePath();
+  await addJob(path, {
+    id: "job-1",
+    channelId: "channel-1",
+    sender: "person-a",
+    task: "task",
+  });
+  const dispatch = await reserveNextJob(path, {
+    now: 1_000,
+    createDispatchId: () => "dispatch-1",
+  });
+  await setJobWorker(path, "job-1", dispatch.dispatchId, 2147483647);
+  await setJobTurn(path, "job-1", dispatch.dispatchId, {
+    threadId: "thread-1",
+    turnId: "turn-1",
+  });
+
+  const first = await reserveDeadJobRecovery(path, {
+    now: 2_000,
+    recoveryLeaseMs: 100,
+    createRecoveryId: () => "recovery-1",
+  });
+  const second = await reserveDeadJobRecovery(path, {
+    now: 2_101,
+    recoveryLeaseMs: 100,
+    createRecoveryId: () => "recovery-2",
+  });
+
+  assert.equal(first.recoveryId, "recovery-1");
+  assert.equal(second.recoveryId, "recovery-2");
+  assert.equal(second.threadId, "thread-1");
+  assert.equal(await completeDeadJobRecovery(path, "job-1", dispatch.dispatchId, "recovery-1"), false);
+  assert.equal((await readState(path)).jobs[0].status, "recovering");
+});
+
 test("a dead worker without a recorded turn blocks its channel", async () => {
   const path = await statePath();
   await addJob(path, {

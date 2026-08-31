@@ -9,11 +9,11 @@ updated: 2026-08-31
 
 Slice 1, the local Codex client baseline, is implemented on `codex/v1-client-baseline` and published in GitHub pull request [#1](https://github.com/manavm12/synapse/pull/1).
 
-The baseline provides metadata-only parent notification, a manual `synapse send` command, assignment-bound child MCP claim, user-visible task text with the claim/completion protocol kept in developer instructions, one worktree and persistent Codex thread per channel, dispatch fencing, one active job per channel, race-safe dead-worker recovery that interrupts and confirms the old Codex turn before redispatch, race-safe process locking, project-isolated runtime paths, and a shared Codex App Server that releases thread ownership back to the desktop when Synapse becomes idle.
+The baseline provides metadata-only parent notification, a manual `synapse send` command, assignment-bound child MCP claim, user-visible task text with the claim/completion protocol kept in developer instructions, one worktree and persistent Codex thread per channel, dispatch fencing, one active job per channel, expiring recovery leases that retry a crashed recovery safely, race-safe process locking, project-isolated runtime paths, and a shared Codex App Server that fingerprints its child process before cleanup and removes a failed startup child before returning an error.
 
 Verification evidence:
 
-- 39 unit and integration tests pass.
+- 42 unit and integration tests pass.
 - Node syntax checks pass.
 - Dependency audit reports zero vulnerabilities.
 - The isolated live probe completes two jobs on the same Codex thread.

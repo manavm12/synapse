@@ -63,6 +63,7 @@ function resetDispatch(job) {
   job.turnId = null;
   job.recoveryId = null;
   job.recoveryStartedAt = null;
+  job.recoveryLeaseExpiresAt = null;
 }
 
 function recoverExpiredUnownedDispatches(state, now) {
@@ -77,6 +78,23 @@ function recoverExpiredUnownedDispatches(state, now) {
       continue;
     }
     resetDispatch(job);
+  }
+}
+
+function releaseExpiredDeadJobRecoveries(state, now) {
+  for (const job of state.jobs) {
+    if (
+      job.status !== "recovering" ||
+      Date.parse(job.recoveryLeaseExpiresAt) > now
+    ) {
+      continue;
+    }
+    // Keep the original dispatch and recorded turn so the next recovery owner
+    // must still interrupt that turn before a replacement worker can start.
+    job.status = "claimed";
+    job.recoveryId = null;
+    job.recoveryStartedAt = null;
+    job.recoveryLeaseExpiresAt = null;
   }
 }
 
@@ -126,6 +144,7 @@ export async function addJob(path, { id, channelId, sender, task }) {
       turnId: null,
       recoveryId: null,
       recoveryStartedAt: null,
+      recoveryLeaseExpiresAt: null,
     };
     state.jobs.push(job);
     return publicMetadata(job);
@@ -253,9 +272,14 @@ export async function setJobTurn(path, jobId, dispatchId, { threadId, turnId }) 
 
 export async function reserveDeadJobRecovery(
   path,
-  { createRecoveryId = randomUUID } = {},
+  {
+    now = Date.now(),
+    recoveryLeaseMs = 30_000,
+    createRecoveryId = randomUUID,
+  } = {},
 ) {
   return mutateState(path, (state) => {
+    releaseExpiredDeadJobRecoveries(state, now);
     for (const job of state.jobs) {
       if (!["dispatched", "claimed"].includes(job.status)) {
         continue;
@@ -272,7 +296,8 @@ export async function reserveDeadJobRecovery(
       }
       job.status = "recovering";
       job.recoveryId = createRecoveryId();
-      job.recoveryStartedAt = new Date().toISOString();
+      job.recoveryStartedAt = new Date(now).toISOString();
+      job.recoveryLeaseExpiresAt = new Date(now + recoveryLeaseMs).toISOString();
       return {
         jobId: job.id,
         channelId: job.channelId,
