@@ -1,0 +1,18 @@
+{
+  "name": "synapse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "synapse": "node src/client/cli.mjs",
+    "test": "node --test",
+    "probe:live": "node scripts/live-client-probe.mjs",
+    "probe:codex": "node scripts/codex-compatibility-probe.mjs"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  }
+}
