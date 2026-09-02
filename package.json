@@ -14,6 +14,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
+    "validate:plugin": "node scripts/validate-plugin.mjs",
     "synapse": "node src/client/cli.mjs",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=85 --test-coverage-branches=70 --test-coverage-functions=90"
