@@ -3,7 +3,10 @@ import { execFile } from "node:child_process";
 import { basename, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { queueMessage } from "../../plugins/synapse/lib/inbox.mjs";
+import {
+  queueMessage,
+  recoverMessage,
+} from "../../plugins/synapse/lib/inbox.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,6 +14,7 @@ function usage() {
   return [
     "Usage:",
     '  npm run synapse -- send <channel-id> --project <name-or-absolute-path> "<task>"',
+    "  npm run synapse -- recover <job-id> --owner-stopped",
     "",
     "The next prompt in a local Codex task for that project routes the message.",
   ].join("\n");
@@ -20,6 +24,13 @@ export function parseArguments(input) {
   const arguments_ = [...input];
   if (arguments_.includes("--help") || arguments_.includes("-h") || arguments_.length === 0) {
     return { command: "help" };
+  }
+  if (arguments_[0] === "recover") {
+    const [, jobId, confirmation, ...extra] = arguments_;
+    if (!jobId || confirmation !== "--owner-stopped" || extra.length > 0) {
+      throw new Error(usage());
+    }
+    return { command: "recover", jobId };
   }
   const projectIndex = arguments_.indexOf("--project");
   const project = projectIndex === -1 ? null : arguments_[projectIndex + 1];
@@ -100,6 +111,16 @@ export async function main(arguments_ = process.argv.slice(2)) {
   const parsed = parseArguments(arguments_);
   if (parsed.command === "help") {
     process.stdout.write(`${usage()}\n`);
+    return;
+  }
+  if (parsed.command === "recover") {
+    const message = recoverMessage({
+      jobId: parsed.jobId,
+      ownerStopped: true,
+    });
+    process.stdout.write(
+      `Recovered ${message.jobId}; the next owner prompt may retry it safely.\n`,
+    );
     return;
   }
   const message = await sendMessage(parsed);

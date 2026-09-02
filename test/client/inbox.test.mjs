@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
   acknowledgeMessage,
   getJob,
   queueMessage,
+  recoverMessage,
   reserveNextMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
 
@@ -151,4 +153,61 @@ test("an expired delivery cannot be stolen by another owner task", async () => {
     ).retrying,
     true,
   );
+});
+
+test("legacy in-flight jobs migrate to explicit recovery without losing identity", async () => {
+  const path = await inbox();
+  const database = new DatabaseSync(path);
+  database.exec(`
+    CREATE TABLE channels (
+      id TEXT PRIMARY KEY,
+      project_root TEXT NOT NULL,
+      thread_id TEXT,
+      host_id TEXT,
+      project_id TEXT
+    );
+    CREATE TABLE jobs (
+      id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      task TEXT NOT NULL,
+      project_root TEXT NOT NULL,
+      status TEXT NOT NULL,
+      delivery_id TEXT,
+      lease_expires_at INTEGER,
+      thread_id TEXT,
+      created_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+    INSERT INTO channels (id, project_root) VALUES ('demo', '/project');
+    INSERT INTO jobs (
+      id, channel_id, task, project_root, status, delivery_id,
+      lease_expires_at, created_at
+    ) VALUES (
+      'job-1', 'demo', 'legacy task', '/project', 'routing',
+      'delivery-1', 100, 1
+    );
+  `);
+  database.close();
+
+  assert.equal(getJob("job-1", { path }).status, "uncertain");
+  assert.equal(
+    reserveNextMessage(
+      { projectRoot: "/project", ownerSessionId: "owner-2" },
+      { path, now: () => 200 },
+    ),
+    null,
+  );
+  assert.throws(
+    () => recoverMessage({ jobId: "job-1", ownerStopped: false }, { path }),
+    /prior owner task stopped/,
+  );
+  assert.equal(
+    recoverMessage({ jobId: "job-1", ownerStopped: true }, { path }).status,
+    "pending",
+  );
+  const retried = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-2" },
+    { path, now: () => 200, createDeliveryId: () => "delivery-2" },
+  );
+  assert.equal(retried.deliveryMarker, "synapse-delivery:job-1");
 });

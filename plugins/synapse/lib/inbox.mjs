@@ -55,6 +55,11 @@ function openInbox(path) {
   if (!jobColumns.some((column) => column.name === "owner_session_id")) {
     database.exec("ALTER TABLE jobs ADD COLUMN owner_session_id TEXT");
   }
+  database.exec(`
+    UPDATE jobs
+    SET status = 'uncertain'
+    WHERE status = 'routing' AND owner_session_id IS NULL
+  `);
   return database;
 }
 
@@ -167,7 +172,8 @@ export function reserveNextMessage(
           WHERE jobs.project_root = ? AND jobs.status = 'pending'
             AND NOT EXISTS (
               SELECT 1 FROM jobs AS active
-              WHERE active.channel_id = jobs.channel_id AND active.status = 'routing'
+              WHERE active.channel_id = jobs.channel_id
+                AND active.status IN ('routing', 'uncertain')
             )
           ORDER BY jobs.created_at, jobs.id
           LIMIT 1
@@ -242,6 +248,37 @@ export function acknowledgeMessage(
         WHERE id = ?
       `).run(threadId, now(), jobId);
       return { jobId, channelId: job.channel_id, threadId, status: "completed" };
+    });
+  } finally {
+    database.close();
+  }
+}
+
+export function recoverMessage(
+  { jobId, ownerStopped },
+  { path = inboxPath() } = {},
+) {
+  requireId(jobId, "job ID");
+  if (ownerStopped !== true) {
+    throw new Error("Recovery requires confirmation that the prior owner task stopped");
+  }
+  const database = openInbox(path);
+  try {
+    return transaction(database, () => {
+      const job = database.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId);
+      if (!job) {
+        throw new Error(`Unknown job: ${jobId}`);
+      }
+      if (job.status !== "uncertain") {
+        throw new Error(`Job ${jobId} is not awaiting recovery`);
+      }
+      database.prepare(`
+        UPDATE jobs
+        SET status = 'pending', delivery_id = NULL, lease_expires_at = NULL,
+            owner_session_id = NULL
+        WHERE id = ?
+      `).run(jobId);
+      return { jobId, channelId: job.channel_id, status: "pending" };
     });
   } finally {
     database.close();

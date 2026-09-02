@@ -19,6 +19,14 @@ test("send requires a channel, project, and exact task", () => {
   );
 });
 
+test("legacy recovery requires explicit owner-stopped confirmation", () => {
+  assert.deepEqual(parseArguments(["recover", "job-1", "--owner-stopped"]), {
+    command: "recover",
+    jobId: "job-1",
+  });
+  assert.throws(() => parseArguments(["recover", "job-1"]), /Usage:/);
+});
+
 test("send queues a message without starting Codex", async () => {
   let queued;
   const result = await sendMessage(
