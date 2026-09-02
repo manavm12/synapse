@@ -2,7 +2,7 @@
   "mcpServers": {
     "synapse-memory": {
       "command": "node",
-      "args": ["./server/memory-mcp.bundle.mjs"],
+      "args": ["./server/memory-mcp.mjs"],
       "cwd": ".",
       "env_vars": [
         "HOME",

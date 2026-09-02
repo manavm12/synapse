@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,14 +31,24 @@ assert(!Object.hasOwn(manifest, "hooks"), "default hooks/hooks.json must be disc
 assert(!JSON.stringify(manifest).includes("[TODO:"), "manifest contains a TODO placeholder");
 
 const mcp = await readJson(resolve(pluginRoot, ".mcp.json"));
-assert(Object.keys(mcp.mcpServers ?? {}).length === 1, "plugin must bundle exactly one MCP server");
+assert(Object.keys(mcp.mcpServers ?? {}).length === 1, "plugin must expose exactly one MCP server");
 const memoryServer = mcp.mcpServers?.["synapse-memory"];
 assert(memoryServer?.command === "node", "synapse-memory must use the Node launcher");
 assert(
-  memoryServer?.args?.[0] === "./server/memory-mcp.bundle.mjs",
-  "synapse-memory must launch the bundled server",
+  memoryServer?.args?.[0] === "./server/memory-mcp.mjs",
+  "synapse-memory must launch the dependency-free server",
 );
-await access(resolve(pluginRoot, memoryServer.args[0]));
+const memoryServerPath = resolve(pluginRoot, memoryServer.args[0]);
+await access(memoryServerPath);
+const serverDirectory = resolve(pluginRoot, "server");
+for (const file of await readdir(serverDirectory)) {
+  if (!file.endsWith(".mjs")) continue;
+  const serverSource = await readFile(resolve(serverDirectory, file), "utf8");
+  assert(
+    !/^\s*import\s+.*?\s+from\s+["'](?!node:|\.)/m.test(serverSource),
+    `${file} must not import runtime packages`,
+  );
+}
 
 const hooks = (await readJson(resolve(pluginRoot, "hooks/hooks.json"))).hooks;
 assert(hooks?.Stop?.[0]?.hooks?.[0]?.type === "mcp_tool", "Stop must use an MCP tool hook");

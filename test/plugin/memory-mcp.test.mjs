@@ -10,7 +10,7 @@ import { createMemoryFixture, VALID_MEMORY_MARKDOWN } from "./_helpers.mjs";
 
 const pluginRoot = resolve("plugins/synapse");
 
-test("the bundled cache-local MCP exposes and executes exactly two memory tools", async (t) => {
+test("the dependency-free cache-local MCP exposes and executes exactly two memory tools", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
   const cachedPlugin = join(fixture.directory, "plugin-cache", "synapse", "local");
@@ -29,11 +29,28 @@ test("the bundled cache-local MCP exposes and executes exactly two memory tools"
 
   try {
     await client.connect(transport);
+    await client.ping();
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
       ["memory_checkpoint", "save_session_memory"],
     );
+    assert.deepEqual(
+      tools.tools.find((tool) => tool.name === "memory_checkpoint").inputSchema.required,
+      ["session_id", "turn_id", "cwd"],
+    );
+
+    const invalidSave = await client.callTool({
+      name: "save_session_memory",
+      arguments: {
+        session_id: "mcp-session",
+        title: "Invalid",
+        summary: "Invalid",
+        markdown: "## Summary\nMissing the other required sections.",
+      },
+    });
+    assert.equal(invalidSave.isError, true);
+    assert.match(invalidSave.content[0].text, /missing required headings/);
 
     let checkpoint;
     for (let turn = 1; turn <= 15; turn += 1) {
@@ -63,7 +80,7 @@ test("the bundled cache-local MCP exposes and executes exactly two memory tools"
       arguments: {
         session_id: "mcp-session",
         title: "MCP integration",
-        summary: "The bundled server saved this memory.",
+        summary: "The dependency-free server saved this memory.",
         markdown: VALID_MEMORY_MARKDOWN,
       },
     });

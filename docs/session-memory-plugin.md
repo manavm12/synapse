@@ -9,12 +9,11 @@ first model continuation after compaction. It does not copy the raw transcript.
 The initial implementation requires macOS, Node.js 24 or newer, and a project
 registered in Synapse's `~/.synapse/host.sqlite` database.
 
-From this worktree, build and validate the cached artifact:
+From this worktree, validate the dependency-free plugin runtime:
 
 ```sh
 cd /Users/manavmehta/synapse-memory-capture
 npm install
-npm run build:plugin
 npm test
 npm run validate:plugin
 ```
