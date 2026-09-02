@@ -34,7 +34,15 @@ export function parseArguments(input) {
   return { command, channelId, project, task };
 }
 
-export async function resolveProjectRoot(project, cwd = process.cwd()) {
+function resolveGitPath(projectRoot, path) {
+  return isAbsolute(path) ? resolve(path) : resolve(projectRoot, path);
+}
+
+export async function resolveProjectRoot(
+  project,
+  cwd = process.cwd(),
+  { execGit = execFileAsync } = {},
+) {
   let candidate;
   if (isAbsolute(project)) {
     candidate = project;
@@ -45,16 +53,34 @@ export async function resolveProjectRoot(project, cwd = process.cwd()) {
       `Project ${project} is not the current folder; pass its absolute path instead`,
     );
   }
+  let stdout;
   try {
-    const { stdout } = await execFileAsync(
+    ({ stdout } = await execGit(
       "git",
-      ["-C", resolve(candidate), "rev-parse", "--show-toplevel"],
+      [
+        "-C",
+        resolve(candidate),
+        "rev-parse",
+        "--show-toplevel",
+        "--git-dir",
+        "--git-common-dir",
+      ],
       { encoding: "utf8" },
-    );
-    return resolve(stdout.trim());
+    ));
   } catch {
     throw new Error(`Project is not a Git checkout: ${resolve(candidate)}`);
   }
+  const [root, gitDirectory, commonDirectory] = stdout.trim().split("\n");
+  const projectRoot = resolve(root);
+  if (
+    resolveGitPath(projectRoot, gitDirectory) !==
+    resolveGitPath(projectRoot, commonDirectory)
+  ) {
+    throw new Error(
+      `Project must be its primary checkout, not a linked worktree: ${projectRoot}`,
+    );
+  }
+  return projectRoot;
 }
 
 export async function sendMessage(

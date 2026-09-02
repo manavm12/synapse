@@ -26,6 +26,8 @@ test("a project prompt leases and acknowledges one queued message", async () => 
     { path, now: () => 2, createDeliveryId: () => "delivery-1" },
   );
   assert.equal(delivery.task, "create a file");
+  assert.equal(delivery.nativePrompt, "create a file\n\n<!-- synapse-delivery:job-1 -->");
+  assert.equal(delivery.retrying, false);
   assert.equal(delivery.channel.threadId, null);
   assert.equal(
     reserveNextMessage({ projectRoot: "/project" }, { path, now: () => 3 }),
@@ -90,7 +92,7 @@ test("a follow-up reuses the native channel and a channel stays in one project",
   );
 });
 
-test("an expired delivery is available on the next owner prompt", async () => {
+test("an expired delivery retries with the same native identity", async () => {
   const path = await inbox();
   queueMessage(
     { id: "job-1", channelId: "demo", task: "retry", projectRoot: "/project" },
@@ -104,5 +106,16 @@ test("an expired delivery is available on the next owner prompt", async () => {
     { projectRoot: "/project" },
     { path, now: () => 111, createDeliveryId: () => "delivery-2" },
   );
-  assert.equal(retried.deliveryId, "delivery-2");
+  assert.equal(retried.deliveryId, "delivery-1");
+  assert.equal(retried.deliveryMarker, "synapse-delivery:job-1");
+  assert.equal(retried.retrying, true);
+  const acknowledgement = {
+    jobId: "job-1",
+    deliveryId: retried.deliveryId,
+    threadId: "thread-1",
+    hostId: "local",
+    projectId: "project-1",
+  };
+  assert.equal(acknowledgeMessage(acknowledgement, { path }).status, "completed");
+  assert.equal(acknowledgeMessage(acknowledgement, { path }).status, "completed");
 });

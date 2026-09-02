@@ -73,6 +73,21 @@ function channelFromRow(row) {
   };
 }
 
+function deliveryFromRow(row, retrying) {
+  const deliveryMarker = `synapse-delivery:${row.id}`;
+  return {
+    jobId: row.id,
+    deliveryId: row.delivery_id,
+    deliveryMarker,
+    retrying,
+    channelId: row.channel_id,
+    task: row.task,
+    nativePrompt: `${row.task}\n\n<!-- ${deliveryMarker} -->`,
+    projectRoot: row.project_root,
+    channel: channelFromRow(row),
+  };
+}
+
 export function queueMessage(
   { channelId, task, projectRoot, id = randomUUID() },
   { path = inboxPath(), now = Date.now } = {},
@@ -125,41 +140,43 @@ export function reserveNextMessage(
   try {
     return transaction(database, () => {
       const currentTime = now();
-      database.prepare(`
-        UPDATE jobs
-        SET status = 'pending', delivery_id = NULL, lease_expires_at = NULL
-        WHERE status = 'routing' AND lease_expires_at <= ?
-      `).run(currentTime);
-      const job = database.prepare(`
+      let job = database.prepare(`
         SELECT jobs.*, channels.thread_id, channels.host_id, channels.project_id
         FROM jobs
         JOIN channels ON channels.id = jobs.channel_id
-        WHERE jobs.project_root = ? AND jobs.status = 'pending'
-          AND NOT EXISTS (
-            SELECT 1 FROM jobs AS active
-            WHERE active.channel_id = jobs.channel_id AND active.status = 'routing'
-          )
+        WHERE jobs.project_root = ? AND jobs.status = 'routing'
+          AND jobs.lease_expires_at <= ?
         ORDER BY jobs.created_at, jobs.id
         LIMIT 1
-      `).get(projectRoot);
+      `).get(projectRoot, currentTime);
+      const retrying = Boolean(job);
+      if (!job) {
+        job = database.prepare(`
+          SELECT jobs.*, channels.thread_id, channels.host_id, channels.project_id
+          FROM jobs
+          JOIN channels ON channels.id = jobs.channel_id
+          WHERE jobs.project_root = ? AND jobs.status = 'pending'
+            AND NOT EXISTS (
+              SELECT 1 FROM jobs AS active
+              WHERE active.channel_id = jobs.channel_id AND active.status = 'routing'
+            )
+          ORDER BY jobs.created_at, jobs.id
+          LIMIT 1
+        `).get(projectRoot);
+      }
       if (!job) {
         return null;
       }
-      const deliveryId = createDeliveryId();
-      requireId(deliveryId, "delivery ID");
+      if (!retrying) {
+        job.delivery_id = createDeliveryId();
+        requireId(job.delivery_id, "delivery ID");
+      }
       database.prepare(`
         UPDATE jobs
         SET status = 'routing', delivery_id = ?, lease_expires_at = ?
         WHERE id = ?
-      `).run(deliveryId, currentTime + leaseMs, job.id);
-      return {
-        jobId: job.id,
-        deliveryId,
-        channelId: job.channel_id,
-        task: job.task,
-        projectRoot: job.project_root,
-        channel: channelFromRow(job),
-      };
+      `).run(job.delivery_id, currentTime + leaseMs, job.id);
+      return deliveryFromRow(job, retrying);
     });
   } finally {
     database.close();
@@ -182,11 +199,23 @@ export function acknowledgeMessage(
   const database = openInbox(path);
   try {
     return transaction(database, () => {
-      const job = database.prepare(
-        "SELECT * FROM jobs WHERE id = ?",
-      ).get(jobId);
+      const job = database.prepare(`
+        SELECT jobs.*, channels.host_id, channels.project_id
+        FROM jobs
+        JOIN channels ON channels.id = jobs.channel_id
+        WHERE jobs.id = ?
+      `).get(jobId);
       if (!job) {
         throw new Error(`Unknown job: ${jobId}`);
+      }
+      if (
+        job.status === "completed" &&
+        job.delivery_id === deliveryId &&
+        job.thread_id === threadId &&
+        job.host_id === hostId &&
+        job.project_id === projectId
+      ) {
+        return { jobId, channelId: job.channel_id, threadId, status: "completed" };
       }
       if (job.status !== "routing" || job.delivery_id !== deliveryId) {
         throw new Error(`Stale delivery for job ${jobId}`);

@@ -48,6 +48,9 @@ test("the next local project prompt receives native routing context", async () =
   const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
   assert.match(context, /codex_app__create_thread/);
   assert.match(context, /codex_app__send_message_to_thread/);
+  assert.match(context, /codex_app__read_thread/);
   assert.match(context, /create TEST\.md/);
+  assert.match(context, /synapse-delivery:job-1/);
+  assert.match(context, /marker already exists.*do not create or send again/);
   assert.match(context, /do not execute it in this owner task/);
 });
