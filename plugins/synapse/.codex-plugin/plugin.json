@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "0.1.0+codex.20260902073613",
+  "version": "0.1.0+codex.20260902074711",
   "description": "Route queued Synapse messages into native Codex project tasks.",
   "author": {
     "name": "Synapse"

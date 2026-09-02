@@ -43,6 +43,7 @@ function openInbox(path) {
       status TEXT NOT NULL,
       delivery_id TEXT,
       lease_expires_at INTEGER,
+      owner_session_id TEXT,
       thread_id TEXT,
       created_at INTEGER NOT NULL,
       completed_at INTEGER
@@ -50,6 +51,10 @@ function openInbox(path) {
     CREATE INDEX IF NOT EXISTS jobs_project_status
       ON jobs(project_root, status, created_at);
   `);
+  const jobColumns = database.prepare("PRAGMA table_info(jobs)").all();
+  if (!jobColumns.some((column) => column.name === "owner_session_id")) {
+    database.exec("ALTER TABLE jobs ADD COLUMN owner_session_id TEXT");
+  }
   return database;
 }
 
@@ -127,7 +132,7 @@ export function queueMessage(
 }
 
 export function reserveNextMessage(
-  { projectRoot },
+  { projectRoot, ownerSessionId },
   {
     path = inboxPath(),
     now = Date.now,
@@ -136,19 +141,23 @@ export function reserveNextMessage(
   } = {},
 ) {
   requireProjectRoot(projectRoot);
+  requireId(ownerSessionId, "owner session ID");
   const database = openInbox(path);
   try {
     return transaction(database, () => {
       const currentTime = now();
+      // A Codex task serializes its own turns. Keeping retries on the original
+      // owner session prevents another task from racing an in-flight delivery.
       let job = database.prepare(`
         SELECT jobs.*, channels.thread_id, channels.host_id, channels.project_id
         FROM jobs
         JOIN channels ON channels.id = jobs.channel_id
-        WHERE jobs.project_root = ? AND jobs.status = 'routing'
+        WHERE jobs.project_root = ? AND jobs.owner_session_id = ?
+          AND jobs.status = 'routing'
           AND jobs.lease_expires_at <= ?
         ORDER BY jobs.created_at, jobs.id
         LIMIT 1
-      `).get(projectRoot, currentTime);
+      `).get(projectRoot, ownerSessionId, currentTime);
       const retrying = Boolean(job);
       if (!job) {
         job = database.prepare(`
@@ -173,9 +182,10 @@ export function reserveNextMessage(
       }
       database.prepare(`
         UPDATE jobs
-        SET status = 'routing', delivery_id = ?, lease_expires_at = ?
+        SET status = 'routing', delivery_id = ?, lease_expires_at = ?,
+            owner_session_id = ?
         WHERE id = ?
-      `).run(job.delivery_id, currentTime + leaseMs, job.id);
+      `).run(job.delivery_id, currentTime + leaseMs, ownerSessionId, job.id);
       return deliveryFromRow(job, retrying);
     });
   } finally {

@@ -43,7 +43,11 @@ test("the next local project prompt receives native routing context", async () =
   );
   const stdout = await runHook(
     path,
-    JSON.stringify({ cwd: process.cwd(), hook_event_name: "UserPromptSubmit" }),
+    JSON.stringify({
+      cwd: process.cwd(),
+      session_id: "owner-1",
+      hook_event_name: "UserPromptSubmit",
+    }),
   );
   const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
   assert.match(context, /codex_app__create_thread/);

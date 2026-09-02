@@ -22,7 +22,7 @@ test("a project prompt leases and acknowledges one queued message", async () => 
     { path, now: () => 1 },
   );
   const delivery = reserveNextMessage(
-    { projectRoot: "/project" },
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
     { path, now: () => 2, createDeliveryId: () => "delivery-1" },
   );
   assert.equal(delivery.task, "create a file");
@@ -30,7 +30,10 @@ test("a project prompt leases and acknowledges one queued message", async () => 
   assert.equal(delivery.retrying, false);
   assert.equal(delivery.channel.threadId, null);
   assert.equal(
-    reserveNextMessage({ projectRoot: "/project" }, { path, now: () => 3 }),
+    reserveNextMessage(
+      { projectRoot: "/project", ownerSessionId: "owner-1" },
+      { path, now: () => 3 },
+    ),
     null,
   );
 
@@ -60,7 +63,7 @@ test("a follow-up reuses the native channel and a channel stays in one project",
     { path },
   );
   const first = reserveNextMessage(
-    { projectRoot: "/project" },
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
     { path, createDeliveryId: () => "delivery-1" },
   );
   acknowledgeMessage(
@@ -77,7 +80,10 @@ test("a follow-up reuses the native channel and a channel stays in one project",
     { id: "job-2", channelId: "demo", task: "second", projectRoot: "/project" },
     { path },
   );
-  const followUp = reserveNextMessage({ projectRoot: "/project" }, { path });
+  const followUp = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
+    { path },
+  );
   assert.deepEqual(followUp.channel, {
     threadId: "thread-1",
     hostId: "local",
@@ -99,11 +105,11 @@ test("an expired delivery retries with the same native identity", async () => {
     { path },
   );
   reserveNextMessage(
-    { projectRoot: "/project" },
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
     { path, now: () => 100, leaseMs: 10, createDeliveryId: () => "delivery-1" },
   );
   const retried = reserveNextMessage(
-    { projectRoot: "/project" },
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
     { path, now: () => 111, createDeliveryId: () => "delivery-2" },
   );
   assert.equal(retried.deliveryId, "delivery-1");
@@ -118,4 +124,31 @@ test("an expired delivery retries with the same native identity", async () => {
   };
   assert.equal(acknowledgeMessage(acknowledgement, { path }).status, "completed");
   assert.equal(acknowledgeMessage(acknowledgement, { path }).status, "completed");
+});
+
+test("an expired delivery cannot be stolen by another owner task", async () => {
+  const path = await inbox();
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "retry", projectRoot: "/project" },
+    { path },
+  );
+  reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
+    { path, now: () => 100, leaseMs: 10 },
+  );
+
+  assert.equal(
+    reserveNextMessage(
+      { projectRoot: "/project", ownerSessionId: "owner-2" },
+      { path, now: () => 111 },
+    ),
+    null,
+  );
+  assert.equal(
+    reserveNextMessage(
+      { projectRoot: "/project", ownerSessionId: "owner-1" },
+      { path, now: () => 111 },
+    ).retrying,
+    true,
+  );
 });

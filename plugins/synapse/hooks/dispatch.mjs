@@ -38,7 +38,7 @@ if (process.argv[2] === "acknowledge") {
 }
 
 const input = JSON.parse((await readStdin()) || "{}");
-if (!input.cwd) {
+if (!input.cwd || !input.session_id) {
   process.exit(0);
 }
 
@@ -59,7 +59,10 @@ if (gitDirectory !== commonDirectory) {
   process.exit(0);
 }
 
-const payload = reserveNextMessage({ projectRoot });
+const payload = reserveNextMessage({
+  projectRoot,
+  ownerSessionId: input.session_id,
+});
 if (!payload) {
   process.exit(0);
 }
