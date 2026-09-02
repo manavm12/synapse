@@ -8,11 +8,6 @@
   },
   "scripts": {
     "synapse": "node src/client/cli.mjs",
-    "test": "node --test",
-    "probe:live": "node scripts/live-client-probe.mjs",
-    "probe:codex": "node scripts/codex-compatibility-probe.mjs"
-  },
-  "dependencies": {
-    "ws": "8.21.3"
+    "test": "node --test"
   }
 }

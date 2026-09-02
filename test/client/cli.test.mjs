@@ -1,98 +1,38 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseArguments, submitTask } from "../../src/client/cli.mjs";
+import { parseArguments, sendMessage } from "../../src/client/cli.mjs";
 
-test("the CLI parses the local relay, host, and project commands", () => {
-  assert.deepEqual(parseArguments(["relay", "run", "--port", "0"]), {
-    command: "relay-run",
-    host: "127.0.0.1",
-    port: 0,
-  });
-  assert.deepEqual(parseArguments(["host", "run", "--id", "laptop"]), {
-    command: "host-run",
-    hostId: "laptop",
-    relayUrl: "http://127.0.0.1:8787",
-  });
+test("send requires a channel, project, and exact task", () => {
   assert.deepEqual(
-    parseArguments(["project", "add", "website", "/tmp/website", "--permissions", ":read-only"]),
-    {
-      command: "project-add",
-      alias: "website",
-      path: "/tmp/website",
-      permissions: ":read-only",
-    },
-  );
-});
-
-test("send selects a project and preserves the exact prompt", () => {
-  assert.deepEqual(
-    parseArguments([
-      "send",
-      "feature-42",
-      "--project",
-      "website",
-      "Fix",
-      "the",
-      "form",
-    ]),
+    parseArguments(["send", "demo", "--project", "synapse", "create", "a", "file"]),
     {
       command: "send",
-      conversationId: "feature-42",
-      project: "website",
-      hostId: "local",
-      relayUrl: "http://127.0.0.1:8787",
-      prompt: "Fix the form",
-      wait: true,
+      channelId: "demo",
+      project: "synapse",
+      task: "create a file",
     },
   );
 });
 
-test("submitTask posts once and consumes server-sent status events", async () => {
-  const requests = [];
-  const events = [];
-  const fetchImpl = async (url, options = {}) => {
-    requests.push({ url: url.toString(), options });
-    if (options.method === "POST") {
-      return new Response(
-        JSON.stringify({
-          task: {
-            id: "task-1",
-            hostId: "local",
-            conversationId: "demo",
-            project: "synapse",
-            prompt: "Do it",
-            status: "queued",
-          },
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-    return new Response(
-      'data: {"id":"task-1","status":"running"}\n\n' +
-        'data: {"id":"task-1","status":"completed","result":"done"}\n\n',
-      { status: 200, headers: { "content-type": "text/event-stream" } },
-    );
-  };
-
-  const result = await submitTask(
+test("send queues a message without starting Codex", async () => {
+  let queued;
+  const result = await sendMessage(
     {
-      relayUrl: "http://127.0.0.1:8787",
-      hostId: "local",
-      conversationId: "demo",
+      channelId: "demo",
       project: "synapse",
-      prompt: "Do it",
+      task: "create a file",
+      cwd: process.cwd(),
     },
-    { fetchImpl, onEvent: (event) => events.push(event.status) },
+    {
+      createId: () => "job-1",
+      queue: (message) => {
+        queued = message;
+        return { ...message, jobId: message.id, status: "pending" };
+      },
+    },
   );
-
-  assert.equal(requests.length, 2);
-  assert.deepEqual(JSON.parse(requests[0].options.body), {
-    hostId: "local",
-    conversationId: "demo",
-    project: "synapse",
-    prompt: "Do it",
-  });
-  assert.deepEqual(events, ["queued", "running", "completed"]);
-  assert.equal(result.result, "done");
+  assert.equal(queued.task, "create a file");
+  assert.equal(queued.projectRoot, process.cwd());
+  assert.equal(result.status, "pending");
 });
