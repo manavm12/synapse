@@ -1,0 +1,21 @@
+{
+  "name": "synapse",
+  "version": "0.1.0+codex.20260902075438",
+  "description": "Route queued Synapse messages into native Codex project tasks.",
+  "author": {
+    "name": "Synapse"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Synapse",
+    "shortDescription": "Route messages into Codex tasks.",
+    "longDescription": "Synapse checks a project's inbox on the next owner prompt and routes queued messages into visible, conversational Codex worktree tasks.",
+    "developerName": "Synapse",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Check my Synapse inbox."
+  }
+}

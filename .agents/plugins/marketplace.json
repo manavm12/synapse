@@ -1,0 +1,20 @@
+{
+  "name": "synapse-dev",
+  "interface": {
+    "displayName": "Synapse Dev"
+  },
+  "plugins": [
+    {
+      "name": "synapse",
+      "source": {
+        "source": "local",
+        "path": "./plugins/synapse"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
