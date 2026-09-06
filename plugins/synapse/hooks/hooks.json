@@ -22,12 +22,6 @@
             "command": "node ${PLUGIN_ROOT}/hooks/dispatch.mjs",
             "timeout": 10,
             "statusMessage": "Checking Synapse inbox"
-          },
-          {
-            "type": "command",
-            "command": "node ${PLUGIN_ROOT}/hooks/prompt-memory.mjs",
-            "timeout": 10,
-            "statusMessage": "Checking pending Synapse memory"
           }
         ]
       }
@@ -36,16 +30,10 @@
       {
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "synapse-memory",
-            "tool": "memory_checkpoint",
-            "input": {
-              "session_id": "${session_id}",
-              "turn_id": "${turn_id}",
-              "cwd": "${cwd}"
-            },
+            "type": "command",
+            "command": "node ${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs",
             "timeout": 10,
-            "statusMessage": "Recording Synapse memory checkpoint"
+            "statusMessage": "Checking Synapse memory checkpoint"
           }
         ]
       }

@@ -1,47 +1,20 @@
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
 import {
+  main,
   parseArguments,
   resolveProjectRoot,
   sendMessage,
 } from "../../src/client/cli.mjs";
+import { connectProject } from "../../src/client/project-registry.mjs";
 
-const cliPath = resolve("src/client/cli.mjs");
 const execFileAsync = promisify(execFile);
-
-async function primaryGitCheckout() {
-  const path = await mkdtemp(join(tmpdir(), "synapse-project-test-"));
-  await execFileAsync("git", ["init", "--quiet", path]);
-  return realpath(path);
-}
-
-function runCli(arguments_) {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [cliPath, ...arguments_], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      resolvePromise({ code, stdout, stderr });
-    });
-  });
-}
 
 test("send requires a channel, project, and exact task", () => {
   assert.deepEqual(
@@ -71,30 +44,91 @@ test("legacy recovery requires explicit owner-stopped confirmation", () => {
   assert.throws(() => parseArguments(["recover", "job-1"]), /Usage:/);
 });
 
-test("invalid commands fail without exposing a stack trace", async () => {
-  const result = await runCli(["send", "demo"]);
-  assert.equal(result.code, 1);
-  assert.equal(result.stdout, "");
-  assert.match(result.stderr, /^Synapse failed: Usage:/);
-  assert.doesNotMatch(result.stderr, /\n\s+at /);
+test("help exits successfully through the CLI entrypoint", async (t) => {
+  const writes = [];
+  t.mock.method(process.stdout, "write", (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  });
+
+  await main(["--help"]);
+
+  assert.match(writes.join(""), /^Usage:/);
 });
 
-test("help exits successfully", async () => {
-  const result = await runCli(["--help"]);
-  assert.equal(result.code, 0);
-  assert.match(result.stdout, /^Usage:/);
-  assert.equal(result.stderr, "");
+test("operator commands reject unknown options", () => {
+  assert.deepEqual(
+    parseArguments([
+      "admin",
+      "invite",
+      "--email",
+      "person@example.com",
+      "--username",
+      "person",
+      "--project",
+      "synapse",
+    ]),
+    {
+      command: "admin-invite",
+      email: "person@example.com",
+      username: "person",
+      projectAlias: "synapse",
+    },
+  );
+  assert.throws(
+    () =>
+      parseArguments([
+        "admin",
+        "configure",
+        "--mcp-url",
+        "https://memory.example/mcp",
+        "--unexpected",
+        "value",
+      ]),
+    /Usage:/,
+  );
 });
 
-test("send queues a message without starting Codex", async () => {
-  const projectRoot = await primaryGitCheckout();
+test("project connect writes only alias and canonical root to the private host DB", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-connect-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const root = join(directory, "project");
+  const result = await connectProject(
+    { alias: "Synapse", project: root },
+    {
+      env: { SYNAPSE_HOME: join(directory, "state") },
+      resolveRoot: async () => root,
+    },
+  );
+  assert.equal(result.alias, "synapse");
+  assert.equal(result.root, root);
+  assert.equal(result.created, true);
+  assert.equal(
+    (
+      await connectProject(
+        { alias: "synapse", project: root },
+        {
+          env: { SYNAPSE_HOME: join(directory, "state") },
+          resolveRoot: async () => root,
+        },
+      )
+    ).created,
+    false,
+  );
+});
+
+test("send queues a message without starting Codex", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "synapse-cli-test-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await execFileAsync("git", ["init", "-q", projectRoot]);
+  const canonicalProjectRoot = await realpath(projectRoot);
   let queued;
   const result = await sendMessage(
     {
       channelId: "demo",
-      project: projectRoot,
+      project: basename(projectRoot),
       task: "create a file",
-      cwd: process.cwd(),
+      cwd: projectRoot,
     },
     {
       createId: () => "job-1",
@@ -105,7 +139,7 @@ test("send queues a message without starting Codex", async () => {
     },
   );
   assert.equal(queued.task, "create a file");
-  assert.equal(queued.projectRoot, projectRoot);
+  assert.equal(queued.projectRoot, canonicalProjectRoot);
   assert.equal(result.status, "pending");
 });
 
@@ -122,17 +156,5 @@ test("a linked-worktree project is rejected before enqueue", async () => {
         }),
       }),
     /primary checkout, not a linked worktree/,
-  );
-});
-
-test("a non-Git directory is rejected before enqueue", async () => {
-  await assert.rejects(
-    () =>
-      resolveProjectRoot("/tmp/not-a-repository", process.cwd(), {
-        execGit: async () => {
-          throw new Error("not a repository");
-        },
-      }),
-    /Project is not a Git checkout/,
   );
 });

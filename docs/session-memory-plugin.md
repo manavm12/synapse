@@ -1,51 +1,81 @@
 # Session-memory plugin
 
-The Synapse plugin captures one concise Markdown memory per registered Codex
-session. It silently marks memory due after every 15 distinct completed turns,
-then requests the save through hidden developer context on the next user prompt.
-Compaction still requests an immediate save. It does not copy the raw transcript.
+Synapse captures concise, durable memory in the authenticated user's cloud
+knowledge tree. The local plugin decides *when* a checkpoint is due; it never
+stores memory content locally. Supabase Postgres is authoritative and the
+Railway service is the only application process allowed to write memory.
 
-## Local installation
+## Runtime contract
 
-The initial implementation requires macOS, Node.js 24 or newer, and a project
-registered in Synapse's `~/.synapse/host.sqlite` database.
+- The principal is the Supabase user. A Codex session and OAuth client are
+  provenance attached to writes, never independent identities.
+- Each user owns exactly one cloud project and one memory root.
+- A session has one mutable current node plus append-only revisions.
+- A globally unique `capture_id` makes an identical retry idempotent. Reusing
+  the ID with different content fails and creates an audit event.
+- Checkpoints occur after 15 distinct completed turns and immediately after
+  compaction. If the remote call fails, the hook fails open and does not queue
+  memory or block later work.
+- The MCP surface is intentionally two tools: `get_identity` and
+  `save_session_memory`. Retrieval, embeddings, messaging, and import are not
+  part of this foundation.
 
-From the repository worktree, validate the dependency-free plugin runtime:
+The save tool accepts at most 64 KiB of Markdown and requires the headings
+`Summary`, `What changed`, `Decisions`, `Still unresolved`, and
+`Important references`. Agents should synthesize useful state, not copy a raw
+transcript, filesystem paths, or credentials.
+
+## Install and connect
+
+The plugin requires Node.js 24 or newer and a main Git checkout. Configure its
+committed MCP endpoint only after Railway has assigned the production domain:
 
 ```sh
-cd <path-to-synapse-worktree>
-npm install
-npm test
+cd /path/to/synapse
+npm ci
+npm run configure:plugin -- https://<railway-domain>/mcp
 npm run validate:plugin
-```
-
-Add the repository marketplace and install the plugin:
-
-```sh
-codex plugin marketplace add <path-to-synapse-worktree>
+codex plugin marketplace add /path/to/synapse
 codex plugin add synapse@synapse
 ```
 
-Start a new Codex task after installation. Open `/hooks`, review the Synapse
-hook definitions, and trust them. Codex intentionally skips changed plugin
-hooks until their new hash is trusted.
+Register the local checkout against the alias created with the cloud invite:
+
+```sh
+npm run synapse -- project connect /path/to/project --alias <project-alias>
+```
+
+Then sign in through Codex:
+
+```sh
+codex mcp login synapse-memory
+```
+
+The browser opens Synapse's authorization page. Use the invited email address,
+follow the magic link, review the scopes, and approve. In a new Codex task,
+call `get_identity` before relying on memory and confirm its username and
+project alias.
+
+Hook definitions change when the plugin changes. Review `/hooks` and trust the
+new hash before testing a fresh task.
 
 ## Manual verification
 
-1. Start a new task in a Synapse-registered main checkout or one of its linked
-   worktrees.
-2. Complete 15 ordinary user/assistant turns. The fifteenth Stop hook should
-   finish normally without displaying memory instructions.
-3. Send one more user message. Codex should call `save_session_memory` quietly
-   before answering that message. Inspect
-   `~/.synapse/memory/<project-alias>/<session-id>.md`.
-4. Complete 14 more turns after that answer, then send another message. Confirm
-   the same file advances to the next revision instead of creating a second
-   document.
-5. Trigger Codex compaction in a long task. The immediate continuation should
-   save memory before returning to the original work.
-6. Run a task in an unregistered repository and confirm that no checkpoint or
-   memory file is created.
+1. Run `get_identity`; confirm it returns `principal_type: user`, the expected
+   username/project, an OAuth client ID, and `authentication_method: oauth`.
+2. Start a task inside a registered main checkout or any linked worktree.
+3. Complete 15 distinct ordinary turns. The Stop hook should create one
+   automatic continuation asking the agent to call `save_session_memory` with
+   a generated capture ID.
+4. Confirm the tool succeeds and that no Markdown memory exists beneath
+   `~/.synapse`. Only `checkpoints.sqlite` may exist, containing scheduler IDs.
+5. Retry the identical tool arguments and confirm `idempotent: true`, the same
+   node ID, and no second revision.
+6. Reuse the capture ID with changed content and confirm the call fails.
+7. Trigger compaction in a long task. Its immediate continuation should save a
+   fresh memory without creating a local due record.
+8. Run in an unregistered repository and confirm the hooks silently do
+   nothing.
 
-To pick up later local edits, update the plugin cachebuster with the Codex
-plugin-creator helper, reinstall `synapse@synapse`, and start another new task.
+Provisioning, secrets, recovery, and rollout are documented in
+[`cloud-memory-operations.md`](./cloud-memory-operations.md).

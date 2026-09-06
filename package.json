@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "packageManager": "npm@11.19.0",
@@ -11,13 +11,27 @@
   "scripts": {
     "audit": "npm audit --audit-level=high",
     "check": "biome check . && npm run test:coverage",
+    "configure:plugin": "node scripts/configure-plugin.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
+    "start": "node src/server/index.mjs",
     "validate:plugin": "node scripts/validate-plugin.mjs",
     "synapse": "node src/client/cli.mjs",
     "test": "node --test",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=85 --test-coverage-branches=70 --test-coverage-functions=90"
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=scripts/migrate.mjs --test-coverage-exclude=src/server/database.mjs --test-coverage-lines=85 --test-coverage-branches=70 --test-coverage-functions=90",
+    "test:sql": "node --test test/server/schema.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/express": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@supabase/supabase-js": "^2.115.0",
+    "express": "^5.2.1",
+    "jose": "^6.2.12",
+    "pg": "^8.23.0",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12"

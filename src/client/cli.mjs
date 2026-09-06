@@ -1,23 +1,58 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { basename, isAbsolute, resolve } from "node:path";
-import { promisify } from "node:util";
 
 import {
   queueMessage,
   recoverMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
+import {
+  configureMcpResource,
+  createDevelopmentToken,
+  inviteUser,
+  revokeDevelopmentToken,
+  rotateRuntimeRole,
+} from "../admin.mjs";
+import { connectProject, resolveProjectRoot } from "./project-registry.mjs";
 
-const execFileAsync = promisify(execFile);
+export { resolveProjectRoot };
 
 function usage() {
   return [
     "Usage:",
     '  npm run synapse -- send <channel-id> --project <name-or-absolute-path> "<task>"',
     "  npm run synapse -- recover <job-id> --owner-stopped",
+    "  npm run synapse -- project connect [path] --alias <cloud-project-alias>",
+    "  npm run synapse -- admin invite --email <email> --username <name> --project <alias>",
+    "  npm run synapse -- admin token create --username <name> [--expires-in-days <days>]",
+    "  npm run synapse -- admin token revoke --token-id <uuid>",
+    "  npm run synapse -- admin configure --mcp-url <https://host/mcp>",
+    "  npm run synapse -- admin runtime-role rotate",
     "",
     "The next prompt in a local Codex task for that project routes the message.",
   ].join("\n");
+}
+
+function parseOptions(arguments_, offset, definitions) {
+  const values = {};
+  for (let index = offset; index < arguments_.length; index += 2) {
+    const option = arguments_[index];
+    const definition = definitions[option];
+    const value = arguments_[index + 1];
+    if (
+      !definition ||
+      Object.hasOwn(values, definition.key) ||
+      !value ||
+      value.startsWith("--")
+    ) {
+      throw new Error(usage());
+    }
+    values[definition.key] = value;
+  }
+  for (const definition of Object.values(definitions)) {
+    if (definition.required && !Object.hasOwn(values, definition.key)) {
+      throw new Error(usage());
+    }
+  }
+  return values;
 }
 
 export function parseArguments(input) {
@@ -36,6 +71,65 @@ export function parseArguments(input) {
     }
     return { command: "recover", jobId };
   }
+  if (arguments_[0] === "project" && arguments_[1] === "connect") {
+    const aliasIndex = arguments_.indexOf("--alias");
+    const alias = aliasIndex === -1 ? null : arguments_[aliasIndex + 1];
+    if (!alias) throw new Error(usage());
+    arguments_.splice(aliasIndex, 2);
+    const project = arguments_[2] ?? ".";
+    if (arguments_.length > 3) throw new Error(usage());
+    return { command: "project-connect", alias, project };
+  }
+  if (arguments_[0] === "admin") {
+    if (arguments_[1] === "invite") {
+      const options = parseOptions(arguments_, 2, {
+        "--email": { key: "email", required: true },
+        "--username": { key: "username", required: true },
+        "--project": { key: "projectAlias", required: true },
+      });
+      return {
+        command: "admin-invite",
+        ...options,
+      };
+    }
+    if (arguments_[1] === "token" && arguments_[2] === "create") {
+      const options = parseOptions(arguments_, 3, {
+        "--username": { key: "username", required: true },
+        "--expires-in-days": { key: "expiresInDays" },
+        "--label": { key: "label" },
+      });
+      return {
+        command: "admin-token-create",
+        ...options,
+        expiresInDays: options.expiresInDays ?? "7",
+        label: options.label ?? "local-development",
+      };
+    }
+    if (arguments_[1] === "token" && arguments_[2] === "revoke") {
+      return {
+        command: "admin-token-revoke",
+        ...parseOptions(arguments_, 3, {
+          "--token-id": { key: "tokenId", required: true },
+        }),
+      };
+    }
+    if (arguments_[1] === "configure") {
+      return {
+        command: "admin-configure",
+        ...parseOptions(arguments_, 2, {
+          "--mcp-url": { key: "mcpUrl", required: true },
+        }),
+      };
+    }
+    if (
+      arguments_[1] === "runtime-role" &&
+      arguments_[2] === "rotate" &&
+      arguments_.length === 3
+    ) {
+      return { command: "admin-runtime-role-rotate" };
+    }
+    throw new Error(usage());
+  }
   const projectIndex = arguments_.indexOf("--project");
   const project = projectIndex === -1 ? null : arguments_[projectIndex + 1];
   if (projectIndex !== -1) {
@@ -47,55 +141,6 @@ export function parseArguments(input) {
     throw new Error(usage());
   }
   return { command, channelId, project, task };
-}
-
-function resolveGitPath(projectRoot, path) {
-  return isAbsolute(path) ? resolve(path) : resolve(projectRoot, path);
-}
-
-export async function resolveProjectRoot(
-  project,
-  cwd = process.cwd(),
-  { execGit = execFileAsync } = {},
-) {
-  let candidate;
-  if (isAbsolute(project)) {
-    candidate = project;
-  } else if (project === basename(resolve(cwd))) {
-    candidate = cwd;
-  } else {
-    throw new Error(
-      `Project ${project} is not the current folder; pass its absolute path instead`,
-    );
-  }
-  let stdout;
-  try {
-    ({ stdout } = await execGit(
-      "git",
-      [
-        "-C",
-        resolve(candidate),
-        "rev-parse",
-        "--show-toplevel",
-        "--git-dir",
-        "--git-common-dir",
-      ],
-      { encoding: "utf8" },
-    ));
-  } catch {
-    throw new Error(`Project is not a Git checkout: ${resolve(candidate)}`);
-  }
-  const [root, gitDirectory, commonDirectory] = stdout.trim().split("\n");
-  const projectRoot = resolve(root);
-  if (
-    resolveGitPath(projectRoot, gitDirectory) !==
-    resolveGitPath(projectRoot, commonDirectory)
-  ) {
-    throw new Error(
-      `Project must be its primary checkout, not a linked worktree: ${projectRoot}`,
-    );
-  }
-  return projectRoot;
 }
 
 export async function sendMessage(
@@ -124,6 +169,43 @@ export async function main(arguments_ = process.argv.slice(2)) {
     });
     process.stdout.write(
       `Recovered ${message.jobId}; the next owner prompt may retry it safely.\n`,
+    );
+    return;
+  }
+  if (parsed.command === "project-connect") {
+    const project = await connectProject(parsed);
+    process.stdout.write(
+      `Connected ${project.alias} to ${project.root}${project.created ? "" : " (already connected)"}\n`,
+    );
+    return;
+  }
+  if (parsed.command === "admin-invite") {
+    process.stdout.write(
+      `${JSON.stringify(await inviteUser(parsed), null, 2)}\n`,
+    );
+    return;
+  }
+  if (parsed.command === "admin-token-create") {
+    process.stdout.write(
+      `${JSON.stringify(await createDevelopmentToken(parsed), null, 2)}\n`,
+    );
+    return;
+  }
+  if (parsed.command === "admin-token-revoke") {
+    process.stdout.write(
+      `${JSON.stringify(await revokeDevelopmentToken(parsed), null, 2)}\n`,
+    );
+    return;
+  }
+  if (parsed.command === "admin-configure") {
+    process.stdout.write(
+      `${JSON.stringify(await configureMcpResource(parsed), null, 2)}\n`,
+    );
+    return;
+  }
+  if (parsed.command === "admin-runtime-role-rotate") {
+    process.stdout.write(
+      `${JSON.stringify(await rotateRuntimeRole(parsed), null, 2)}\n`,
     );
     return;
   }

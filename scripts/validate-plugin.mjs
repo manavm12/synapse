@@ -85,15 +85,26 @@ assert(
 );
 const memoryServer = mcp.mcpServers?.["synapse-memory"];
 assert(
-  memoryServer?.command === "node",
-  "synapse-memory must use the Node launcher",
+  memoryServer?.type === "http",
+  "synapse-memory must use Streamable HTTP",
 );
 assert(
-  memoryServer?.args?.[0] === "./server/memory-mcp.mjs",
-  "synapse-memory must launch the dependency-free server",
+  !Object.hasOwn(memoryServer, "command"),
+  "cloud MCP must not launch a local process",
 );
-const memoryServerPath = resolve(pluginRoot, memoryServer.args[0]);
-await access(memoryServerPath);
+assert(
+  typeof memoryServer?.url === "string" &&
+    new URL(memoryServer.url).protocol === "https:",
+  "synapse-memory must use an HTTPS URL",
+);
+assert(
+  memoryServer.oauth_resource === memoryServer.url,
+  "OAuth resource must equal MCP URL",
+);
+assert(
+  new URL(memoryServer.url).pathname === "/mcp",
+  "MCP URL must use the exact /mcp path",
+);
 const serverDirectory = resolve(pluginRoot, "server");
 for (const file of await readdir(serverDirectory)) {
   if (!file.endsWith(".mjs")) continue;
@@ -107,20 +118,15 @@ for (const file of await readdir(serverDirectory)) {
 
 const hooks = (await readJson(resolve(pluginRoot, "hooks/hooks.json"))).hooks;
 assert(
-  hooks?.Stop?.[0]?.hooks?.[0]?.type === "mcp_tool",
-  "Stop must use an MCP tool hook",
+  hooks?.Stop?.[0]?.hooks?.[0]?.type === "command",
+  "Stop must use the local scheduler",
 );
 assert(
-  hooks.Stop[0].hooks[0].server === "synapse-memory" &&
-    hooks.Stop[0].hooks[0].tool === "memory_checkpoint",
-  "Stop must call synapse-memory.memory_checkpoint",
+  hooks.Stop[0].hooks[0].command ===
+    `node \${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs`,
+  "Stop must launch the dependency-free checkpoint scheduler",
 );
-assert(
-  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
-    (hook) => hook.command === `node \${PLUGIN_ROOT}/hooks/prompt-memory.mjs`,
-  ),
-  "UserPromptSubmit must inject pending memory context",
-);
+await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
 assert(
   hooks?.SessionStart?.[0]?.matcher === "^compact$",
   "SessionStart must match compact only",

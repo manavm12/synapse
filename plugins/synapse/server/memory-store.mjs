@@ -1,14 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  realpathSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -23,6 +15,7 @@ export const REQUIRED_MEMORY_SECTIONS = Object.freeze([
 ]);
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/;
+const SAFE_PROJECT_ALIAS = /^[a-z][a-z0-9_-]{1,62}$/;
 
 export function createMemoryPaths(env = process.env) {
   const synapseHome = resolve(env.SYNAPSE_HOME ?? join(homedir(), ".synapse"));
@@ -31,10 +24,9 @@ export function createMemoryPaths(env = process.env) {
     hostDatabase: resolve(
       env.SYNAPSE_HOST_DB ?? join(synapseHome, "host.sqlite"),
     ),
-    memoryDatabase: resolve(
-      env.SYNAPSE_MEMORY_DB ?? join(synapseHome, "memory.sqlite"),
+    checkpointDatabase: resolve(
+      env.SYNAPSE_CHECKPOINT_DB ?? join(synapseHome, "checkpoints.sqlite"),
     ),
-    memoryRoot: resolve(env.SYNAPSE_MEMORY_ROOT ?? join(synapseHome, "memory")),
   };
 }
 
@@ -51,6 +43,18 @@ function requireSessionId(value) {
     throw new Error("session_id contains unsupported characters");
   }
   return sessionId;
+}
+
+function checkpointInterval(env) {
+  const configured = env.SYNAPSE_CHECKPOINT_INTERVAL;
+  if (configured === undefined || configured === "") return CHECKPOINT_INTERVAL;
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 1_000) {
+    throw new Error(
+      "SYNAPSE_CHECKPOINT_INTERVAL must be an integer from 1 to 1000",
+    );
+  }
+  return value;
 }
 
 function canonicalPath(path) {
@@ -76,10 +80,7 @@ export function resolveGitProjectRoot(cwd) {
 }
 
 function readRegisteredProjects(hostDatabase) {
-  if (!existsSync(hostDatabase)) {
-    return [];
-  }
-
+  if (!existsSync(hostDatabase)) return [];
   let database;
   try {
     database = new DatabaseSync(hostDatabase, { readOnly: true });
@@ -88,10 +89,9 @@ function readRegisteredProjects(hostDatabase) {
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projects'",
       )
       .get();
-    if (!table) {
-      return [];
-    }
-    return database.prepare("SELECT alias, root FROM projects").all();
+    return table
+      ? database.prepare("SELECT alias, root FROM projects").all()
+      : [];
   } catch {
     return [];
   } finally {
@@ -106,27 +106,19 @@ export function findRegisteredProject(cwd, paths = createMemoryPaths()) {
   } catch {
     return null;
   }
-
   for (const project of readRegisteredProjects(paths.hostDatabase)) {
-    if (canonicalPath(project.root) === projectRoot) {
-      return {
-        alias: project.alias,
-        root: projectRoot,
-      };
+    if (
+      typeof project.alias === "string" &&
+      SAFE_PROJECT_ALIAS.test(project.alias) &&
+      canonicalPath(project.root) === projectRoot
+    ) {
+      return { alias: project.alias, root: projectRoot };
     }
   }
   return null;
 }
 
-function projectIsStillRegistered(project, paths) {
-  return readRegisteredProjects(paths.hostDatabase).some(
-    (candidate) =>
-      candidate.alias === project.alias &&
-      canonicalPath(candidate.root) === canonicalPath(project.root),
-  );
-}
-
-function openMemoryDatabase(path) {
+function openCheckpointDatabase(path) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const database = new DatabaseSync(path);
   chmodSync(path, 0o600);
@@ -134,35 +126,29 @@ function openMemoryDatabase(path) {
     PRAGMA busy_timeout = 5000;
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
-    CREATE TABLE IF NOT EXISTS memory_sessions (
+    CREATE TABLE IF NOT EXISTS checkpoint_sessions (
       session_id TEXT PRIMARY KEY,
       project_alias TEXT NOT NULL,
       project_root TEXT NOT NULL,
+      due_capture_id TEXT,
       due_reason TEXT,
       due_turn_id TEXT,
-      revision INTEGER NOT NULL DEFAULT 0,
-      title TEXT,
-      summary TEXT,
-      document_path TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      last_saved_at TEXT
+      updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS memory_turns (
-      session_id TEXT NOT NULL REFERENCES memory_sessions(session_id) ON DELETE CASCADE,
+    CREATE TABLE IF NOT EXISTS checkpoint_turns (
+      session_id TEXT NOT NULL REFERENCES checkpoint_sessions(session_id) ON DELETE CASCADE,
       turn_id TEXT NOT NULL,
       observed_at TEXT NOT NULL,
-      saved_revision INTEGER,
+      capture_id TEXT,
       PRIMARY KEY (session_id, turn_id)
     );
-    CREATE INDEX IF NOT EXISTS memory_turns_unsaved
-      ON memory_turns(session_id, saved_revision);
+    CREATE INDEX IF NOT EXISTS checkpoint_turns_pending
+      ON checkpoint_turns(session_id, capture_id);
   `);
   for (const suffix of ["", "-wal", "-shm"]) {
     const sqlitePath = `${path}${suffix}`;
-    if (existsSync(sqlitePath)) {
-      chmodSync(sqlitePath, 0o600);
-    }
+    if (existsSync(sqlitePath)) chmodSync(sqlitePath, 0o600);
   }
   return database;
 }
@@ -179,9 +165,9 @@ function inTransaction(database, operation) {
   }
 }
 
-function ensureSession(database, { sessionId, project, now }) {
+function ensureSession(database, { sessionId, project, timestamp }) {
   const existing = database
-    .prepare("SELECT * FROM memory_sessions WHERE session_id = ?")
+    .prepare("SELECT * FROM checkpoint_sessions WHERE session_id = ?")
     .get(sessionId);
   if (existing && canonicalPath(existing.project_root) !== project.root) {
     throw new Error(`Session ${sessionId} is already bound to another project`);
@@ -189,95 +175,130 @@ function ensureSession(database, { sessionId, project, now }) {
   if (!existing) {
     database
       .prepare(`
-      INSERT INTO memory_sessions (
+      INSERT INTO checkpoint_sessions (
         session_id, project_alias, project_root, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?)
     `)
-      .run(sessionId, project.alias, project.root, now, now);
+      .run(sessionId, project.alias, project.root, timestamp, timestamp);
   }
-  return existing;
 }
 
-function checkpointReason(sessionId, reason) {
+function capturePrompt({ sessionId, projectAlias, captureId, reason }) {
   return [
-    `Synapse memory capture is due for session ${sessionId} (${reason}).`,
-    "Before finishing, call the Synapse save_session_memory MCP tool exactly once.",
+    `Synapse cloud memory capture is due for session ${sessionId} (${reason}).`,
+    "Before finishing, call synapse-memory.save_session_memory exactly once with",
+    `capture_id=${captureId}, session_id=${sessionId}, project_alias=${projectAlias}, and capture_reason=${reason}.`,
     "Write a concise durable session summary, not a transcript.",
     `The markdown must contain these headings: ${REQUIRED_MEMORY_SECTIONS.join(", ")}.`,
-    "After the tool succeeds, finish the original task normally.",
-  ].join(" ");
-}
-
-function pendingPromptReason(sessionId, reason) {
-  return [
-    `A Synapse memory checkpoint is pending for session ${sessionId} (${reason}).`,
-    "Before answering the user's current request, call the Synapse save_session_memory MCP tool exactly once.",
-    "Write a concise durable session summary, not a transcript.",
-    `The markdown must contain these headings: ${REQUIRED_MEMORY_SECTIONS.join(", ")}.`,
-    "Do not announce the checkpoint unless saving fails.",
-    "After the tool succeeds, answer the user's current request normally.",
+    "If authentication, networking, or saving fails, continue and finish the original task; do not retry or write a local memory copy.",
   ].join(" ");
 }
 
 export function checkpointMemory(
-  { sessionId, turnId, cwd },
-  { env = process.env, now = () => Date.now() } = {},
+  { sessionId, turnId, cwd, stopHookActive = false },
+  {
+    env = process.env,
+    now = () => Date.now(),
+    createCaptureId = randomUUID,
+  } = {},
 ) {
   const safeSessionId = requireSessionId(sessionId);
   const safeTurnId = requireText(turnId, "turn_id");
   const paths = createMemoryPaths(env);
   const project = findRegisteredProject(cwd, paths);
-  if (!project) {
-    return { registered: false, due: false };
-  }
+  if (!project) return { registered: false, due: false };
 
+  const interval = checkpointInterval(env);
   const timestamp = new Date(now()).toISOString();
-  const database = openMemoryDatabase(paths.memoryDatabase);
+  const database = openCheckpointDatabase(paths.checkpointDatabase);
   try {
     return inTransaction(database, () => {
       ensureSession(database, {
         sessionId: safeSessionId,
         project,
-        now: timestamp,
+        timestamp,
       });
+      let session = database
+        .prepare("SELECT * FROM checkpoint_sessions WHERE session_id = ?")
+        .get(safeSessionId);
+
+      // The continuation exists only to perform the remote save. It must not
+      // become the first turn in the next interval. Clearing here deliberately
+      // implements fail-open behavior regardless of the remote call's result.
+      if (stopHookActive) {
+        if (session.due_capture_id) {
+          database
+            .prepare(`
+            UPDATE checkpoint_turns SET capture_id = ?
+            WHERE session_id = ? AND capture_id IS NULL
+          `)
+            .run(session.due_capture_id, safeSessionId);
+          database
+            .prepare(`
+            UPDATE checkpoint_sessions
+            SET due_capture_id = NULL, due_reason = NULL, due_turn_id = NULL,
+                updated_at = ?
+            WHERE session_id = ?
+          `)
+            .run(timestamp, safeSessionId);
+        }
+        return {
+          registered: true,
+          due: false,
+          continuation: true,
+          completedCaptureId: session.due_capture_id ?? null,
+        };
+      }
+
       const inserted = database
         .prepare(`
-        INSERT OR IGNORE INTO memory_turns (session_id, turn_id, observed_at)
+        INSERT OR IGNORE INTO checkpoint_turns (session_id, turn_id, observed_at)
         VALUES (?, ?, ?)
       `)
         .run(safeSessionId, safeTurnId, timestamp);
-      const session = database
-        .prepare("SELECT * FROM memory_sessions WHERE session_id = ?")
-        .get(safeSessionId);
-      const unsavedTurns = Number(
+      const pendingTurns = Number(
         database
           .prepare(`
-          SELECT COUNT(*) AS count FROM memory_turns
-          WHERE session_id = ? AND saved_revision IS NULL
+          SELECT COUNT(*) AS count FROM checkpoint_turns
+          WHERE session_id = ? AND capture_id IS NULL
         `)
           .get(safeSessionId).count,
       );
 
-      let dueReason = session.due_reason;
-      if (!dueReason && unsavedTurns >= CHECKPOINT_INTERVAL) {
-        dueReason = `${CHECKPOINT_INTERVAL} completed turns`;
+      if (!session.due_capture_id && pendingTurns >= interval) {
+        const captureId = createCaptureId();
         database
           .prepare(`
-          UPDATE memory_sessions
-          SET due_reason = ?, due_turn_id = ?, updated_at = ?
+          UPDATE checkpoint_sessions
+          SET due_capture_id = ?, due_reason = 'turn_checkpoint',
+              due_turn_id = ?, updated_at = ?
           WHERE session_id = ?
         `)
-          .run(dueReason, safeTurnId, timestamp, safeSessionId);
+          .run(captureId, safeTurnId, timestamp, safeSessionId);
+        session = database
+          .prepare("SELECT * FROM checkpoint_sessions WHERE session_id = ?")
+          .get(safeSessionId);
       }
 
+      const due = Boolean(session.due_capture_id);
       const result = {
         registered: true,
-        due: Boolean(dueReason),
+        due,
         duplicate: inserted.changes === 0,
-        unsavedTurns,
-        remainingTurns: Math.max(0, CHECKPOINT_INTERVAL - unsavedTurns),
-        reason: dueReason,
+        pendingTurns,
+        remainingTurns: Math.max(0, interval - pendingTurns),
+        captureId: session.due_capture_id ?? null,
+        reason: session.due_reason ?? null,
       };
+      if (due) {
+        result.decision = "block";
+        result.reason = capturePrompt({
+          sessionId: safeSessionId,
+          projectAlias: project.alias,
+          captureId: session.due_capture_id,
+          reason: "turn_checkpoint",
+        });
+      }
       return result;
     });
   } finally {
@@ -285,245 +306,24 @@ export function checkpointMemory(
   }
 }
 
-export function getPendingMemoryPrompt(
+export function createCompactionCheckpoint(
   { sessionId, cwd },
-  { env = process.env } = {},
+  { env = process.env, createCaptureId = randomUUID } = {},
 ) {
   const safeSessionId = requireSessionId(sessionId);
-  const paths = createMemoryPaths(env);
-  const project = findRegisteredProject(cwd, paths);
-  if (!project || !existsSync(paths.memoryDatabase)) {
-    return { registered: Boolean(project), due: false };
-  }
-
-  const database = openMemoryDatabase(paths.memoryDatabase);
-  try {
-    const session = database
-      .prepare("SELECT * FROM memory_sessions WHERE session_id = ?")
-      .get(safeSessionId);
-    if (!session) {
-      return { registered: true, due: false };
-    }
-    if (canonicalPath(session.project_root) !== project.root) {
-      throw new Error(
-        `Session ${safeSessionId} is already bound to another project`,
-      );
-    }
-    if (!session.due_reason) {
-      return { registered: true, due: false };
-    }
-    return {
-      registered: true,
-      due: true,
-      reason: session.due_reason,
-      prompt: pendingPromptReason(safeSessionId, session.due_reason),
-    };
-  } finally {
-    database.close();
-  }
-}
-
-export function markCompactionDue(
-  { sessionId, cwd },
-  { env = process.env, now = () => Date.now() } = {},
-) {
-  const safeSessionId = requireSessionId(sessionId);
-  const paths = createMemoryPaths(env);
-  const project = findRegisteredProject(cwd, paths);
-  if (!project) {
-    return { registered: false, due: false };
-  }
-
-  const timestamp = new Date(now()).toISOString();
-  const database = openMemoryDatabase(paths.memoryDatabase);
-  try {
-    return inTransaction(database, () => {
-      ensureSession(database, {
-        sessionId: safeSessionId,
-        project,
-        now: timestamp,
-      });
-      database
-        .prepare(`
-        UPDATE memory_sessions
-        SET due_reason = 'compaction boundary', due_turn_id = NULL, updated_at = ?
-        WHERE session_id = ?
-      `)
-        .run(timestamp, safeSessionId);
-      return {
-        registered: true,
-        due: true,
-        reason: "compaction boundary",
-        prompt: checkpointReason(safeSessionId, "compaction boundary"),
-      };
-    });
-  } finally {
-    database.close();
-  }
-}
-
-function validateMarkdown(markdown) {
-  const body = requireText(markdown, "markdown");
-  const missing = REQUIRED_MEMORY_SECTIONS.filter((section) => {
-    const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return !new RegExp(`^#{1,6}\\s+${escaped}\\s*$`, "im").test(body);
-  });
-  if (missing.length > 0) {
-    throw new Error(
-      `markdown is missing required headings: ${missing.join(", ")}`,
-    );
-  }
-  return body;
-}
-
-function safeProjectDirectory(alias) {
-  const safe = String(alias)
-    .replace(/[^A-Za-z0-9._-]/g, "_")
-    .slice(0, 100);
-  if (!safe || safe === "." || safe === "..") {
-    return `project-${createHash("sha256").update(String(alias)).digest("hex").slice(0, 12)}`;
-  }
-  return safe;
-}
-
-function yamlString(value) {
-  return JSON.stringify(String(value));
-}
-
-function renderMemoryDocument({
-  sessionId,
-  project,
-  title,
-  summary,
-  markdown,
-  revision,
-  createdAt,
-  updatedAt,
-}) {
-  return [
-    "---",
-    `session_id: ${yamlString(sessionId)}`,
-    `project: ${yamlString(project.alias)}`,
-    `project_root: ${yamlString(project.root)}`,
-    `title: ${yamlString(title)}`,
-    `summary: ${yamlString(summary)}`,
-    `revision: ${revision}`,
-    `created_at: ${yamlString(createdAt)}`,
-    `updated_at: ${yamlString(updatedAt)}`,
-    "---",
-    "",
-    markdown,
-    "",
-  ].join("\n");
-}
-
-export async function saveSessionMemory(
-  { sessionId, title, summary, markdown },
-  { env = process.env, now = () => Date.now() } = {},
-) {
-  const safeSessionId = requireSessionId(sessionId);
-  const safeTitle = requireText(title, "title");
-  const safeSummary = requireText(summary, "summary");
-  const safeMarkdown = validateMarkdown(markdown);
-  const paths = createMemoryPaths(env);
-  if (!existsSync(paths.memoryDatabase)) {
-    throw new Error(`Unknown memory session: ${safeSessionId}`);
-  }
-
-  const database = openMemoryDatabase(paths.memoryDatabase);
-  let temporaryPath;
-  try {
-    return inTransaction(database, () => {
-      const session = database
-        .prepare("SELECT * FROM memory_sessions WHERE session_id = ?")
-        .get(safeSessionId);
-      if (!session) {
-        throw new Error(`Unknown memory session: ${safeSessionId}`);
-      }
-      const project = {
-        alias: session.project_alias,
-        root: canonicalPath(session.project_root),
-      };
-      if (!projectIsStillRegistered(project, paths)) {
-        throw new Error(
-          `Project ${project.alias} is no longer registered with Synapse`,
-        );
-      }
-
-      const timestamp = new Date(now()).toISOString();
-      const revision = Number(session.revision) + 1;
-      const projectDirectory = join(
-        paths.memoryRoot,
-        safeProjectDirectory(project.alias),
-      );
-      mkdirSync(projectDirectory, { recursive: true, mode: 0o700 });
-      chmodSync(paths.memoryRoot, 0o700);
-      chmodSync(projectDirectory, 0o700);
-      const documentPath = join(projectDirectory, `${safeSessionId}.md`);
-      temporaryPath = join(
-        projectDirectory,
-        `.${safeSessionId}.${process.pid}.${randomUUID()}.tmp`,
-      );
-      const document = renderMemoryDocument({
-        sessionId: safeSessionId,
-        project,
-        title: safeTitle,
-        summary: safeSummary,
-        markdown: safeMarkdown,
-        revision,
-        createdAt: session.created_at,
-        updatedAt: timestamp,
-      });
-      writeFileSync(temporaryPath, document, { encoding: "utf8", mode: 0o600 });
-      renameSync(temporaryPath, documentPath);
-      temporaryPath = null;
-
-      database
-        .prepare(`
-        UPDATE memory_sessions
-        SET due_reason = NULL,
-            due_turn_id = NULL,
-            revision = ?,
-            title = ?,
-            summary = ?,
-            document_path = ?,
-            updated_at = ?,
-            last_saved_at = ?
-        WHERE session_id = ?
-      `)
-        .run(
-          revision,
-          safeTitle,
-          safeSummary,
-          documentPath,
-          timestamp,
-          timestamp,
-          safeSessionId,
-        );
-      database
-        .prepare(`
-        UPDATE memory_turns SET saved_revision = ?
-        WHERE session_id = ? AND saved_revision IS NULL
-      `)
-        .run(revision, safeSessionId);
-
-      return {
-        saved: true,
-        sessionId: safeSessionId,
-        projectAlias: project.alias,
-        path: documentPath,
-        revision,
-        savedAt: timestamp,
-      };
-    });
-  } finally {
-    if (temporaryPath) {
-      try {
-        unlinkSync(temporaryPath);
-      } catch {
-        // Ignore cleanup failures; the original save error is more useful.
-      }
-    }
-    database.close();
-  }
+  const project = findRegisteredProject(cwd, createMemoryPaths(env));
+  if (!project) return { registered: false, due: false };
+  const captureId = createCaptureId();
+  return {
+    registered: true,
+    due: true,
+    captureId,
+    reason: "compaction",
+    prompt: capturePrompt({
+      sessionId: safeSessionId,
+      projectAlias: project.alias,
+      captureId,
+      reason: "compaction",
+    }),
+  };
 }
