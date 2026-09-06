@@ -8,7 +8,10 @@ import { promisify } from "node:util";
 
 import { getJob, queueMessage } from "../../plugins/synapse/lib/inbox.mjs";
 
-const hookPath = resolve("plugins/synapse/hooks/dispatch.mjs");
+const pluginRoot = resolve(
+  process.env.SYNAPSE_PLUGIN_ROOT ?? "plugins/synapse",
+);
+const hookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
 const execFileAsync = promisify(execFile);
 
 async function primaryGitCheckout() {

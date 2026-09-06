@@ -1,18 +1,22 @@
 {
   "name": "synapse",
-  "version": "0.1.0+codex.20260902075438",
-  "description": "Route queued Synapse messages into native Codex project tasks.",
+  "version": "0.2.0",
+  "description": "Route Synapse tasks and capture durable Codex session memory.",
   "author": {
     "name": "Synapse"
   },
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Synapse",
-    "shortDescription": "Route messages into Codex tasks.",
-    "longDescription": "Synapse checks a project's inbox on the next owner prompt and routes queued messages into visible, conversational Codex worktree tasks.",
+    "shortDescription": "Route tasks and preserve durable session memory.",
+    "longDescription": "Synapse checks a project's inbox on the next owner prompt and routes queued messages into visible Codex tasks. It also captures concise Markdown session memory at regular turn checkpoints and after compaction.",
     "developerName": "Synapse",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
-    "defaultPrompt": "Check my Synapse inbox."
+    "defaultPrompt": [
+      "Check my Synapse inbox.",
+      "Show me where Synapse stores session memory."
+    ]
   }
 }
