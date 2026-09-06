@@ -2,8 +2,8 @@
   "mcpServers": {
     "synapse-memory": {
       "type": "http",
-      "url": "https://configure-me.invalid/mcp",
-      "oauth_resource": "https://configure-me.invalid/mcp",
+      "url": "https://synapse-production-ff6c.up.railway.app/mcp",
+      "oauth_resource": "https://synapse-production-ff6c.up.railway.app/mcp",
       "startup_timeout_sec": 10,
       "tool_timeout_sec": 30
     }
