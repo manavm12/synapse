@@ -76,6 +76,7 @@ export function loadConfig(env = process.env) {
     supabasePublishableKey: required(env, "SUPABASE_PUBLISHABLE_KEY"),
     cookieSecret,
     allowDevTokens: booleanEnv(env.ALLOW_DEV_TOKENS),
+    publicSignup: booleanEnv(env.PUBLIC_SIGNUP_ENABLED),
     requiredScopes: REQUIRED_SCOPES,
     allowedHosts: [
       resourceUrl.hostname,

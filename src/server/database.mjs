@@ -9,6 +9,20 @@ export class MemoryConflictError extends Error {
   }
 }
 
+export class UsernameTakenError extends Error {
+  constructor(message = "username is already taken") {
+    super(message);
+    this.name = "UsernameTakenError";
+  }
+}
+
+export class AccountDisabledError extends Error {
+  constructor(message = "Synapse account is disabled") {
+    super(message);
+    this.name = "AccountDisabledError";
+  }
+}
+
 function contentHash(input) {
   return createHash("sha256")
     .update(
@@ -85,6 +99,62 @@ export function createDatabase(config) {
         authMethod,
       };
     });
+  }
+
+  async function getAccount(userId) {
+    return withUser(userId, async (client) => {
+      const result = await client.query(
+        `select
+           profile.username::text,
+           profile.status::text,
+           project.id as project_id,
+           project.alias::text as project_alias
+         from public.profiles as profile
+         left join public.projects as project on project.owner_id = profile.id
+         where profile.id = $1`,
+        [userId],
+      );
+      if (result.rowCount !== 1) return null;
+      const row = result.rows[0];
+      if (row.status === "disabled") throw new AccountDisabledError();
+      if (!row.project_id) return null;
+      return {
+        username: row.username,
+        projectId: row.project_id,
+        projectAlias: row.project_alias,
+      };
+    });
+  }
+
+  async function registerAccount(userId, { username, projectAlias }) {
+    try {
+      return await withUser(userId, async (client) => {
+        const result = await client.query(
+          `select account_id, account_username, account_status,
+                  project_id, project_alias
+           from synapse_private.register_identity($1, $2)`,
+          [username, projectAlias],
+        );
+        if (result.rowCount !== 1) {
+          throw new Error("Synapse account provisioning returned no identity");
+        }
+        const row = result.rows[0];
+        return {
+          username: row.account_username,
+          projectId: row.project_id,
+          projectAlias: row.project_alias,
+        };
+      });
+    } catch (error) {
+      if (
+        error?.code === "23505" &&
+        error?.constraint === "profiles_username_key"
+      ) {
+        throw new UsernameTakenError();
+      }
+      if (error?.code === "42501") throw new AccountDisabledError();
+      throw error;
+    }
   }
 
   async function exchangeDevelopmentToken(tokenHash) {
@@ -276,6 +346,8 @@ export function createDatabase(config) {
 
   return {
     resolveIdentity,
+    getAccount,
+    registerAccount,
     exchangeDevelopmentToken,
     saveSessionMemory,
     async healthCheck() {

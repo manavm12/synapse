@@ -9,6 +9,7 @@ import {
 
 import { installConsentRoutes } from "./consent.mjs";
 import { createMcpRuntime } from "./mcp.mjs";
+import { installOnboardingRoutes } from "./onboarding.mjs";
 
 function supabaseBrowserPath() {
   const require = createRequire(import.meta.url);
@@ -30,6 +31,7 @@ export async function createApplication({
   config,
   database,
   verifier,
+  sessionVerifier,
   logger,
   fetchImplementation = fetch,
 }) {
@@ -110,6 +112,11 @@ export async function createApplication({
 
   installConsentRoutes(app, config, {
     supabaseBrowserPath: supabaseBrowserPath(),
+  });
+  installOnboardingRoutes(app, config, {
+    database,
+    sessionVerifier,
+    logger,
   });
 
   const authenticate = requireBearerAuth({

@@ -3,6 +3,16 @@ import { createHash } from "node:crypto";
 import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export class SessionAuthenticationError extends Error {
+  constructor(message = "Supabase session is invalid") {
+    super(message);
+    this.name = "SessionAuthenticationError";
+  }
+}
+
 function scopesFrom(payload) {
   const raw = payload.scope ?? payload.scopes ?? "";
   if (Array.isArray(raw))
@@ -92,6 +102,58 @@ export function createTokenVerifier(
         throw invalidToken(
           "Access token is invalid or the identity is inactive",
         );
+      }
+    },
+  };
+}
+
+export function createSessionVerifier(
+  config,
+  { verifyJwt, jwks = createRemoteJWKSet(config.supabaseJwksUrl) } = {},
+) {
+  const verify =
+    verifyJwt ??
+    ((token) =>
+      jwtVerify(token, jwks, {
+        issuer: config.supabaseIssuer,
+        audience: "authenticated",
+        clockTolerance: 5,
+      }));
+
+  return {
+    async verifyAccessToken(token) {
+      try {
+        const { payload } = await verify(token);
+        if (typeof payload.sub !== "string" || !UUID.test(payload.sub)) {
+          throw new SessionAuthenticationError("Token subject is invalid");
+        }
+        if (payload.role !== "authenticated") {
+          throw new SessionAuthenticationError("Token role is invalid");
+        }
+        if (typeof payload.exp !== "number") {
+          throw new SessionAuthenticationError("Token expiry is missing");
+        }
+        if (
+          typeof payload.session_id !== "string" ||
+          !UUID.test(payload.session_id)
+        ) {
+          throw new SessionAuthenticationError("Token session is invalid");
+        }
+        if (typeof payload.email !== "string" || !payload.email.includes("@")) {
+          throw new SessionAuthenticationError("Token email is invalid");
+        }
+        if (payload.is_anonymous !== false) {
+          throw new SessionAuthenticationError(
+            "Anonymous users cannot register",
+          );
+        }
+        return {
+          userId: payload.sub,
+          sessionId: payload.session_id,
+        };
+      } catch (error) {
+        if (error instanceof SessionAuthenticationError) throw error;
+        throw new SessionAuthenticationError();
       }
     },
   };

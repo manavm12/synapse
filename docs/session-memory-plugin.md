@@ -39,22 +39,23 @@ codex plugin marketplace add /path/to/synapse
 codex plugin add synapse@synapse
 ```
 
-Register the local checkout against the alias created with the cloud invite:
-
-```sh
-npm run synapse -- project connect /path/to/project --alias <project-alias>
-```
-
-Then sign in through Codex:
+Sign in through Codex:
 
 ```sh
 codex mcp login synapse-memory
 ```
 
-The browser opens Synapse's authorization page. Use the invited email address,
-follow the magic link, review the scopes, and approve. In a new Codex task,
-call `get_identity` before relying on memory and confirm its username and
-project alias.
+The browser opens Synapse's authorization page. Use an allowed alpha email,
+follow the magic link, and choose a username and project alias if this is a new
+account. Review the scopes and approve. Register the local checkout against the
+chosen alias:
+
+```sh
+npm run synapse -- project connect /path/to/project --alias <project-alias>
+```
+
+In a new Codex task, call `get_identity` before relying on memory and confirm
+its username and project alias.
 
 Hook definitions change when the plugin changes. Review `/hooks` and trust the
 new hash before testing a fresh task.

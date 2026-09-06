@@ -46,6 +46,12 @@ dd {
   margin: 0.25rem 0 0;
 }
 
+.hint {
+  margin: 0.4rem 0 0;
+  color: #7a8495;
+  font-size: 0.78rem;
+}
+
 input,
 button {
   box-sizing: border-box;
