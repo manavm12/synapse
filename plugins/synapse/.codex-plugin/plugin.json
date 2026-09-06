@@ -1,16 +1,15 @@
 {
   "name": "synapse",
-  "version": "0.3.0+codex.20260906063239",
+  "version": "0.3.0+codex.20260906133812",
   "description": "Route Synapse tasks and capture authenticated cloud session memory.",
   "author": {
     "name": "Synapse"
   },
-  "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Synapse",
     "shortDescription": "Route tasks and preserve durable session memory.",
-    "longDescription": "Synapse checks a project's inbox on the next owner prompt and routes queued messages into visible Codex tasks. It captures concise session memory in the authenticated user's cloud knowledge tree at regular turn checkpoints and after compaction.",
+    "longDescription": "Synapse routes queued messages in the background through Codex desktop, accepting temporary task IDs immediately while delegated children bind their permanent IDs independently. It captures concise session memory in the authenticated user's cloud knowledge tree at regular turn checkpoints and after compaction.",
     "developerName": "Synapse",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],

@@ -128,13 +128,17 @@ export function installConsentRoutes(app, config, { supabaseBrowserPath }) {
 
   app.get("/assets/supabase.js", (_req, res) => {
     res.set("Cache-Control", "public, max-age=86400");
-    res.sendFile(supabaseBrowserPath);
+    res.sendFile(supabaseBrowserPath, { dotfiles: "allow" });
   });
   app.get("/assets/consent.js", (_req, res) => {
-    res.sendFile(new URL("./public/consent.js", import.meta.url).pathname);
+    res.sendFile(new URL("./public/consent.js", import.meta.url).pathname, {
+      dotfiles: "allow",
+    });
   });
   app.get("/assets/consent.css", (_req, res) => {
-    res.sendFile(new URL("./public/consent.css", import.meta.url).pathname);
+    res.sendFile(new URL("./public/consent.css", import.meta.url).pathname, {
+      dotfiles: "allow",
+    });
   });
 
   app.get("/authorize", (req, res) => {

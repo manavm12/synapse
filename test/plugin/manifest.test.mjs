@@ -29,11 +29,21 @@ test("the marketplace and plugin manifests reference repository content", async 
 
   assert.equal(listing.name, pluginManifest.name);
   assert.equal(pluginManifest.version.split("+")[0], packageManifest.version);
-  assert.equal(pluginManifest.skills, "./skills/");
-  await access(join(pluginRoot, "skills/route-inbox/SKILL.md"));
+  assert.equal(pluginManifest.skills, undefined);
+  assert.equal(
+    hooksManifest.hooks.SessionStart.some(
+      (entry) => entry.matcher === "^startup$",
+    ),
+    true,
+  );
 
   const hook = hooksManifest.hooks.UserPromptSubmit[0].hooks[0];
   assert.equal(hook.type, "command");
-  assert.equal(hook.command, `node \${PLUGIN_ROOT}/hooks/dispatch.mjs`);
+  assert.equal(hook.command, `/bin/sh \${PLUGIN_ROOT}/hooks/run-dispatch.sh`);
+  assert.equal(hook.async, true);
   await access(join(pluginRoot, "hooks/dispatch.mjs"));
+  await access(join(pluginRoot, "hooks/run-dispatch.sh"));
+  await access(join(pluginRoot, "hooks/bind-child.mjs"));
+  await access(join(pluginRoot, "lib/native-router.mjs"));
+  await access(join(pluginRoot, "lib/app-tools-client.mjs"));
 });

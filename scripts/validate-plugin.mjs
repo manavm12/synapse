@@ -128,8 +128,28 @@ assert(
 );
 await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
 assert(
-  hooks?.SessionStart?.[0]?.matcher === "^compact$",
-  "SessionStart must match compact only",
+  hooks?.SessionStart?.some(
+    (entry) =>
+      entry.matcher === "^startup$" &&
+      entry.hooks?.some(
+        (hook) =>
+          hook.command === `node \${PLUGIN_ROOT}/hooks/bind-child.mjs` &&
+          hook.async === true,
+      ),
+  ),
+  "SessionStart must bind delegated permanent task IDs in the child",
+);
+assert(
+  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
+    (hook) =>
+      hook.command === `/bin/sh \${PLUGIN_ROOT}/hooks/run-dispatch.sh` &&
+      hook.async === true,
+  ),
+  "UserPromptSubmit must route Synapse tasks asynchronously through the signed desktop runtime",
+);
+assert(
+  hooks?.SessionStart?.some((entry) => entry.matcher === "^compact$"),
+  "SessionStart must restore memory after compaction",
 );
 assert(
   !hooks.PreCompact && !hooks.SessionEnd,

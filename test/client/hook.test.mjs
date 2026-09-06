@@ -1,29 +1,35 @@
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
-import { access, mkdtemp, realpath } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
+import { setTimeout as pause } from "node:timers/promises";
 
-import { getJob, queueMessage } from "../../plugins/synapse/lib/inbox.mjs";
+import {
+  acceptProvisioning,
+  getJob,
+  queueMessage,
+  reserveNextMessage,
+} from "../../plugins/synapse/lib/inbox.mjs";
 
-const pluginRoot = resolve(
-  process.env.SYNAPSE_PLUGIN_ROOT ?? "plugins/synapse",
-);
-const hookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
-const execFileAsync = promisify(execFile);
+const pluginRoot = resolve("plugins/synapse");
+const dispatchHookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
+const dispatchWrapperPath = resolve(pluginRoot, "hooks/run-dispatch.sh");
+const childBindHookPath = resolve(pluginRoot, "hooks/bind-child.mjs");
 
-async function primaryGitCheckout() {
-  const path = await mkdtemp(join(tmpdir(), "synapse-project-test-"));
-  await execFileAsync("git", ["init", "--quiet", path]);
-  return realpath(path);
-}
-
-function runHook(path, input, arguments_ = []) {
+function runHook(
+  path,
+  input,
+  { env = {}, hookPath = dispatchHookPath, wrapper = false } = {},
+) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [hookPath, ...arguments_], {
-      env: { ...process.env, SYNAPSE_INBOX_PATH: path },
+    const executable = wrapper ? "/bin/sh" : process.execPath;
+    const arguments_ = [wrapper ? dispatchWrapperPath : hookPath];
+    const child = spawn(executable, arguments_, {
+      env: { ...process.env, SYNAPSE_INBOX_PATH: path, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -38,78 +44,363 @@ function runHook(path, input, arguments_ = []) {
     });
     child.once("error", reject);
     child.once("close", (code) => {
-      if (code === 0) resolvePromise(stdout);
+      if (code === 0) resolvePromise({ stdout, stderr });
       else reject(new Error(`hook exited ${code}: ${stderr}`));
     });
-    child.stdin.end(input);
+    child.stdin.end(JSON.stringify(input));
   });
 }
 
-test("the next local project prompt receives native routing context", async () => {
-  const projectRoot = await primaryGitCheckout();
-  const path = join(
-    await mkdtemp(join(tmpdir(), "synapse-hook-test-")),
+async function gitFixture({ worktree = false } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-hook-git-"));
+  const primaryPath = join(directory, "primary");
+  execFileSync("git", ["init", "-b", "main", primaryPath]);
+  const primary = realpathSync(primaryPath);
+  execFileSync("git", [
+    "-C",
+    primary,
+    "config",
+    "user.email",
+    "test@example.test",
+  ]);
+  execFileSync("git", ["-C", primary, "config", "user.name", "Synapse Test"]);
+  await writeFile(join(primary, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", primary, "add", "README.md"]);
+  execFileSync("git", ["-C", primary, "commit", "-m", "fixture"]);
+  if (!worktree) return { directory, primary, child: null };
+  const childPath = join(directory, "child");
+  execFileSync("git", [
+    "-C",
+    primary,
+    "worktree",
+    "add",
+    "--detach",
+    childPath,
+    "HEAD",
+  ]);
+  return { directory, primary, child: realpathSync(childPath) };
+}
+
+function frame(value) {
+  const payload = Buffer.from(JSON.stringify(value));
+  const framed = Buffer.allocUnsafe(payload.byteLength + 4);
+  framed.writeUInt32LE(payload.byteLength, 0);
+  payload.copy(framed, 4);
+  return framed;
+}
+
+function toolResult(value) {
+  return {
+    success: true,
+    contentItems: [{ type: "inputText", text: JSON.stringify(value) }],
+  };
+}
+
+async function fakeAppTools(directory, projectRoot) {
+  const path = join(directory, "app-tools.sock");
+  const received = [];
+  const sockets = new Set();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    let buffer = Buffer.alloc(0);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("data", (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.byteLength >= 4) {
+        const length = buffer.readUInt32LE(0);
+        if (buffer.byteLength < length + 4) return;
+        const message = JSON.parse(
+          buffer.subarray(4, length + 4).toString("utf8"),
+        );
+        buffer = buffer.subarray(length + 4);
+        received.push(message);
+        let result;
+        if (message.method === "tools/list") {
+          result = {
+            tools: [
+              { name: "list_projects", namespace: "codex_app" },
+              { name: "create_thread", namespace: "codex_app" },
+              { name: "send_message_to_thread", namespace: "codex_app" },
+            ],
+          };
+        } else if (message.params.tool === "list_projects") {
+          result = toolResult({
+            schemaVersion: 2,
+            projects: [
+              {
+                projectId: "project-1",
+                path: projectRoot,
+                isGitRepository: true,
+              },
+            ],
+          });
+        } else if (message.params.tool === "create_thread") {
+          result = toolResult({
+            clientThreadId: "client-new-thread:test",
+            hostId: "local",
+          });
+        } else {
+          result = toolResult({});
+        }
+        socket.write(frame({ id: message.id, jsonrpc: "2.0", result }));
+      }
+    });
+  });
+  await new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(path, resolvePromise);
+  });
+  return {
+    path,
+    received,
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolvePromise) => server.close(resolvePromise));
+    },
+  };
+}
+
+function escapeXmlText(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function delegatedTaskTranscript({ sourceThreadId, nativePrompt }) {
+  return [
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "<environment_context />" }],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["environments.environment_context"],
+        },
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        name: "create_thread",
+        namespace: "codex_app",
+        output: `<codex_delegation>\n  <source_thread_id>${sourceThreadId}</source_thread_id>\n  <input>${escapeXmlText(nativePrompt)}</input>\n</codex_delegation>`,
+      },
+    },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n");
+}
+
+async function inbox() {
+  return join(
+    await mkdtemp(join(tmpdir(), "synapse-hook-inbox-")),
     "inbox.sqlite",
   );
+}
+
+test("the background hook creates a desktop project task and accepts its temporary ID", async (t) => {
+  const path = await inbox();
+  const { directory, primary } = await gitFixture();
+  const appTools = await fakeAppTools(directory, primary);
+  t.after(() => appTools.close());
   queueMessage(
     {
       id: "job-1",
       channelId: "demo",
       task: "create TEST.md",
-      projectRoot,
+      projectRoot: primary,
     },
     { path },
   );
-  const stdout = await runHook(
+
+  const result = await runHook(
     path,
-    JSON.stringify({
-      cwd: projectRoot,
+    {
+      cwd: primary,
       session_id: "owner-1",
+      turn_id: "turn-1",
+      prompt: "owner work",
       hook_event_name: "UserPromptSubmit",
-    }),
+    },
+    {
+      wrapper: true,
+      env: {
+        CODEX_APP_TOOLS_PIPE_PATH: appTools.path,
+        CODEX_MCP_NODE_PATH: process.execPath,
+      },
+    },
   );
-  const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-  assert.match(context, /codex_app__create_thread/);
-  assert.match(context, /codex_app__send_message_to_thread/);
-  assert.match(context, /codex_app__read_thread/);
-  assert.match(context, /create TEST\.md/);
-  assert.match(context, /synapse-delivery:job-1/);
-  assert.match(context, /marker already exists.*do not create or send again/);
-  assert.match(context, /do not execute it in this owner task/);
+
+  assert.deepEqual(result, { stdout: "", stderr: "" });
+  const job = getJob("job-1", { path });
+  assert.equal(job.status, "accepted");
+  assert.equal(job.bindingState, "provisioning");
+  assert.equal(job.clientThreadId, "client-new-thread:test");
+  assert.equal(job.projectId, "project-1");
+  const call = appTools.received.find(
+    (message) => message.params?.tool === "create_thread",
+  );
+  assert.equal(call.params.threadId, "owner-1");
+  assert.equal(call.params.turnId, "turn-1");
+  assert.equal(
+    call.params.arguments.prompt.includes("synapse-delivery:v2"),
+    true,
+  );
+  assert.deepEqual(call.params.arguments.target.environment, {
+    type: "worktree",
+    startingState: { type: "working-tree" },
+  });
 });
 
-test("malformed hook input is ignored without reserving a message", async () => {
-  const path = join(
-    await mkdtemp(join(tmpdir(), "synapse-hook-test-")),
-    "inbox.sqlite",
-  );
+test("a linked worktree prompt never consumes the project inbox", async () => {
+  const path = await inbox();
+  const { primary, child } = await gitFixture({ worktree: true });
   queueMessage(
-    {
-      id: "job-1",
-      channelId: "demo",
-      task: "leave pending",
-      projectRoot: process.cwd(),
-    },
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
     { path },
   );
-
-  assert.equal(await runHook(path, "{not-json"), "");
-  assert.equal(
-    await runHook(
-      path,
-      JSON.stringify({ cwd: process.cwd(), session_id: "not valid" }),
-    ),
-    "",
-  );
+  const result = await runHook(path, {
+    cwd: child,
+    session_id: "child-1",
+    hook_event_name: "UserPromptSubmit",
+  });
+  assert.deepEqual(result, { stdout: "", stderr: "" });
   assert.equal(getJob("job-1", { path }).status, "pending");
 });
 
-test("oversized hook input is ignored without creating an inbox", async () => {
-  const path = join(
-    await mkdtemp(join(tmpdir(), "synapse-hook-test-")),
-    "inbox.sqlite",
+test("the child startup hook binds the permanent task ID independently", async () => {
+  const path = await inbox();
+  const { directory, primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
   );
-  const stdout = await runHook(path, "x".repeat(1024 * 1024 + 1));
-  assert.equal(stdout, "");
-  await assert.rejects(() => access(path), /ENOENT/);
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  acceptProvisioning(
+    {
+      jobId: "job-1",
+      deliveryId: "delivery-1",
+      clientThreadId: "client-new-thread:test",
+      projectId: "project-1",
+      hostId: "local",
+    },
+    { path },
+  );
+  const transcriptPath = join(directory, "child.jsonl");
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-1",
+      nativePrompt: delivery.nativePrompt,
+    }),
+  );
+
+  const result = await runHook(
+    path,
+    {
+      cwd: child,
+      session_id: "thread-permanent-1",
+      transcript_path: transcriptPath,
+      source: "startup",
+      hook_event_name: "SessionStart",
+    },
+    { hookPath: childBindHookPath },
+  );
+  assert.deepEqual(result, { stdout: "", stderr: "" });
+  const job = getJob("job-1", { path });
+  assert.equal(job.status, "completed");
+  assert.equal(job.channelThreadId, "thread-permanent-1");
+});
+
+test("the child binder tolerates the transcript creation race", async () => {
+  const path = await inbox();
+  const { directory, primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  const transcriptPath = join(directory, "delayed.jsonl");
+  const hook = runHook(
+    path,
+    {
+      cwd: child,
+      session_id: "thread-permanent-1",
+      transcript_path: transcriptPath,
+      source: "startup",
+      hook_event_name: "SessionStart",
+    },
+    {
+      hookPath: childBindHookPath,
+      env: { SYNAPSE_CHILD_BIND_TIMEOUT_MS: "1000" },
+    },
+  );
+  await pause(75);
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-1",
+      nativePrompt: delivery.nativePrompt,
+    }),
+  );
+  await hook;
+  assert.equal(getJob("job-1", { path }).channelThreadId, "thread-permanent-1");
+});
+
+test("a copied marker in a direct user message cannot bind a child", async () => {
+  const path = await inbox();
+  const { directory, primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  const transcriptPath = join(directory, "copied.jsonl");
+  await writeFile(
+    transcriptPath,
+    `${JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: delivery.nativePrompt }],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text"],
+        },
+      },
+    })}\n`,
+  );
+  await runHook(
+    path,
+    {
+      cwd: child,
+      session_id: "thread-evil",
+      transcript_path: transcriptPath,
+      source: "startup",
+      hook_event_name: "SessionStart",
+    },
+    { hookPath: childBindHookPath },
+  );
+  assert.equal(getJob("job-1", { path }).status, "routing");
+});
+
+test("malformed hook input is ignored", async () => {
+  const result = await runHook(await inbox(), {
+    cwd: "/tmp",
+    session_id: "bad id",
+    hook_event_name: "UserPromptSubmit",
+  });
+  assert.deepEqual(result, { stdout: "", stderr: "" });
 });

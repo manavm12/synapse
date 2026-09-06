@@ -152,7 +152,12 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
     "/assets/consent.js",
     "/assets/consent.css",
   ]) {
-    assert.equal((await fetch(baseUrl + asset)).status, 200);
+    const assetResponse = await fetch(baseUrl + asset);
+    assert.equal(
+      assetResponse.status,
+      200,
+      `${asset}: ${await assetResponse.text()}`,
+    );
   }
   const unauthorized = await mcp(
     baseUrl,

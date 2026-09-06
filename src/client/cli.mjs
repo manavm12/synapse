@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  getJob,
   queueMessage,
   recoverMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
@@ -19,6 +20,7 @@ function usage() {
   return [
     "Usage:",
     '  npm run synapse -- send <channel-id> --project <name-or-absolute-path> "<task>"',
+    "  npm run synapse -- status <job-id>",
     "  npm run synapse -- recover <job-id> --owner-stopped",
     "  npm run synapse -- project connect [path] --alias <cloud-project-alias>",
     "  npm run synapse -- admin invite --email <email> --username <name> --project <alias>",
@@ -70,6 +72,11 @@ export function parseArguments(input) {
       throw new Error(usage());
     }
     return { command: "recover", jobId };
+  }
+  if (arguments_[0] === "status") {
+    const [, jobId, ...extra] = arguments_;
+    if (!jobId || extra.length > 0) throw new Error(usage());
+    return { command: "status", jobId };
   }
   if (arguments_[0] === "project" && arguments_[1] === "connect") {
     const aliasIndex = arguments_.indexOf("--alias");
@@ -170,6 +177,12 @@ export async function main(arguments_ = process.argv.slice(2)) {
     process.stdout.write(
       `Recovered ${message.jobId}; the next owner prompt may retry it safely.\n`,
     );
+    return;
+  }
+  if (parsed.command === "status") {
+    const message = getJob(parsed.jobId);
+    if (!message) throw new Error(`Unknown job: ${parsed.jobId}`);
+    process.stdout.write(`${JSON.stringify(message, null, 2)}\n`);
     return;
   }
   if (parsed.command === "project-connect") {
