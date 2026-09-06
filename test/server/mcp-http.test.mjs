@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createApplication } from "../../src/server/app.mjs";
-import { UsernameTakenError } from "../../src/server/database.mjs";
+import {
+  AccountDisabledError,
+  UsernameTakenError,
+} from "../../src/server/database.mjs";
 
 const identity = Object.freeze({
   principalType: "user",
@@ -66,6 +69,7 @@ async function fixture(t, { publicSignup = true } = {}) {
     },
     async registerAccount(userId, account) {
       if (account.username === "taken") throw new UsernameTakenError();
+      if (account.username === "disabled") throw new AccountDisabledError();
       const registered = {
         username: account.username,
         projectId: "33333333-3333-4333-8333-333333333333",
@@ -211,6 +215,7 @@ test("an authenticated Supabase user can create an idempotent Synapse account", 
 
   const missing = await fetch(`${baseUrl}/auth/account`, { headers });
   assert.equal(missing.status, 200);
+  assert.equal(missing.headers.get("cache-control"), "no-store");
   assert.deepEqual(await missing.json(), { status: "setup_required" });
 
   const created = await fetch(`${baseUrl}/auth/account`, {
@@ -263,6 +268,17 @@ test("account setup rejects unauthorized, invalid, conflicting, and closed regis
   });
   assert.equal(conflict.status, 409);
   assert.deepEqual(await conflict.json(), { error: "username_taken" });
+
+  const disabled = await fetch(`${baseUrl}/auth/account`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer session",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ username: "disabled", project_alias: "synapse" }),
+  });
+  assert.equal(disabled.status, 403);
+  assert.deepEqual(await disabled.json(), { error: "account_disabled" });
 
   const closedFixture = await fixture(t, { publicSignup: false });
   const closed = await fetch(`${closedFixture.baseUrl}/auth/account`, {

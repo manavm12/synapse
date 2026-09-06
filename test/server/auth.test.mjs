@@ -178,3 +178,39 @@ test("anonymous and malformed Supabase browser sessions are rejected", async () 
     SessionAuthenticationError,
   );
 });
+
+test("invalid Supabase session claims and verification failures are rejected", async () => {
+  const payload = {
+    sub: "11111111-1111-4111-8111-111111111111",
+    role: "authenticated",
+    exp: 2_000_000_000,
+    session_id: "22222222-2222-4222-8222-222222222222",
+    email: "person@example.com",
+    is_anonymous: false,
+  };
+  const cases = [
+    [{ role: "anon" }, "Token role is invalid"],
+    [{ exp: undefined }, "Token expiry is missing"],
+    [{ session_id: "invalid" }, "Token session is invalid"],
+    [{ email: "invalid" }, "Token email is invalid"],
+  ];
+  for (const [overrides, message] of cases) {
+    const verifier = createSessionVerifier(configuration(), {
+      verifyJwt: async () => ({ payload: { ...payload, ...overrides } }),
+    });
+    await assert.rejects(verifier.verifyAccessToken("session.jwt"), {
+      name: "SessionAuthenticationError",
+      message,
+    });
+  }
+
+  const verifier = createSessionVerifier(configuration(), {
+    verifyJwt: async () => {
+      throw new Error("signature verification failed");
+    },
+  });
+  await assert.rejects(verifier.verifyAccessToken("session.jwt"), {
+    name: "SessionAuthenticationError",
+    message: "Supabase session is invalid",
+  });
+});

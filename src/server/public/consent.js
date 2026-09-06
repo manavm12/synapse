@@ -146,14 +146,15 @@ document
   .querySelector("#setup-form")
   .addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = event.currentTarget.querySelector("button");
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
     try {
       button.disabled = true;
       const { data, error } = await client.auth.getSession();
       if (error || !data.session) {
         throw error ?? new Error("Your sign-in session expired.");
       }
-      const values = new FormData(event.currentTarget);
+      const values = new FormData(form);
       await accountRequest(data.session, "POST", {
         username: String(values.get("username") ?? "")
           .trim()

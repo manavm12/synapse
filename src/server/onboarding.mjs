@@ -42,6 +42,7 @@ export function installOnboardingRoutes(
   { database, sessionVerifier, logger },
 ) {
   const authenticate = async (req, res, next) => {
+    res.set("Cache-Control", "no-store");
     const token = bearerToken(req.headers.authorization);
     if (!token) {
       res.status(401).json({ error: "unauthorized" });
