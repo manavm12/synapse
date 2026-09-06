@@ -34,14 +34,16 @@ test("the marketplace and plugin manifests reference repository content", async 
     hooksManifest.hooks.SessionStart.some(
       (entry) => entry.matcher === "^startup$",
     ),
-    false,
+    true,
   );
 
   const hook = hooksManifest.hooks.UserPromptSubmit[0].hooks[0];
   assert.equal(hook.type, "command");
-  assert.equal(hook.command, `node \${PLUGIN_ROOT}/hooks/dispatch.mjs`);
+  assert.equal(hook.command, `/bin/sh \${PLUGIN_ROOT}/hooks/run-dispatch.sh`);
   assert.equal(hook.async, true);
   await access(join(pluginRoot, "hooks/dispatch.mjs"));
+  await access(join(pluginRoot, "hooks/run-dispatch.sh"));
+  await access(join(pluginRoot, "hooks/bind-child.mjs"));
   await access(join(pluginRoot, "lib/native-router.mjs"));
-  await access(join(pluginRoot, "lib/app-server-client.mjs"));
+  await access(join(pluginRoot, "lib/app-tools-client.mjs"));
 });

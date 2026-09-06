@@ -68,6 +68,11 @@ try {
   await runReservedDelivery({
     jobId: delivery.jobId,
     deliveryId: delivery.deliveryId,
+    ownerThreadId: input.session_id,
+    turnId:
+      typeof input.turn_id === "string" && SAFE_SESSION_ID.test(input.turn_id)
+        ? input.turn_id
+        : undefined,
   });
 } catch (error) {
   process.stderr.write(
