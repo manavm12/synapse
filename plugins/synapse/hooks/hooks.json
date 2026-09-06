@@ -3,18 +3,6 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "^startup$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${PLUGIN_ROOT}/hooks/bind-child.mjs",
-            "timeout": 15,
-            "async": true,
-            "statusMessage": "Binding Synapse task identity"
-          }
-        ]
-      },
-      {
         "matcher": "^compact$",
         "hooks": [
           {
@@ -32,8 +20,9 @@
           {
             "type": "command",
             "command": "node ${PLUGIN_ROOT}/hooks/dispatch.mjs",
-            "timeout": 10,
-            "statusMessage": "Checking Synapse inbox"
+            "timeout": 30,
+            "async": true,
+            "statusMessage": "Routing Synapse task"
           }
         ]
       }

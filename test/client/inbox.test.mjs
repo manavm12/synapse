@@ -8,11 +8,14 @@ import test from "node:test";
 import {
   acceptProvisioning,
   acknowledgeMessage,
+  bindChannelThread,
   getJob,
+  getReservedDelivery,
   observeProvisionedThread,
   queueMessage,
   recoverMessage,
   reserveNextMessage,
+  retryRoutingMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
 
 async function inbox() {
@@ -76,6 +79,58 @@ test("a project prompt leases and directly acknowledges one queued message", asy
   assert.equal(job.status, "completed");
   assert.equal(job.bindingState, "ready");
   assert.equal(job.channelThreadId, "thread-1");
+});
+
+test("the background router binds a permanent task before delivery completes", async () => {
+  const path = await inbox();
+  queue(path);
+  reserve(path);
+  const bound = bindChannelThread(
+    {
+      jobId: "job-1",
+      deliveryId: "delivery-1",
+      threadId: "thread-1",
+      projectId: "project-1",
+    },
+    { path, now: () => 3 },
+  );
+  assert.equal(bound.status, "routing");
+  const job = getJob("job-1", { path });
+  assert.equal(job.status, "routing");
+  assert.equal(job.bindingState, "ready");
+  assert.equal(job.channelThreadId, "thread-1");
+  assert.equal(
+    getReservedDelivery({ jobId: "job-1", deliveryId: "delivery-1" }, { path })
+      .channel.threadId,
+    "thread-1",
+  );
+  assert.equal(
+    getReservedDelivery({ jobId: "job-1", deliveryId: "stale" }, { path }),
+    null,
+  );
+});
+
+test("a failed route returns to pending with its marker retained for dedupe", async () => {
+  const path = await inbox();
+  queue(path);
+  reserve(path);
+  const retried = retryRoutingMessage(
+    {
+      jobId: "job-1",
+      deliveryId: "delivery-1",
+      error: "daemon unavailable",
+    },
+    { path, now: () => 3 },
+  );
+  assert.equal(retried.status, "pending");
+  const next = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-2" },
+    { path, now: () => 4, createDeliveryId: () => "delivery-2" },
+  );
+  assert.deepEqual(next.dedupeMarkers, [
+    "synapse-delivery:v2 job=job-1 delivery=delivery-2",
+    "synapse-delivery:v2 job=job-1 delivery=delivery-1",
+  ]);
 });
 
 test("identifiers and task sizes are validated before storage", async () => {

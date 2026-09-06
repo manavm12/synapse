@@ -102,7 +102,6 @@ test("hook configuration uses local commands for scheduling only", async () => {
   ]);
   assert.deepEqual(hooks.SessionStart.map((entry) => entry.matcher).sort(), [
     "^compact$",
-    "^startup$",
   ]);
   const stop = hooks.Stop[0].hooks[0];
   assert.equal(stop.type, "command");

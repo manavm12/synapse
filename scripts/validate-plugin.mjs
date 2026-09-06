@@ -128,16 +128,16 @@ assert(
 );
 await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
 assert(
-  hooks?.SessionStart?.some(
-    (entry) =>
-      entry.matcher === "^startup$" &&
-      entry.hooks?.some(
-        (hook) =>
-          hook.command === `node \${PLUGIN_ROOT}/hooks/bind-child.mjs` &&
-          hook.async === true,
-      ),
+  !hooks?.SessionStart?.some((entry) => entry.matcher === "^startup$"),
+  "SessionStart must not perform task-ID reconciliation",
+);
+assert(
+  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
+    (hook) =>
+      hook.command === `node \${PLUGIN_ROOT}/hooks/dispatch.mjs` &&
+      hook.async === true,
   ),
-  "SessionStart must bind delegated task identities asynchronously",
+  "UserPromptSubmit must route Synapse tasks asynchronously",
 );
 assert(
   hooks?.SessionStart?.some((entry) => entry.matcher === "^compact$"),

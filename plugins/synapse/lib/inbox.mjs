@@ -483,6 +483,67 @@ export function observeProvisionedThread(
   }
 }
 
+export function bindChannelThread(
+  { jobId, deliveryId, threadId, projectId, hostId = "local" },
+  { path = inboxPath(), now = Date.now } = {},
+) {
+  for (const [label, value] of [
+    ["job ID", jobId],
+    ["delivery ID", deliveryId],
+    ["thread ID", threadId],
+    ["project ID", projectId],
+  ])
+    requireId(value, label);
+  requireOptionalId(hostId, "host ID");
+  const database = openInbox(path);
+  try {
+    return transaction(database, () => {
+      const timestamp = now();
+      const job = database
+        .prepare(`${DELIVERY_SELECT} WHERE jobs.id = ?`)
+        .get(jobId);
+      if (!job) throw new Error(`Unknown job: ${jobId}`);
+      if (job.delivery_id !== deliveryId)
+        throw new Error(`Stale delivery for job ${jobId}`);
+      if (!["routing", "completed"].includes(job.status)) {
+        throw new Error(`Job ${jobId} cannot bind a task from ${job.status}`);
+      }
+      if (job.channel_thread_id && job.channel_thread_id !== threadId) {
+        throw new Error(
+          `Conflicting permanent task for channel ${job.channel_id}`,
+        );
+      }
+      if (job.project_id && job.project_id !== projectId) {
+        throw new Error(`Conflicting project for channel ${job.channel_id}`);
+      }
+      if (hostId && job.host_id && job.host_id !== hostId) {
+        throw new Error(`Conflicting host for channel ${job.channel_id}`);
+      }
+      database
+        .prepare(`UPDATE channels SET binding_state = 'ready', thread_id = ?,
+        host_id = COALESCE(host_id, ?), project_id = COALESCE(project_id, ?),
+        provisioning_job_id = NULL, provisioning_delivery_id = NULL,
+        resolved_at = COALESCE(resolved_at, ?), last_reconcile_error = NULL
+        WHERE id = ?`)
+        .run(threadId, hostId, projectId, timestamp, job.channel_id);
+      database
+        .prepare(`UPDATE jobs SET thread_id = ?, observed_thread_id = ?,
+        observed_at = COALESCE(observed_at, ?), updated_at = ?, last_error = NULL
+        WHERE id = ?`)
+        .run(threadId, threadId, timestamp, timestamp, jobId);
+      return {
+        jobId,
+        channelId: job.channel_id,
+        threadId,
+        projectId,
+        status: job.status,
+      };
+    });
+  } finally {
+    database.close();
+  }
+}
+
 export function acknowledgeMessage(
   { jobId, deliveryId, threadId, hostId, projectId },
   { path = inboxPath(), now = Date.now } = {},
@@ -597,6 +658,65 @@ export function recoverMessage(
         .run(job.channel_id);
       return { jobId, channelId: job.channel_id, status: "pending" };
     });
+  } finally {
+    database.close();
+  }
+}
+
+export function retryRoutingMessage(
+  { jobId, deliveryId, error },
+  { path = inboxPath(), now = Date.now } = {},
+) {
+  requireId(jobId, "job ID");
+  requireId(deliveryId, "delivery ID");
+  const message = String(error ?? "Routing failed").slice(0, 4096);
+  const database = openInbox(path);
+  try {
+    return transaction(database, () => {
+      const job = database
+        .prepare(`${DELIVERY_SELECT} WHERE jobs.id = ?`)
+        .get(jobId);
+      if (!job) throw new Error(`Unknown job: ${jobId}`);
+      if (job.delivery_id !== deliveryId)
+        throw new Error(`Stale delivery for job ${jobId}`);
+      if (job.status === "completed") return deliveryFromRow(job);
+      if (job.status !== "routing") {
+        throw new Error(`Job ${jobId} cannot retry from ${job.status}`);
+      }
+      const marker =
+        job.marker_version === 1
+          ? formatLegacyDeliveryMarker(job.id)
+          : formatDeliveryMarker(job.id, job.delivery_id);
+      const timestamp = now();
+      database
+        .prepare(`UPDATE jobs SET status = 'pending', delivery_id = NULL,
+        previous_delivery_marker = ?, lease_expires_at = NULL,
+        owner_session_id = NULL, updated_at = ?, last_error = ? WHERE id = ?`)
+        .run(marker, timestamp, message, jobId);
+      return {
+        jobId,
+        channelId: job.channel_id,
+        status: "pending",
+        lastError: message,
+      };
+    });
+  } finally {
+    database.close();
+  }
+}
+
+export function getReservedDelivery(
+  { jobId, deliveryId },
+  { path = inboxPath() } = {},
+) {
+  requireId(jobId, "job ID");
+  requireId(deliveryId, "delivery ID");
+  const database = openInbox(path);
+  try {
+    const row = database
+      .prepare(`${DELIVERY_SELECT} WHERE jobs.id = ? AND jobs.delivery_id = ?`)
+      .get(jobId, deliveryId);
+    return row?.status === "routing" ? deliveryFromRow(row) : null;
   } finally {
     database.close();
   }
