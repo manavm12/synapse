@@ -122,7 +122,7 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
     assert.match(invalidSave.content[0].text, /missing required headings/);
 
     let checkpoint;
-    for (let turn = 1; turn <= 3; turn += 1) {
+    for (let turn = 1; turn <= 15; turn += 1) {
       checkpoint = await client.callTool({
         name: "memory_checkpoint",
         arguments: {
@@ -133,12 +133,12 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
         },
       });
       const hookOutput = JSON.parse(checkpoint.content[0].text);
-      if (turn < 3) {
+      if (turn < 15) {
         assert.deepEqual(hookOutput, {});
       }
     }
     assert.equal(checkpoint.structuredContent.due, true);
-    assert.equal(checkpoint.structuredContent.reason, "3 completed turns");
+    assert.equal(checkpoint.structuredContent.reason, "15 completed turns");
     assert.equal("decision" in checkpoint.structuredContent, false);
     assert.deepEqual(JSON.parse(checkpoint.content[0].text), {});
 

@@ -63,7 +63,7 @@ test("compact SessionStart injects an immediate memory-save instruction", async 
 test("the prompt hook injects pending memory privately on the next user prompt", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-  for (let turn = 1; turn <= 2; turn += 1) {
+  for (let turn = 1; turn <= 14; turn += 1) {
     checkpointMemory(
       {
         sessionId: "prompt-hook-session",
@@ -87,7 +87,7 @@ test("the prompt hook injects pending memory privately on the next user prompt",
   const due = checkpointMemory(
     {
       sessionId: "prompt-hook-session",
-      turnId: "turn-3",
+      turnId: "turn-15",
       cwd: fixture.projectRoot,
     },
     { env: fixture.env },
@@ -109,7 +109,7 @@ test("the prompt hook injects pending memory privately on the next user prompt",
   assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
   assert.equal(
     output.hookSpecificOutput.additionalContext,
-    "A Synapse memory checkpoint is pending for session prompt-hook-session (3 completed turns). Before answering the user's current request, call the Synapse save_session_memory MCP tool exactly once. Write a concise durable session summary, not a transcript. The markdown must contain these headings: Summary, What changed, Decisions, Still unresolved, Important references. Do not announce the checkpoint unless saving fails. After the tool succeeds, answer the user's current request normally.",
+    "A Synapse memory checkpoint is pending for session prompt-hook-session (15 completed turns). Before answering the user's current request, call the Synapse save_session_memory MCP tool exactly once. Write a concise durable session summary, not a transcript. The markdown must contain these headings: Summary, What changed, Decisions, Still unresolved, Important references. Do not announce the checkpoint unless saving fails. After the tool succeeds, answer the user's current request normally.",
   );
 
   await assert.rejects(
