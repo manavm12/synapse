@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -7,6 +7,7 @@ import {
   checkpointMemory,
   createMemoryPaths,
   findRegisteredProject,
+  getPendingMemoryPrompt,
   markCompactionDue,
   saveSessionMemory,
 } from "../../plugins/synapse/server/memory-store.mjs";
@@ -17,7 +18,7 @@ import {
   VALID_MEMORY_MARKDOWN,
 } from "./_helpers.mjs";
 
-test("capture is due on the third distinct turn and Stop continuation cannot loop", async (t) => {
+test("the third distinct Stop marks capture due without blocking", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
 
@@ -43,8 +44,18 @@ test("capture is due on the third distinct turn and Stop continuation cannot loo
     { env: fixture.env },
   );
   assert.equal(due.due, true);
-  assert.equal(due.decision, "block");
-  assert.match(due.reason, /save_session_memory/);
+  assert.equal(due.reason, "3 completed turns");
+  assert.equal("decision" in due, false);
+  const pending = getPendingMemoryPrompt(
+    { sessionId: "session-1", cwd: fixture.linkedWorktree },
+    { env: fixture.env },
+  );
+  assert.equal(pending.due, true);
+  assert.match(pending.prompt, /Before answering the user's current request/);
+  assert.match(
+    pending.prompt,
+    /Do not announce the checkpoint unless saving fails/,
+  );
 
   const repeatedStop = checkpointMemory(
     {
@@ -117,7 +128,10 @@ test("saving updates one document, clears the checkpoint, and starts a new inter
       sessionId: "session-save",
       title: "Updated title",
       summary: "Updated summary",
-      markdown: VALID_MEMORY_MARKDOWN.replace("A concise summary.", "Updated body."),
+      markdown: VALID_MEMORY_MARKDOWN.replace(
+        "A concise summary.",
+        "Updated body.",
+      ),
     },
     { env: fixture.env },
   );
@@ -127,9 +141,10 @@ test("saving updates one document, clears the checkpoint, and starts a new inter
   assert.match(document, /revision: 2/);
   assert.match(document, /Updated body/);
   assert.doesNotMatch(document, /revision: 1/);
-  assert.deepEqual(await readdir(join(fixture.synapseHome, "memory", "fixture")), [
-    "session-save.md",
-  ]);
+  assert.deepEqual(
+    await readdir(join(fixture.synapseHome, "memory", "fixture")),
+    ["session-save.md"],
+  );
   assert.equal(
     (await stat(join(fixture.synapseHome, "memory.sqlite"))).mode & 0o777,
     0o600,
@@ -138,7 +153,10 @@ test("saving updates one document, clears the checkpoint, and starts a new inter
     (await stat(join(fixture.synapseHome, "memory"))).mode & 0o777,
     0o700,
   );
-  assert.equal((await stat(join(fixture.synapseHome, "memory", "fixture"))).mode & 0o777, 0o700);
+  assert.equal(
+    (await stat(join(fixture.synapseHome, "memory", "fixture"))).mode & 0o777,
+    0o700,
+  );
   assert.equal((await stat(first.path)).mode & 0o777, 0o600);
 });
 
@@ -156,7 +174,10 @@ test("concurrent saves to one session serialize revisions without losing an upda
         sessionId: "same-session",
         title: "Concurrent A",
         summary: "First concurrent save.",
-        markdown: VALID_MEMORY_MARKDOWN.replace("A concise summary.", "Save A."),
+        markdown: VALID_MEMORY_MARKDOWN.replace(
+          "A concise summary.",
+          "Save A.",
+        ),
       },
       { env: fixture.env },
     ),
@@ -165,7 +186,10 @@ test("concurrent saves to one session serialize revisions without losing an upda
         sessionId: "same-session",
         title: "Concurrent B",
         summary: "Second concurrent save.",
-        markdown: VALID_MEMORY_MARKDOWN.replace("A concise summary.", "Save B."),
+        markdown: VALID_MEMORY_MARKDOWN.replace(
+          "A concise summary.",
+          "Save B.",
+        ),
       },
       { env: fixture.env },
     ),
@@ -190,7 +214,10 @@ test("compaction marks a registered session due and linked worktrees resolve to 
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
 
   assert.deepEqual(
-    findRegisteredProject(fixture.linkedWorktree, createMemoryPaths(fixture.env)),
+    findRegisteredProject(
+      fixture.linkedWorktree,
+      createMemoryPaths(fixture.env),
+    ),
     { alias: "fixture", root: await realpath(fixture.projectRoot) },
   );
   const result = markCompactionDue(

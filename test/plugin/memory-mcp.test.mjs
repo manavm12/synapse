@@ -7,7 +7,9 @@ import test from "node:test";
 
 import { createMemoryFixture, VALID_MEMORY_MARKDOWN } from "./_helpers.mjs";
 
-const pluginRoot = resolve(process.env.SYNAPSE_PLUGIN_ROOT ?? "plugins/synapse");
+const pluginRoot = resolve(
+  process.env.SYNAPSE_PLUGIN_ROOT ?? "plugins/synapse",
+);
 
 function createStdioClient({ command, args, cwd, env }) {
   const child = spawn(command, args, {
@@ -19,7 +21,9 @@ function createStdioClient({ command, args, cwd, env }) {
   let nextId = 1;
   let stderr = "";
   child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
   const closed = new Promise((resolvePromise, reject) => {
     child.once("error", reject);
     child.once("close", (code) => {
@@ -44,7 +48,9 @@ function createStdioClient({ command, args, cwd, env }) {
     const id = nextId++;
     return new Promise((resolvePromise, reject) => {
       pending.set(id, { resolve: resolvePromise, reject });
-      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
+      );
     });
   }
 
@@ -55,7 +61,9 @@ function createStdioClient({ command, args, cwd, env }) {
         capabilities: {},
         clientInfo: { name: "synapse-memory-test", version: "1.0.0" },
       });
-      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+      );
     },
     ping: () => request("ping"),
     listTools: () => request("tools/list"),
@@ -70,7 +78,12 @@ function createStdioClient({ command, args, cwd, env }) {
 test("the dependency-free cache-local MCP exposes and executes exactly two memory tools", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-  const cachedPlugin = join(fixture.directory, "plugin-cache", "synapse", "local");
+  const cachedPlugin = join(
+    fixture.directory,
+    "plugin-cache",
+    "synapse",
+    "local",
+  );
   await cp(pluginRoot, cachedPlugin, { recursive: true });
   const mcpConfig = JSON.parse(
     await readFile(join(cachedPlugin, ".mcp.json"), "utf8"),
@@ -86,12 +99,13 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
     await client.connect();
     await client.ping();
     const tools = await client.listTools();
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
+      "memory_checkpoint",
+      "save_session_memory",
+    ]);
     assert.deepEqual(
-      tools.tools.map((tool) => tool.name).sort(),
-      ["memory_checkpoint", "save_session_memory"],
-    );
-    assert.deepEqual(
-      tools.tools.find((tool) => tool.name === "memory_checkpoint").inputSchema.required,
+      tools.tools.find((tool) => tool.name === "memory_checkpoint").inputSchema
+        .required,
       ["session_id", "turn_id", "cwd"],
     );
 
@@ -123,12 +137,10 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
         assert.deepEqual(hookOutput, {});
       }
     }
-    assert.equal(checkpoint.structuredContent.decision, "block");
-    assert.match(checkpoint.structuredContent.reason, /3 completed turns/);
-    assert.deepEqual(JSON.parse(checkpoint.content[0].text), {
-      decision: "block",
-      reason: checkpoint.structuredContent.reason,
-    });
+    assert.equal(checkpoint.structuredContent.due, true);
+    assert.equal(checkpoint.structuredContent.reason, "3 completed turns");
+    assert.equal("decision" in checkpoint.structuredContent, false);
+    assert.deepEqual(JSON.parse(checkpoint.content[0].text), {});
 
     const saved = await client.callTool({
       name: "save_session_memory",
@@ -141,7 +153,10 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
     });
     assert.equal(saved.structuredContent.saved, true);
     assert.equal(saved.structuredContent.revision, 1);
-    assert.match(await readFile(saved.structuredContent.path, "utf8"), /MCP integration/);
+    assert.match(
+      await readFile(saved.structuredContent.path, "utf8"),
+      /MCP integration/,
+    );
   } finally {
     await client.close();
   }
@@ -150,7 +165,11 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
 test("memory_checkpoint fails open when SQLite state is unavailable", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-  const cachedPlugin = join(fixture.directory, "plugin-cache-fail-open", "synapse");
+  const cachedPlugin = join(
+    fixture.directory,
+    "plugin-cache-fail-open",
+    "synapse",
+  );
   await cp(pluginRoot, cachedPlugin, { recursive: true });
   const mcpConfig = JSON.parse(
     await readFile(join(cachedPlugin, ".mcp.json"), "utf8"),

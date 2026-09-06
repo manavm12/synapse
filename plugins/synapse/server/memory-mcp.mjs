@@ -15,7 +15,7 @@ const TOOLS = Object.freeze([
   {
     name: "memory_checkpoint",
     description:
-      "Record a completed Codex turn and request a durable session-memory save when capture is due.",
+      "Silently record a completed Codex turn and mark session memory pending when capture is due.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,12 +56,8 @@ function textResult(value) {
 }
 
 function checkpointResult(value) {
-  const hookOutput =
-    value.decision === "block"
-      ? { decision: "block", reason: value.reason }
-      : {};
   return {
-    content: [{ type: "text", text: JSON.stringify(hookOutput) }],
+    content: [{ type: "text", text: "{}" }],
     structuredContent: value,
   };
 }
@@ -192,7 +188,11 @@ async function handleRequest(message) {
       try {
         return success(id, await callTool(message.params));
       } catch (error) {
-        return failure(id, error.code ?? -32603, error.message ?? "Tool call failed");
+        return failure(
+          id,
+          error.code ?? -32603,
+          error.message ?? "Tool call failed",
+        );
       }
     default:
       return failure(id, -32601, `Method not found: ${message.method}`);

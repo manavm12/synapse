@@ -1,11 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
-  renameSync,
   realpathSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -28,13 +28,13 @@ export function createMemoryPaths(env = process.env) {
   const synapseHome = resolve(env.SYNAPSE_HOME ?? join(homedir(), ".synapse"));
   return {
     synapseHome,
-    hostDatabase: resolve(env.SYNAPSE_HOST_DB ?? join(synapseHome, "host.sqlite")),
+    hostDatabase: resolve(
+      env.SYNAPSE_HOST_DB ?? join(synapseHome, "host.sqlite"),
+    ),
     memoryDatabase: resolve(
       env.SYNAPSE_MEMORY_DB ?? join(synapseHome, "memory.sqlite"),
     ),
-    memoryRoot: resolve(
-      env.SYNAPSE_MEMORY_ROOT ?? join(synapseHome, "memory"),
-    ),
+    memoryRoot: resolve(env.SYNAPSE_MEMORY_ROOT ?? join(synapseHome, "memory")),
   };
 }
 
@@ -84,7 +84,9 @@ function readRegisteredProjects(hostDatabase) {
   try {
     database = new DatabaseSync(hostDatabase, { readOnly: true });
     const table = database
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projects'")
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projects'",
+      )
       .get();
     if (!table) {
       return [];
@@ -185,11 +187,13 @@ function ensureSession(database, { sessionId, project, now }) {
     throw new Error(`Session ${sessionId} is already bound to another project`);
   }
   if (!existing) {
-    database.prepare(`
+    database
+      .prepare(`
       INSERT INTO memory_sessions (
         session_id, project_alias, project_root, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?)
-    `).run(sessionId, project.alias, project.root, now, now);
+    `)
+      .run(sessionId, project.alias, project.root, now, now);
   }
   return existing;
 }
@@ -204,8 +208,19 @@ function checkpointReason(sessionId, reason) {
   ].join(" ");
 }
 
+function pendingPromptReason(sessionId, reason) {
+  return [
+    `A Synapse memory checkpoint is pending for session ${sessionId} (${reason}).`,
+    "Before answering the user's current request, call the Synapse save_session_memory MCP tool exactly once.",
+    "Write a concise durable session summary, not a transcript.",
+    `The markdown must contain these headings: ${REQUIRED_MEMORY_SECTIONS.join(", ")}.`,
+    "Do not announce the checkpoint unless saving fails.",
+    "After the tool succeeds, answer the user's current request normally.",
+  ].join(" ");
+}
+
 export function checkpointMemory(
-  { sessionId, turnId, cwd, stopHookActive = false },
+  { sessionId, turnId, cwd },
   { env = process.env, now = () => Date.now() } = {},
 ) {
   const safeSessionId = requireSessionId(sessionId);
@@ -225,28 +240,34 @@ export function checkpointMemory(
         project,
         now: timestamp,
       });
-      const inserted = database.prepare(`
+      const inserted = database
+        .prepare(`
         INSERT OR IGNORE INTO memory_turns (session_id, turn_id, observed_at)
         VALUES (?, ?, ?)
-      `).run(safeSessionId, safeTurnId, timestamp);
+      `)
+        .run(safeSessionId, safeTurnId, timestamp);
       const session = database
         .prepare("SELECT * FROM memory_sessions WHERE session_id = ?")
         .get(safeSessionId);
       const unsavedTurns = Number(
-        database.prepare(`
+        database
+          .prepare(`
           SELECT COUNT(*) AS count FROM memory_turns
           WHERE session_id = ? AND saved_revision IS NULL
-        `).get(safeSessionId).count,
+        `)
+          .get(safeSessionId).count,
       );
 
       let dueReason = session.due_reason;
       if (!dueReason && unsavedTurns >= CHECKPOINT_INTERVAL) {
         dueReason = `${CHECKPOINT_INTERVAL} completed turns`;
-        database.prepare(`
+        database
+          .prepare(`
           UPDATE memory_sessions
           SET due_reason = ?, due_turn_id = ?, updated_at = ?
           WHERE session_id = ?
-        `).run(dueReason, safeTurnId, timestamp, safeSessionId);
+        `)
+          .run(dueReason, safeTurnId, timestamp, safeSessionId);
       }
 
       const result = {
@@ -257,12 +278,46 @@ export function checkpointMemory(
         remainingTurns: Math.max(0, CHECKPOINT_INTERVAL - unsavedTurns),
         reason: dueReason,
       };
-      if (dueReason && !stopHookActive) {
-        result.decision = "block";
-        result.reason = checkpointReason(safeSessionId, dueReason);
-      }
       return result;
     });
+  } finally {
+    database.close();
+  }
+}
+
+export function getPendingMemoryPrompt(
+  { sessionId, cwd },
+  { env = process.env } = {},
+) {
+  const safeSessionId = requireSessionId(sessionId);
+  const paths = createMemoryPaths(env);
+  const project = findRegisteredProject(cwd, paths);
+  if (!project || !existsSync(paths.memoryDatabase)) {
+    return { registered: Boolean(project), due: false };
+  }
+
+  const database = openMemoryDatabase(paths.memoryDatabase);
+  try {
+    const session = database
+      .prepare("SELECT * FROM memory_sessions WHERE session_id = ?")
+      .get(safeSessionId);
+    if (!session) {
+      return { registered: true, due: false };
+    }
+    if (canonicalPath(session.project_root) !== project.root) {
+      throw new Error(
+        `Session ${safeSessionId} is already bound to another project`,
+      );
+    }
+    if (!session.due_reason) {
+      return { registered: true, due: false };
+    }
+    return {
+      registered: true,
+      due: true,
+      reason: session.due_reason,
+      prompt: pendingPromptReason(safeSessionId, session.due_reason),
+    };
   } finally {
     database.close();
   }
@@ -288,11 +343,13 @@ export function markCompactionDue(
         project,
         now: timestamp,
       });
-      database.prepare(`
+      database
+        .prepare(`
         UPDATE memory_sessions
         SET due_reason = 'compaction boundary', due_turn_id = NULL, updated_at = ?
         WHERE session_id = ?
-      `).run(timestamp, safeSessionId);
+      `)
+        .run(timestamp, safeSessionId);
       return {
         registered: true,
         due: true,
@@ -312,13 +369,17 @@ function validateMarkdown(markdown) {
     return !new RegExp(`^#{1,6}\\s+${escaped}\\s*$`, "im").test(body);
   });
   if (missing.length > 0) {
-    throw new Error(`markdown is missing required headings: ${missing.join(", ")}`);
+    throw new Error(
+      `markdown is missing required headings: ${missing.join(", ")}`,
+    );
   }
   return body;
 }
 
 function safeProjectDirectory(alias) {
-  const safe = String(alias).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 100);
+  const safe = String(alias)
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .slice(0, 100);
   if (!safe || safe === "." || safe === "..") {
     return `project-${createHash("sha256").update(String(alias)).digest("hex").slice(0, 12)}`;
   }
@@ -384,7 +445,9 @@ export async function saveSessionMemory(
         root: canonicalPath(session.project_root),
       };
       if (!projectIsStillRegistered(project, paths)) {
-        throw new Error(`Project ${project.alias} is no longer registered with Synapse`);
+        throw new Error(
+          `Project ${project.alias} is no longer registered with Synapse`,
+        );
       }
 
       const timestamp = new Date(now()).toISOString();
@@ -415,7 +478,8 @@ export async function saveSessionMemory(
       renameSync(temporaryPath, documentPath);
       temporaryPath = null;
 
-      database.prepare(`
+      database
+        .prepare(`
         UPDATE memory_sessions
         SET due_reason = NULL,
             due_turn_id = NULL,
@@ -426,19 +490,22 @@ export async function saveSessionMemory(
             updated_at = ?,
             last_saved_at = ?
         WHERE session_id = ?
-      `).run(
-        revision,
-        safeTitle,
-        safeSummary,
-        documentPath,
-        timestamp,
-        timestamp,
-        safeSessionId,
-      );
-      database.prepare(`
+      `)
+        .run(
+          revision,
+          safeTitle,
+          safeSummary,
+          documentPath,
+          timestamp,
+          timestamp,
+          safeSessionId,
+        );
+      database
+        .prepare(`
         UPDATE memory_turns SET saved_revision = ?
         WHERE session_id = ? AND saved_revision IS NULL
-      `).run(revision, safeSessionId);
+      `)
+        .run(revision, safeSessionId);
 
       return {
         saved: true,

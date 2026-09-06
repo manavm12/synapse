@@ -38,10 +38,16 @@ export async function createMemoryFixture() {
   });
   await writeFile(join(projectRoot, "README.md"), "fixture\n", "utf8");
   await execFileAsync("git", ["add", "README.md"], { cwd: projectRoot });
-  await execFileAsync("git", ["commit", "-qm", "fixture"], { cwd: projectRoot });
-  await execFileAsync("git", ["worktree", "add", "--detach", linkedWorktree, "HEAD"], {
+  await execFileAsync("git", ["commit", "-qm", "fixture"], {
     cwd: projectRoot,
   });
+  await execFileAsync(
+    "git",
+    ["worktree", "add", "--detach", linkedWorktree, "HEAD"],
+    {
+      cwd: projectRoot,
+    },
+  );
 
   const hostDatabase = join(synapseHome, "host.sqlite");
   await mkdir(synapseHome, { recursive: true });
@@ -52,10 +58,9 @@ export async function createMemoryFixture() {
       root TEXT NOT NULL UNIQUE
     );
   `);
-  database.prepare("INSERT INTO projects (alias, root) VALUES (?, ?)").run(
-    "fixture",
-    projectRoot,
-  );
+  database
+    .prepare("INSERT INTO projects (alias, root) VALUES (?, ?)")
+    .run("fixture", projectRoot);
   database.close();
 
   return {
@@ -70,7 +75,9 @@ export async function createMemoryFixture() {
 
 export function registerProject(hostDatabase, alias, root) {
   const database = new DatabaseSync(hostDatabase);
-  database.prepare("INSERT INTO projects (alias, root) VALUES (?, ?)").run(alias, root);
+  database
+    .prepare("INSERT INTO projects (alias, root) VALUES (?, ?)")
+    .run(alias, root);
   database.close();
 }
 
