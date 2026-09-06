@@ -1,16 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   acceptProvisioning,
   acknowledgeMessage,
-  getJob,
-  observeProvisionedThread,
   reserveNextMessage,
 } from "../lib/inbox.mjs";
-import { parseDeliveryMarker } from "../lib/markers.mjs";
 
 const MAX_HOOK_INPUT_BYTES = 1024 * 1024;
 const SAFE_SESSION_ID = /^[a-zA-Z0-9._:-]{1,128}$/;
@@ -37,17 +33,6 @@ function gitPath(cwd, argument) {
 
 function shellCommand(parts) {
   return parts.map((part) => JSON.stringify(part)).join(" ");
-}
-
-function repositoriesMatch(projectRoot, commonDirectory) {
-  try {
-    return (
-      realpathSync(gitPath(projectRoot, "--git-common-dir")) ===
-      realpathSync(commonDirectory)
-    );
-  } catch {
-    return false;
-  }
 }
 
 const command = process.argv[2];
@@ -124,36 +109,9 @@ try {
   process.exit(0);
 }
 
-// A delivered task is the channel's writer, never another inbox owner. Its
-// initial worktree prompt binds the task's permanent Codex session ID to the
-// cryptographically unpredictable delivery identity embedded by Synapse.
-// Set SYNAPSE_TRUST_HOOK_SESSION_ID=0 to disable this compatibility boundary.
+// A delivered worktree task is the channel's writer, never another inbox
+// owner. Its asynchronous SessionStart hook binds the permanent task ID.
 if (gitDirectory !== commonDirectory) {
-  if (process.env.SYNAPSE_TRUST_HOOK_SESSION_ID === "0") process.exit(0);
-  const marker = parseDeliveryMarker(input.prompt);
-  if (!marker || marker.version !== 2) process.exit(0);
-  try {
-    const job = getJob(marker.jobId);
-    if (
-      job &&
-      job.deliveryId === marker.deliveryId &&
-      repositoriesMatch(job.projectRoot, commonDirectory)
-    ) {
-      observeProvisionedThread({
-        jobId: marker.jobId,
-        deliveryId: marker.deliveryId,
-        threadId: input.session_id,
-      });
-    }
-  } catch (error) {
-    process.stderr.write(
-      `${JSON.stringify({
-        event: "synapse_provisioning_observation_failed",
-        jobId: marker.jobId,
-        message: error.message,
-      })}\n`,
-    );
-  }
   process.exit(0);
 }
 

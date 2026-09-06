@@ -5,6 +5,7 @@ import { access, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { setTimeout as pause } from "node:timers/promises";
 
 import {
   acceptProvisioning,
@@ -16,12 +17,18 @@ import {
 const pluginRoot = resolve(
   process.env.SYNAPSE_PLUGIN_ROOT ?? "plugins/synapse",
 );
-const hookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
+const dispatchHookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
+const childBindHookPath = resolve(pluginRoot, "hooks/bind-child.mjs");
 
 function runHook(
   path,
   input,
-  { arguments_ = [], env = {}, rawInput = false } = {},
+  {
+    arguments_ = [],
+    env = {},
+    hookPath = dispatchHookPath,
+    rawInput = false,
+  } = {},
 ) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [hookPath, ...arguments_], {
@@ -45,6 +52,50 @@ function runHook(
     });
     child.stdin.end(rawInput ? input : JSON.stringify(input));
   });
+}
+
+function escapeXmlText(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function delegatedTaskTranscript({ sourceThreadId, nativePrompt }) {
+  return [
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "<environment_context />" }],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["environments.environment_context"],
+        },
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        name: "create_thread",
+        namespace: "codex_app",
+        output: `<codex_delegation>\n  <source_thread_id>${sourceThreadId}</source_thread_id>\n  <input>${escapeXmlText(nativePrompt)}</input>\n</codex_delegation>`,
+      },
+    },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n");
+}
+
+function childStartInput({ child, transcriptPath, sessionId = "thread-1" }) {
+  return {
+    cwd: child,
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+    source: "startup",
+    hook_event_name: "SessionStart",
+  };
 }
 
 async function gitFixture({ worktree = false } = {}) {
@@ -148,9 +199,9 @@ test("the generated provisional acceptance command persists client identity", as
   assert.equal(job.bindingState, "provisioning");
 });
 
-test("a linked child prompt hook can self-observe its permanent session ID", async () => {
+test("a linked child startup hook observes its delegated permanent session ID", async () => {
   const path = await inbox();
-  const { primary, child } = await gitFixture({ worktree: true });
+  const { directory, primary, child } = await gitFixture({ worktree: true });
   queueMessage(
     { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
     { path },
@@ -170,12 +221,19 @@ test("a linked child prompt hook can self-observe its permanent session ID", asy
     { path },
   );
 
-  const result = await runHook(path, {
-    cwd: child,
-    session_id: "thread-1",
-    prompt: delivery.nativePrompt,
-    hook_event_name: "UserPromptSubmit",
-  });
+  const transcriptPath = join(directory, "child-rollout.jsonl");
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-1",
+      nativePrompt: delivery.nativePrompt,
+    }),
+  );
+  const result = await runHook(
+    path,
+    childStartInput({ child, transcriptPath }),
+    { hookPath: childBindHookPath },
+  );
   assert.equal(result.stdout, "");
   assert.equal(result.stderr, "");
   const job = getJob("job-1", { path });
@@ -185,7 +243,7 @@ test("a linked child prompt hook can self-observe its permanent session ID", asy
 
 test("child observation can arrive before the owner records client acceptance", async () => {
   const path = await inbox();
-  const { primary, child } = await gitFixture({ worktree: true });
+  const { directory, primary, child } = await gitFixture({ worktree: true });
   queueMessage(
     { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
     { path },
@@ -194,11 +252,16 @@ test("child observation can arrive before the owner records client acceptance", 
     { projectRoot: primary, ownerSessionId: "owner-1" },
     { path, createDeliveryId: () => "delivery-1" },
   );
-  await runHook(path, {
-    cwd: child,
-    session_id: "thread-1",
-    prompt: delivery.nativePrompt,
-    hook_event_name: "UserPromptSubmit",
+  const transcriptPath = join(directory, "child-rollout.jsonl");
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-1",
+      nativePrompt: delivery.nativePrompt,
+    }),
+  );
+  await runHook(path, childStartInput({ child, transcriptPath }), {
+    hookPath: childBindHookPath,
   });
   assert.equal(getJob("job-1", { path }).status, "completed");
   assert.equal(
@@ -217,7 +280,7 @@ test("child observation can arrive before the owner records client acceptance", 
 
 test("the child identity compatibility guard disables self-observation", async () => {
   const path = await inbox();
-  const { primary, child } = await gitFixture({ worktree: true });
+  const { directory, primary, child } = await gitFixture({ worktree: true });
   queueMessage(
     { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
     { path },
@@ -226,16 +289,18 @@ test("the child identity compatibility guard disables self-observation", async (
     { projectRoot: primary, ownerSessionId: "owner-1" },
     { path, createDeliveryId: () => "delivery-1" },
   );
-  await runHook(
-    path,
-    {
-      cwd: child,
-      session_id: "thread-1",
-      prompt: delivery.nativePrompt,
-      hook_event_name: "UserPromptSubmit",
-    },
-    { env: { SYNAPSE_TRUST_HOOK_SESSION_ID: "0" } },
+  const transcriptPath = join(directory, "child-rollout.jsonl");
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-1",
+      nativePrompt: delivery.nativePrompt,
+    }),
   );
+  await runHook(path, childStartInput({ child, transcriptPath }), {
+    env: { SYNAPSE_TRUST_HOOK_SESSION_ID: "0" },
+    hookPath: childBindHookPath,
+  });
   assert.equal(getJob("job-1", { path }).status, "routing");
 });
 
@@ -256,13 +321,110 @@ test("a marker from a different repository cannot bind a child task", async () =
     { projectRoot: first.primary, ownerSessionId: "owner-1" },
     { path, createDeliveryId: () => "delivery-1" },
   );
-  await runHook(path, {
-    cwd: second.child,
-    session_id: "thread-evil",
-    prompt: delivery.nativePrompt,
-    hook_event_name: "UserPromptSubmit",
+  const transcriptPath = join(second.directory, "child-rollout.jsonl");
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-1",
+      nativePrompt: delivery.nativePrompt,
+    }),
+  );
+  await runHook(
+    path,
+    childStartInput({
+      child: second.child,
+      transcriptPath,
+      sessionId: "thread-evil",
+    }),
+    { hookPath: childBindHookPath },
+  );
+  assert.equal(getJob("job-1", { path }).status, "routing");
+});
+
+test("a delegated marker from a different owner cannot bind the child", async () => {
+  const path = await inbox();
+  const { directory, primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  const transcriptPath = join(directory, "child-rollout.jsonl");
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-other",
+      nativePrompt: delivery.nativePrompt,
+    }),
+  );
+  await runHook(path, childStartInput({ child, transcriptPath }), {
+    hookPath: childBindHookPath,
   });
   assert.equal(getJob("job-1", { path }).status, "routing");
+});
+
+test("a marker copied into a direct user prompt cannot bind the child", async () => {
+  const path = await inbox();
+  const { directory, primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  const transcriptPath = join(directory, "child-rollout.jsonl");
+  await writeFile(
+    transcriptPath,
+    `${JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: delivery.nativePrompt }],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text"],
+        },
+      },
+    })}\n`,
+  );
+  await runHook(path, childStartInput({ child, transcriptPath }), {
+    hookPath: childBindHookPath,
+  });
+  assert.equal(getJob("job-1", { path }).status, "routing");
+});
+
+test("the child startup hook tolerates the transcript creation race", async () => {
+  const path = await inbox();
+  const { directory, primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  const transcriptPath = join(directory, "delayed-child-rollout.jsonl");
+  const hook = runHook(path, childStartInput({ child, transcriptPath }), {
+    env: { SYNAPSE_CHILD_BIND_TIMEOUT_MS: "1000" },
+    hookPath: childBindHookPath,
+  });
+  await pause(75);
+  await writeFile(
+    transcriptPath,
+    delegatedTaskTranscript({
+      sourceThreadId: "owner-1",
+      nativePrompt: delivery.nativePrompt,
+    }),
+  );
+  await hook;
+  assert.equal(getJob("job-1", { path }).status, "completed");
+  assert.equal(getJob("job-1", { path }).channelThreadId, "thread-1");
 });
 
 test("an accepted task never injects reconciliation into a later owner prompt", async () => {

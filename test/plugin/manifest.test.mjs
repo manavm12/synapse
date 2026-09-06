@@ -32,6 +32,17 @@ test("the marketplace and plugin manifests reference repository content", async 
   assert.equal(pluginManifest.skills, "./skills/");
   await access(join(pluginRoot, "skills/route-inbox/SKILL.md"));
 
+  const childBinding = hooksManifest.hooks.SessionStart.find(
+    (entry) => entry.matcher === "^startup$",
+  )?.hooks[0];
+  assert.equal(childBinding?.type, "command");
+  assert.equal(
+    childBinding.command,
+    `node \${PLUGIN_ROOT}/hooks/bind-child.mjs`,
+  );
+  assert.equal(childBinding.async, true);
+  await access(join(pluginRoot, "hooks/bind-child.mjs"));
+
   const hook = hooksManifest.hooks.UserPromptSubmit[0].hooks[0];
   assert.equal(hook.type, "command");
   assert.equal(hook.command, `node \${PLUGIN_ROOT}/hooks/dispatch.mjs`);

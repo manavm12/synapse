@@ -614,6 +614,7 @@ export function getJob(jobId, { path = inboxPath() } = {}) {
           jobId: row.id,
           deliveryId: row.delivery_id,
           markerVersion: row.marker_version,
+          ownerSessionId: row.owner_session_id,
           channelId: row.channel_id,
           projectRoot: row.project_root,
           status: row.status,
