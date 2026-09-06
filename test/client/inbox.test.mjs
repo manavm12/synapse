@@ -13,7 +13,6 @@ import {
   queueMessage,
   recoverMessage,
   reserveNextMessage,
-  reserveReconciliation,
 } from "../../plugins/synapse/lib/inbox.mjs";
 
 async function inbox() {
@@ -306,40 +305,6 @@ test("stale acknowledgements cannot complete a reserved message", async () => {
     /Stale delivery/,
   );
   assert.equal(getJob("job-1", { path }).status, "routing");
-});
-
-test("accepted work receives a separately leased bounded repair attempt", async () => {
-  const path = await inbox();
-  queue(path);
-  reserve(path);
-  acceptProvisioning(
-    {
-      jobId: "job-1",
-      deliveryId: "delivery-1",
-      clientThreadId: "client-1",
-      projectId: "project-1",
-    },
-    { path, now: () => 10 },
-  );
-  const repair = reserveReconciliation(
-    { projectRoot: "/project", ownerSessionId: "owner-2" },
-    { path, now: () => 10, baseBackoffMs: 20, leaseMs: 5 },
-  );
-  assert.equal(repair.reconciling, true);
-  assert.equal(
-    reserveReconciliation(
-      { projectRoot: "/project", ownerSessionId: "owner-3" },
-      { path, now: () => 11, baseBackoffMs: 20, leaseMs: 5 },
-    ),
-    null,
-  );
-  assert.equal(
-    reserveReconciliation(
-      { projectRoot: "/project", ownerSessionId: "owner-3" },
-      { path, now: () => 30, baseBackoffMs: 20, leaseMs: 5 },
-    ).reconciling,
-    true,
-  );
 });
 
 test("an expired routing delivery retries only on the original owner with one identity", async () => {

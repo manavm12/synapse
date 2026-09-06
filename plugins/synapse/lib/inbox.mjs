@@ -183,7 +183,7 @@ function channelFromRow(row) {
   };
 }
 
-function deliveryFromRow(row, { retrying = false, reconciling = false } = {}) {
+function deliveryFromRow(row, { retrying = false } = {}) {
   const deliveryMarker =
     row.marker_version === 1
       ? formatLegacyDeliveryMarker(row.id)
@@ -199,7 +199,6 @@ function deliveryFromRow(row, { retrying = false, reconciling = false } = {}) {
     ],
     markerVersion: row.marker_version,
     retrying,
-    reconciling,
     ownerSessionId: row.owner_session_id,
     channelId: row.channel_id,
     task: row.task,
@@ -213,8 +212,7 @@ const DELIVERY_SELECT = `
   SELECT jobs.*,
     channels.thread_id AS channel_thread_id,
     channels.client_thread_id AS channel_client_thread_id,
-    channels.host_id, channels.project_id, channels.binding_state,
-    channels.reconcile_attempts
+    channels.host_id, channels.project_id, channels.binding_state
   FROM jobs JOIN channels ON channels.id = jobs.channel_id
 `;
 
@@ -359,54 +357,6 @@ export function reserveNextMessage(
   }
 }
 
-export function reserveReconciliation(
-  { projectRoot, ownerSessionId },
-  {
-    path = inboxPath(),
-    now = Date.now,
-    leaseMs = 60_000,
-    baseBackoffMs = 30_000,
-    maxBackoffMs = 30 * 60_000,
-  } = {},
-) {
-  requireProjectRoot(projectRoot);
-  requireId(ownerSessionId, "owner session ID");
-  const database = openInbox(path);
-  try {
-    return transaction(database, () => {
-      const currentTime = now();
-      const job = database
-        .prepare(`${DELIVERY_SELECT}
-        WHERE jobs.project_root = ? AND jobs.status = 'accepted'
-          AND (channels.next_reconcile_at IS NULL OR channels.next_reconcile_at <= ?)
-          AND (channels.reconcile_lease_expires_at IS NULL
-            OR channels.reconcile_lease_expires_at <= ? OR channels.reconcile_lease_owner = ?)
-        ORDER BY jobs.accepted_at, jobs.created_at LIMIT 1
-      `)
-        .get(projectRoot, currentTime, currentTime, ownerSessionId);
-      if (!job) return null;
-      const attempt = Number(job.reconcile_attempts ?? 0) + 1;
-      const backoff = Math.min(
-        maxBackoffMs,
-        baseBackoffMs * 2 ** (attempt - 1),
-      );
-      database
-        .prepare(`UPDATE channels SET reconcile_attempts = ?, reconcile_lease_owner = ?,
-        reconcile_lease_expires_at = ?, next_reconcile_at = ? WHERE id = ?`)
-        .run(
-          attempt,
-          ownerSessionId,
-          currentTime + leaseMs,
-          currentTime + backoff,
-          job.channel_id,
-        );
-      return deliveryFromRow(job, { reconciling: true });
-    });
-  } finally {
-    database.close();
-  }
-}
-
 export function acceptProvisioning(
   { jobId, deliveryId, clientThreadId, projectId, hostId = null },
   { path = inboxPath(), now = Date.now } = {},
@@ -462,14 +412,15 @@ export function acceptProvisioning(
         client_thread_id = ?, project_id = COALESCE(project_id, ?), host_id = COALESCE(host_id, ?),
         provisioning_job_id = ?, provisioning_delivery_id = ?,
         provisioning_started_at = COALESCE(provisioning_started_at, ?),
-        next_reconcile_at = COALESCE(next_reconcile_at, ?) WHERE id = ?`)
+        reconcile_attempts = 0, next_reconcile_at = NULL,
+        reconcile_lease_owner = NULL, reconcile_lease_expires_at = NULL,
+        last_reconcile_error = NULL WHERE id = ?`)
         .run(
           clientThreadId,
           projectId,
           hostId,
           jobId,
           deliveryId,
-          timestamp,
           timestamp,
           job.channel_id,
         );

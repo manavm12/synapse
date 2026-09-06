@@ -107,6 +107,7 @@ test("a primary project prompt gets immediate nonblocking provisional acceptance
   assert.match(context, /codex_app__create_thread/);
   assert.match(context, /dispatch\.mjs.*accept.*<clientThreadId>.*<projectId>/);
   assert.match(context, /durably records Codex acceptance/);
+  assert.match(context, /child task's startup hook will bind/i);
   assert.match(context, /Continue the owner's original prompt immediately/);
   assert.match(context, /do not execute it in this owner task/);
   assert.match(context, /synapse-delivery:v2 job=job-1 delivery=/);
@@ -264,7 +265,7 @@ test("a marker from a different repository cannot bind a child task", async () =
   assert.equal(getJob("job-1", { path }).status, "routing");
 });
 
-test("an accepted task gets one bounded marker repair instruction", async () => {
+test("an accepted task never injects reconciliation into a later owner prompt", async () => {
   const path = await inbox();
   const { primary } = await gitFixture();
   queueMessage(
@@ -290,21 +291,8 @@ test("an accepted task gets one bounded marker repair instruction", async () => 
     prompt: "later owner work",
     hook_event_name: "UserPromptSubmit",
   });
-  const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-  assert.match(context, /one bounded repair check/);
-  assert.match(context, /list_threads once with limit 50/);
-  assert.match(context, /Do not wait, sleep, poll repeatedly/);
-  assert.match(context, /candidate's initial turn/);
-  assert.match(context, /functionCallOutput/);
-  assert.match(context, /namespace is `codex_app`/);
-  assert.match(context, /name is `create_thread`/);
-  assert.match(context, /<codex_delegation>/);
-  assert.match(context, /<source_thread_id>.*owner-1/);
-  assert.match(context, /HTML-escaped comment delimiters/);
-  assert.match(context, /synapse-delivery:v2 job=job-1 delivery=delivery-1/);
-  assert.match(context, /Never accept a marker copied into an agent message/);
-  assert.match(context, /continue the owner's original prompt/i);
-  assert.doesNotMatch(context, /create another task except/);
+  assert.equal(stdout, "");
+  assert.equal(getJob("job-1", { path }).status, "accepted");
 });
 
 test("an expired retry recognizes only immutable creation evidence", async () => {
