@@ -65,7 +65,10 @@ export async function createMemoryFixture() {
 
   return {
     directory,
-    env: { SYNAPSE_HOME: synapseHome },
+    env: {
+      SYNAPSE_HOME: synapseHome,
+      SYNAPSE_CHECKPOINT_INTERVAL: "3",
+    },
     hostDatabase,
     linkedWorktree,
     projectRoot,
@@ -81,10 +84,10 @@ export function registerProject(hostDatabase, alias, root) {
   database.close();
 }
 
-export function readMemorySession(memoryDatabase, sessionId) {
-  const database = new DatabaseSync(memoryDatabase, { readOnly: true });
+export function readCheckpointSession(checkpointDatabase, sessionId) {
+  const database = new DatabaseSync(checkpointDatabase, { readOnly: true });
   const session = database
-    .prepare("SELECT * FROM memory_sessions WHERE session_id = ?")
+    .prepare("SELECT * FROM checkpoint_sessions WHERE session_id = ?")
     .get(sessionId);
   database.close();
   return session;

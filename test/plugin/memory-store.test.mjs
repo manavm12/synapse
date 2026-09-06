@@ -1,52 +1,30 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdir, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { access, mkdir, realpath, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 
 import {
+  CHECKPOINT_INTERVAL,
   checkpointMemory,
+  createCompactionCheckpoint,
   createMemoryPaths,
   findRegisteredProject,
-  getPendingMemoryPrompt,
-  markCompactionDue,
-  saveSessionMemory,
 } from "../../plugins/synapse/server/memory-store.mjs";
 import {
   createMemoryFixture,
-  readMemorySession,
+  readCheckpointSession,
   registerProject,
-  VALID_MEMORY_MARKDOWN,
 } from "./_helpers.mjs";
 
-const execFileAsync = promisify(execFile);
-const memoryStoreUrl = pathToFileURL(
-  resolve("plugins/synapse/server/memory-store.mjs"),
-).href;
+test("production checkpoints default to fifteen turns", () => {
+  assert.equal(CHECKPOINT_INTERVAL, 15);
+});
 
-async function saveMemoryInChildProcess(input, env) {
-  const worker = [
-    `import { saveSessionMemory } from ${JSON.stringify(memoryStoreUrl)};`,
-    "const result = await saveSessionMemory(JSON.parse(process.env.SAVE_INPUT));",
-    "process.stdout.write(JSON.stringify(result));",
-  ].join("\n");
-  const { stdout } = await execFileAsync(
-    process.execPath,
-    ["--input-type=module", "--eval", worker],
-    {
-      env: { ...process.env, ...env, SAVE_INPUT: JSON.stringify(input) },
-    },
-  );
-  return JSON.parse(stdout);
-}
-
-test("the fifteenth distinct Stop marks capture due without blocking", async (t) => {
+test("capture is due on the configured distinct turn and continuation clears it", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
 
-  for (let turn = 1; turn < 15; turn += 1) {
+  for (let turn = 1; turn < 3; turn += 1) {
     const result = checkpointMemory(
       {
         sessionId: "session-1",
@@ -56,183 +34,87 @@ test("the fifteenth distinct Stop marks capture due without blocking", async (t)
       { env: fixture.env },
     );
     assert.equal(result.due, false);
-    assert.equal(result.remainingTurns, 15 - turn);
+    assert.equal(result.remainingTurns, 3 - turn);
   }
 
   const due = checkpointMemory(
+    { sessionId: "session-1", turnId: "turn-3", cwd: fixture.projectRoot },
     {
-      sessionId: "session-1",
-      turnId: "turn-15",
-      cwd: fixture.projectRoot,
+      env: fixture.env,
+      createCaptureId: () => "11111111-1111-4111-8111-111111111111",
     },
-    { env: fixture.env },
   );
   assert.equal(due.due, true);
-  assert.equal(due.reason, "15 completed turns");
-  assert.equal("decision" in due, false);
-  const pending = getPendingMemoryPrompt(
-    { sessionId: "session-1", cwd: fixture.linkedWorktree },
-    { env: fixture.env },
-  );
-  assert.equal(pending.due, true);
-  assert.match(pending.prompt, /Before answering the user's current request/);
-  assert.match(
-    pending.prompt,
-    /Do not announce the checkpoint unless saving fails/,
-  );
+  assert.equal(due.captureId, "11111111-1111-4111-8111-111111111111");
+  assert.equal(due.decision, "block");
+  assert.match(due.reason, /project_alias=fixture/);
+  assert.match(due.reason, /capture_reason=turn_checkpoint/);
+  assert.doesNotMatch(due.reason, new RegExp(fixture.projectRoot));
 
-  const repeatedStop = checkpointMemory(
+  const continuation = checkpointMemory(
     {
       sessionId: "session-1",
-      turnId: "turn-15",
+      turnId: "continuation",
       cwd: fixture.projectRoot,
       stopHookActive: true,
     },
     { env: fixture.env },
   );
-  assert.equal(repeatedStop.duplicate, true);
-  assert.equal(repeatedStop.due, true);
-  assert.equal("decision" in repeatedStop, false);
-  assert.equal(repeatedStop.unsavedTurns, 15);
+  assert.deepEqual(continuation, {
+    registered: true,
+    due: false,
+    continuation: true,
+    completedCaptureId: "11111111-1111-4111-8111-111111111111",
+  });
+  const session = readCheckpointSession(
+    join(fixture.synapseHome, "checkpoints.sqlite"),
+    "session-1",
+  );
+  assert.equal(session.due_capture_id, null);
 });
 
-test("saving updates one document, clears the checkpoint, and starts a new interval", async (t) => {
+test("cleared continuations do not count toward the next interval", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-
-  for (let turn = 1; turn <= 15; turn += 1) {
+  for (let turn = 1; turn <= 3; turn += 1) {
     checkpointMemory(
       {
-        sessionId: "session-save",
-        turnId: `turn-${turn}`,
-        cwd: fixture.linkedWorktree,
-      },
-      { env: fixture.env },
-    );
-  }
-
-  const first = await saveSessionMemory(
-    {
-      sessionId: "session-save",
-      title: "First title",
-      summary: "First summary",
-      markdown: VALID_MEMORY_MARKDOWN,
-    },
-    { env: fixture.env },
-  );
-  assert.equal(first.revision, 1);
-  assert.equal(first.projectAlias, "fixture");
-  assert.match(await readFile(first.path, "utf8"), /revision: 1/);
-
-  const duplicateSavedTurn = checkpointMemory(
-    {
-      sessionId: "session-save",
-      turnId: "turn-15",
-      cwd: fixture.linkedWorktree,
-    },
-    { env: fixture.env },
-  );
-  assert.equal(duplicateSavedTurn.unsavedTurns, 0);
-  assert.equal(duplicateSavedTurn.due, false);
-
-  for (let turn = 16; turn <= 30; turn += 1) {
-    const result = checkpointMemory(
-      {
-        sessionId: "session-save",
+        sessionId: "session-next",
         turnId: `turn-${turn}`,
         cwd: fixture.projectRoot,
       },
       { env: fixture.env },
     );
-    assert.equal(result.due, turn === 30);
   }
-
-  const second = await saveSessionMemory(
+  checkpointMemory(
     {
-      sessionId: "session-save",
-      title: "Updated title",
-      summary: "Updated summary",
-      markdown: VALID_MEMORY_MARKDOWN.replace(
-        "A concise summary.",
-        "Updated body.",
-      ),
+      sessionId: "session-next",
+      turnId: "continuation",
+      cwd: fixture.projectRoot,
+      stopHookActive: true,
     },
     { env: fixture.env },
   );
-  assert.equal(second.path, first.path);
-  assert.equal(second.revision, 2);
-  const document = await readFile(second.path, "utf8");
-  assert.match(document, /revision: 2/);
-  assert.match(document, /Updated body/);
-  assert.doesNotMatch(document, /revision: 1/);
-  assert.deepEqual(
-    await readdir(join(fixture.synapseHome, "memory", "fixture")),
-    ["session-save.md"],
-  );
+  for (let turn = 4; turn <= 6; turn += 1) {
+    const result = checkpointMemory(
+      {
+        sessionId: "session-next",
+        turnId: `turn-${turn}`,
+        cwd: fixture.projectRoot,
+      },
+      { env: fixture.env },
+    );
+    assert.equal(result.due, turn === 6);
+  }
   assert.equal(
-    (await stat(join(fixture.synapseHome, "memory.sqlite"))).mode & 0o777,
+    (await stat(join(fixture.synapseHome, "checkpoints.sqlite"))).mode & 0o777,
     0o600,
   );
-  assert.equal(
-    (await stat(join(fixture.synapseHome, "memory"))).mode & 0o777,
-    0o700,
-  );
-  assert.equal(
-    (await stat(join(fixture.synapseHome, "memory", "fixture"))).mode & 0o777,
-    0o700,
-  );
-  assert.equal((await stat(first.path)).mode & 0o777, 0o600);
 });
 
-test("concurrent saves to one session serialize revisions without losing an update", async (t) => {
+test("compaction emits a cloud save without persisting a local due record", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-
-  checkpointMemory(
-    { sessionId: "same-session", turnId: "turn-1", cwd: fixture.projectRoot },
-    { env: fixture.env },
-  );
-  const saves = await Promise.all(
-    [
-      {
-        sessionId: "same-session",
-        title: "Concurrent A",
-        summary: "First concurrent save.",
-        markdown: VALID_MEMORY_MARKDOWN.replace(
-          "A concise summary.",
-          "Save A.",
-        ),
-      },
-      {
-        sessionId: "same-session",
-        title: "Concurrent B",
-        summary: "Second concurrent save.",
-        markdown: VALID_MEMORY_MARKDOWN.replace(
-          "A concise summary.",
-          "Save B.",
-        ),
-      },
-    ].map((input) => saveMemoryInChildProcess(input, fixture.env)),
-  );
-
-  assert.deepEqual(
-    saves.map((save) => save.revision).sort((left, right) => left - right),
-    [1, 2],
-  );
-  const document = await readFile(saves[0].path, "utf8");
-  assert.match(document, /revision: 2/);
-  assert.equal(/Save A\./.test(document) || /Save B\./.test(document), true);
-  const session = readMemorySession(
-    join(fixture.synapseHome, "memory.sqlite"),
-    "same-session",
-  );
-  assert.equal(session.revision, 2);
-});
-
-test("compaction marks a registered session due and linked worktrees resolve to the owner project", async (t) => {
-  const fixture = await createMemoryFixture();
-  t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-
   assert.deepEqual(
     findRegisteredProject(
       fixture.linkedWorktree,
@@ -240,33 +122,26 @@ test("compaction marks a registered session due and linked worktrees resolve to 
     ),
     { alias: "fixture", root: await realpath(fixture.projectRoot) },
   );
-  const result = markCompactionDue(
+  const result = createCompactionCheckpoint(
     { sessionId: "compact-session", cwd: fixture.linkedWorktree },
-    { env: fixture.env },
+    {
+      env: fixture.env,
+      createCaptureId: () => "22222222-2222-4222-8222-222222222222",
+    },
   );
-  assert.equal(result.due, true);
-  assert.match(result.prompt, /compaction boundary/);
-  assert.match(result.prompt, /compact-session/);
-  const session = readMemorySession(
-    join(fixture.synapseHome, "memory.sqlite"),
-    "compact-session",
+  assert.equal(result.captureId, "22222222-2222-4222-8222-222222222222");
+  assert.match(result.prompt, /capture_reason=compaction/);
+  await assert.rejects(
+    access(join(fixture.synapseHome, "checkpoints.sqlite")),
+    /ENOENT/,
   );
-  assert.equal(session.due_reason, "compaction boundary");
 });
 
-test("unregistered projects fail open without creating memory state", async (t) => {
+test("unregistered projects fail open without creating checkpoint state", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
   const other = join(fixture.directory, "unregistered");
   await mkdir(other);
-  await new Promise((resolvePromise, reject) => {
-    import("node:child_process").then(({ execFile }) => {
-      execFile("git", ["init", "-q"], { cwd: other }, (error) =>
-        error ? reject(error) : resolvePromise(),
-      );
-    });
-  });
-
   const result = checkpointMemory(
     { sessionId: "ignored", turnId: "turn-1", cwd: other },
     { env: fixture.env },
@@ -274,7 +149,7 @@ test("unregistered projects fail open without creating memory state", async (t) 
   assert.deepEqual(result, { registered: false, due: false });
 });
 
-test("sessions cannot cross projects and invalid memory input is rejected", async (t) => {
+test("one session cannot cross registered projects", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
   const other = join(fixture.directory, "other-project");
@@ -286,7 +161,6 @@ test("sessions cannot cross projects and invalid memory input is rejected", asyn
     ),
   );
   registerProject(fixture.hostDatabase, "other", other);
-
   checkpointMemory(
     { sessionId: "bound-session", turnId: "turn-1", cwd: fixture.projectRoot },
     { env: fixture.env },
@@ -299,53 +173,4 @@ test("sessions cannot cross projects and invalid memory input is rejected", asyn
       ),
     /already bound to another project/,
   );
-  assert.throws(
-    () =>
-      checkpointMemory(
-        { sessionId: "../escape", turnId: "turn-1", cwd: fixture.projectRoot },
-        { env: fixture.env },
-      ),
-    /unsupported characters/,
-  );
-  await assert.rejects(
-    saveSessionMemory(
-      {
-        sessionId: "bound-session",
-        title: "Bad memory",
-        summary: "Missing sections",
-        markdown: "## Summary\nOnly one section.",
-      },
-      { env: fixture.env },
-    ),
-    /missing required headings/,
-  );
-  await assert.rejects(
-    saveSessionMemory(
-      {
-        sessionId: "unknown-session",
-        title: "Unknown",
-        summary: "Unknown",
-        markdown: VALID_MEMORY_MARKDOWN,
-      },
-      { env: fixture.env },
-    ),
-    /Unknown memory session/,
-  );
-});
-
-test("concurrent sessions retain independent checkpoints", async (t) => {
-  const fixture = await createMemoryFixture();
-  t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-  for (let turn = 1; turn <= 15; turn += 1) {
-    const first = checkpointMemory(
-      { sessionId: "session-a", turnId: `a-${turn}`, cwd: fixture.projectRoot },
-      { env: fixture.env },
-    );
-    const second = checkpointMemory(
-      { sessionId: "session-b", turnId: `b-${turn}`, cwd: fixture.projectRoot },
-      { env: fixture.env },
-    );
-    assert.equal(first.due, turn === 15);
-    assert.equal(second.due, turn === 15);
-  }
 });

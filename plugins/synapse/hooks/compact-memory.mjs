@@ -1,4 +1,4 @@
-import { markCompactionDue } from "../server/memory-store.mjs";
+import { createCompactionCheckpoint } from "../server/memory-store.mjs";
 
 async function readStdin() {
   let input = "";
@@ -13,7 +13,7 @@ try {
   if (input.source !== "compact" || !input.session_id || !input.cwd) {
     process.exit(0);
   }
-  const result = markCompactionDue({
+  const result = createCompactionCheckpoint({
     sessionId: input.session_id,
     cwd: input.cwd,
   });

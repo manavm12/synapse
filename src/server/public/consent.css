@@ -1,0 +1,91 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: #f5f7fa;
+  color: #172033;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  display: grid;
+  place-items: center;
+}
+
+main {
+  width: min(32rem, calc(100vw - 3rem));
+  padding: 2.5rem;
+  background: white;
+  border: 1px solid #dde3ea;
+  border-radius: 1rem;
+  box-shadow: 0 1.25rem 3rem rgb(23 32 51 / 10%);
+}
+
+.eyebrow {
+  color: #5e6ad2;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+h1 {
+  margin: 0.5rem 0;
+  font-size: 1.75rem;
+}
+
+label,
+dt {
+  display: block;
+  margin-top: 1rem;
+  color: #596274;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+dd {
+  margin: 0.25rem 0 0;
+}
+
+input,
+button {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.8rem 1rem;
+  border-radius: 0.55rem;
+  font: inherit;
+}
+
+input {
+  border: 1px solid #c8d0db;
+}
+
+button {
+  border: 1px solid #5e6ad2;
+  background: #5e6ad2;
+  color: white;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.secondary {
+  background: white;
+  color: #4a5364;
+  border-color: #c8d0db;
+}
+
+.error {
+  color: #b42318;
+}
