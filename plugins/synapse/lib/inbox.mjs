@@ -1,30 +1,57 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const SAFE_ID = /^[a-zA-Z0-9._:-]{1,128}$/;
+const MAX_TASK_BYTES = 64 * 1024;
+const PRIVATE_DIRECTORY_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 
 export function inboxPath(env = process.env) {
-  return resolve(env.SYNAPSE_INBOX_PATH ?? join(homedir(), ".synapse", "inbox.sqlite"));
+  return resolve(
+    env.SYNAPSE_INBOX_PATH ?? join(homedir(), ".synapse", "inbox.sqlite"),
+  );
 }
 
 function requireId(value, label) {
-  if (!SAFE_ID.test(value)) {
+  if (typeof value !== "string" || !SAFE_ID.test(value)) {
     throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
   }
 }
 
 function requireProjectRoot(value) {
-  if (!isAbsolute(value)) {
+  if (typeof value !== "string" || !isAbsolute(value)) {
     throw new Error("Project root must be an absolute path");
   }
 }
 
+function secureFile(path) {
+  try {
+    chmodSync(path, PRIVATE_FILE_MODE);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function secureDatabaseFiles(path) {
+  for (const databasePath of [path, `${path}-wal`, `${path}-shm`]) {
+    secureFile(databasePath);
+  }
+}
+
 function openInbox(path) {
-  mkdirSync(dirname(path), { recursive: true });
+  const directory = dirname(path);
+  const directoryExisted = existsSync(directory);
+  mkdirSync(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  if (!directoryExisted || basename(directory) === ".synapse") {
+    chmodSync(directory, PRIVATE_DIRECTORY_MODE);
+  }
   const database = new DatabaseSync(path);
+  secureFile(path);
   database.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA busy_timeout = 5000;
@@ -60,6 +87,7 @@ function openInbox(path) {
     SET status = 'uncertain'
     WHERE status = 'routing' AND owner_session_id IS NULL
   `);
+  secureDatabaseFiles(path);
   return database;
 }
 
@@ -108,27 +136,34 @@ export function queueMessage(
   if (typeof task !== "string" || task.trim() === "") {
     throw new Error("Task must not be empty");
   }
+  if (Buffer.byteLength(task, "utf8") > MAX_TASK_BYTES) {
+    throw new Error(`Task must not exceed ${MAX_TASK_BYTES} UTF-8 bytes`);
+  }
 
   const database = openInbox(path);
   try {
     return transaction(database, () => {
-      database.prepare(`
+      database
+        .prepare(`
         INSERT INTO channels (id, project_root) VALUES (?, ?)
         ON CONFLICT(id) DO NOTHING
-      `).run(channelId, projectRoot);
-      const channel = database.prepare(
-        "SELECT project_root FROM channels WHERE id = ?",
-      ).get(channelId);
+      `)
+        .run(channelId, projectRoot);
+      const channel = database
+        .prepare("SELECT project_root FROM channels WHERE id = ?")
+        .get(channelId);
       if (channel.project_root !== projectRoot) {
         throw new Error(
           `Channel ${channelId} is attached to ${channel.project_root}, not ${projectRoot}`,
         );
       }
-      database.prepare(`
+      database
+        .prepare(`
         INSERT INTO jobs (
           id, channel_id, task, project_root, status, created_at
         ) VALUES (?, ?, ?, ?, 'pending', ?)
-      `).run(id, channelId, task, projectRoot, now());
+      `)
+        .run(id, channelId, task, projectRoot, now());
       return { jobId: id, channelId, projectRoot, status: "pending" };
     });
   } finally {
@@ -153,7 +188,8 @@ export function reserveNextMessage(
       const currentTime = now();
       // A Codex task serializes its own turns. Keeping retries on the original
       // owner session prevents another task from racing an in-flight delivery.
-      let job = database.prepare(`
+      let job = database
+        .prepare(`
         SELECT jobs.*, channels.thread_id, channels.host_id, channels.project_id
         FROM jobs
         JOIN channels ON channels.id = jobs.channel_id
@@ -162,10 +198,12 @@ export function reserveNextMessage(
           AND jobs.lease_expires_at <= ?
         ORDER BY jobs.created_at, jobs.id
         LIMIT 1
-      `).get(projectRoot, ownerSessionId, currentTime);
+      `)
+        .get(projectRoot, ownerSessionId, currentTime);
       const retrying = Boolean(job);
       if (!job) {
-        job = database.prepare(`
+        job = database
+          .prepare(`
           SELECT jobs.*, channels.thread_id, channels.host_id, channels.project_id
           FROM jobs
           JOIN channels ON channels.id = jobs.channel_id
@@ -177,7 +215,8 @@ export function reserveNextMessage(
             )
           ORDER BY jobs.created_at, jobs.id
           LIMIT 1
-        `).get(projectRoot);
+        `)
+          .get(projectRoot);
       }
       if (!job) {
         return null;
@@ -186,12 +225,14 @@ export function reserveNextMessage(
         job.delivery_id = createDeliveryId();
         requireId(job.delivery_id, "delivery ID");
       }
-      database.prepare(`
+      database
+        .prepare(`
         UPDATE jobs
         SET status = 'routing', delivery_id = ?, lease_expires_at = ?,
             owner_session_id = ?
         WHERE id = ?
-      `).run(job.delivery_id, currentTime + leaseMs, ownerSessionId, job.id);
+      `)
+        .run(job.delivery_id, currentTime + leaseMs, ownerSessionId, job.id);
       return deliveryFromRow(job, retrying);
     });
   } finally {
@@ -215,12 +256,14 @@ export function acknowledgeMessage(
   const database = openInbox(path);
   try {
     return transaction(database, () => {
-      const job = database.prepare(`
+      const job = database
+        .prepare(`
         SELECT jobs.*, channels.host_id, channels.project_id
         FROM jobs
         JOIN channels ON channels.id = jobs.channel_id
         WHERE jobs.id = ?
-      `).get(jobId);
+      `)
+        .get(jobId);
       if (!job) {
         throw new Error(`Unknown job: ${jobId}`);
       }
@@ -231,23 +274,37 @@ export function acknowledgeMessage(
         job.host_id === hostId &&
         job.project_id === projectId
       ) {
-        return { jobId, channelId: job.channel_id, threadId, status: "completed" };
+        return {
+          jobId,
+          channelId: job.channel_id,
+          threadId,
+          status: "completed",
+        };
       }
       if (job.status !== "routing" || job.delivery_id !== deliveryId) {
         throw new Error(`Stale delivery for job ${jobId}`);
       }
-      database.prepare(`
+      database
+        .prepare(`
         UPDATE channels
         SET thread_id = ?, host_id = ?, project_id = ?
         WHERE id = ?
-      `).run(threadId, hostId, projectId, job.channel_id);
-      database.prepare(`
+      `)
+        .run(threadId, hostId, projectId, job.channel_id);
+      database
+        .prepare(`
         UPDATE jobs
         SET status = 'completed', thread_id = ?, lease_expires_at = NULL,
             completed_at = ?
         WHERE id = ?
-      `).run(threadId, now(), jobId);
-      return { jobId, channelId: job.channel_id, threadId, status: "completed" };
+      `)
+        .run(threadId, now(), jobId);
+      return {
+        jobId,
+        channelId: job.channel_id,
+        threadId,
+        status: "completed",
+      };
     });
   } finally {
     database.close();
@@ -260,24 +317,30 @@ export function recoverMessage(
 ) {
   requireId(jobId, "job ID");
   if (ownerStopped !== true) {
-    throw new Error("Recovery requires confirmation that the prior owner task stopped");
+    throw new Error(
+      "Recovery requires confirmation that the prior owner task stopped",
+    );
   }
   const database = openInbox(path);
   try {
     return transaction(database, () => {
-      const job = database.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId);
+      const job = database
+        .prepare("SELECT * FROM jobs WHERE id = ?")
+        .get(jobId);
       if (!job) {
         throw new Error(`Unknown job: ${jobId}`);
       }
       if (job.status !== "uncertain") {
         throw new Error(`Job ${jobId} is not awaiting recovery`);
       }
-      database.prepare(`
+      database
+        .prepare(`
         UPDATE jobs
         SET status = 'pending', delivery_id = NULL, lease_expires_at = NULL,
             owner_session_id = NULL
         WHERE id = ?
-      `).run(jobId);
+      `)
+        .run(jobId);
       return { jobId, channelId: job.channel_id, status: "pending" };
     });
   } finally {
