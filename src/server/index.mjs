@@ -1,5 +1,5 @@
 import { createApplication } from "./app.mjs";
-import { createTokenVerifier } from "./auth.mjs";
+import { createSessionVerifier, createTokenVerifier } from "./auth.mjs";
 import { loadConfig } from "./config.mjs";
 import { createDatabase } from "./database.mjs";
 import { createLogger } from "./logger.mjs";
@@ -13,10 +13,12 @@ async function start() {
   const config = loadConfig();
   database = createDatabase(config);
   const verifier = createTokenVerifier(config, database);
+  const sessionVerifier = createSessionVerifier(config);
   const runtime = await createApplication({
     config,
     database,
     verifier,
+    sessionVerifier,
     logger,
   });
   mcpServer = runtime.server;
@@ -25,6 +27,7 @@ async function start() {
       port: config.port,
       resource: config.resourceUrl.href,
       development_tokens: config.allowDevTokens,
+      public_signup: config.publicSignup,
     });
   });
 }

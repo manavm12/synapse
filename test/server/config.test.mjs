@@ -30,6 +30,18 @@ test("configuration derives an exact OAuth resource and Supabase issuer", () => 
   );
   assert.deepEqual(config.requiredScopes, ["openid", "email", "profile"]);
   assert.equal(config.databaseSsl, false);
+  assert.equal(config.publicSignup, false);
+});
+
+test("public signup is explicit and boolean", () => {
+  assert.equal(
+    loadConfig(environment({ PUBLIC_SIGNUP_ENABLED: "true" })).publicSignup,
+    true,
+  );
+  assert.throws(
+    () => loadConfig(environment({ PUBLIC_SIGNUP_ENABLED: "yes" })),
+    /must be true or false/,
+  );
 });
 
 test("database TLS verifies the server and accepts a multiline CA", () => {

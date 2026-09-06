@@ -57,10 +57,9 @@ server uses transactions and `SET LOCAL` for RLS identity.
 
 ## 2. Create Railway service
 
-Push `codex/cloud-memory-foundation` (or its merged branch) to GitHub. In
-Railway, create a project and service from that repository. Railway detects the
-root `Dockerfile`; the image runs Node 24 as the unprivileged `node` user and
-binds to Railway's injected `PORT`.
+Configure Railway to deploy the repository's `main` branch. Railway detects
+the root `Dockerfile`; the image runs Node 24 as the unprivileged `node` user
+and binds to Railway's injected `PORT`.
 
 On a Trial or Hobby plan, choose the Singapore region; Railway's Free tier does
 not offer global region selection. Generate a public Railway domain and set the
@@ -77,6 +76,7 @@ DATABASE_URL=<synapse_runtime-connection-string>
 DATABASE_SSL=verify-full
 DATABASE_CA_CERT=<Supabase CA certificate PEM>
 ALLOW_DEV_TOKENS=false
+PUBLIC_SIGNUP_ENABLED=false
 ```
 
 Generate the cookie secret locally, for example with
@@ -114,7 +114,9 @@ In Supabase Dashboard:
 4. Under Authentication → Hooks, enable the Postgres Custom Access Token hook
    `public.custom_access_token_hook`. It sets OAuth-token `aud` to the exact MCP
    resource URL while leaving non-OAuth sessions alone.
-5. Disable public user signup. Synapse onboarding is invite-only.
+5. For an alpha that permits self-service account creation, enable email signup.
+   Supabase's built-in sender delivers only to project-team addresses; configure
+   custom SMTP before allowing arbitrary public email addresses.
 
 Write the deployed URL to the hook's authoritative config and to the plugin:
 
@@ -128,9 +130,35 @@ npm run validate:plugin
 Commit the resulting `plugins/synapse/.mcp.json`. Its `url` and
 `oauth_resource` must be the same exact HTTPS URL, including `/mcp`.
 
-## 4. Invite and connect the first user
+## 4. Register and connect an alpha user
 
-With the operator-only environment still loaded:
+Set `PUBLIC_SIGNUP_ENABLED=true` on Railway and redeploy. Install the local
+plugin on the user's machine, then start its OAuth flow:
+
+```sh
+codex plugin marketplace add /absolute/path/to/synapse
+codex plugin add synapse@synapse
+codex mcp login synapse-memory
+```
+
+Enter a Supabase project-team email address. After following the magic link,
+choose a unique Synapse username and one project alias. The hosted service
+verifies the Supabase session token and atomically creates the profile, project,
+and memory root without receiving a user ID or email from the browser.
+
+Register the local checkout using the alias chosen during signup:
+
+```sh
+npm run synapse -- project connect /absolute/path/to/checkout --alias <project-alias>
+```
+
+The consent UI uses an HttpOnly signed cookie to preserve the authorization
+request across the email magic-link flow. It never accepts a callback target
+from a query parameter; only Supabase's validated `redirect_url` is used. The
+browser session token is accepted only by `/auth/account`; MCP tokens continue
+to require the exact resource audience, OAuth client ID, and scopes.
+
+Operator invitations remain available when closed onboarding is needed:
 
 ```sh
 npm run synapse -- admin invite \
@@ -138,19 +166,6 @@ npm run synapse -- admin invite \
   --username person \
   --project synapse
 ```
-
-This reserves the identity, asks Supabase to send an invitation, creates the
-single cloud project, and automatically creates its memory root. On the user's
-machine:
-
-```sh
-npm run synapse -- project connect /absolute/path/to/checkout --alias synapse
-codex mcp login synapse-memory
-```
-
-The consent UI uses an HttpOnly signed cookie to preserve the authorization
-request across the email magic-link flow. It never accepts a callback target
-from a query parameter; only Supabase's validated `redirect_url` is used.
 
 ## 5. Release gate
 
@@ -194,7 +209,8 @@ restarts.
 
 ## Rollout order
 
-Use a private alpha first: operator account, one invited user, then a handful
-of users after a week of clean audit and readiness data. Do not add retrieval
-or background capture queues until save correctness, user isolation, and
-restore drills have passed.
+Use a private alpha first: operator account, one self-registered team email,
+then a handful of users after a week of clean audit and readiness data. Keep
+`PUBLIC_SIGNUP_ENABLED=false` outside an active test window. Do not add
+retrieval or background capture queues until save correctness, user isolation,
+and restore drills have passed.

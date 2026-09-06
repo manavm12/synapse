@@ -9,6 +9,7 @@ import { runMigrations } from "../../scripts/migrate.mjs";
 import {
   createDatabase,
   MemoryConflictError,
+  UsernameTakenError,
 } from "../../src/server/database.mjs";
 
 const repositoryRoot = resolve(
@@ -46,11 +47,14 @@ test("migration enforces user isolation and durable capture semantics", {
 
   const userOne = "00000000-0000-4000-8000-000000000001";
   const userTwo = "00000000-0000-4000-8000-000000000002";
+  const userThree = "00000000-0000-4000-8000-000000000003";
+  const userFour = "00000000-0000-4000-8000-000000000004";
   await admin.query(
     `insert into auth.users (id, email) values
-         ($1, 'one@example.com'), ($2, 'two@example.com')
+         ($1, 'one@example.com'), ($2, 'two@example.com'),
+         ($3, 'three@example.com'), ($4, 'four@example.com')
        on conflict (id) do nothing`,
-    [userOne, userTwo],
+    [userOne, userTwo, userThree, userFour],
   );
   await admin.query(
     `insert into public.profiles (id, username, email, status) values
@@ -103,6 +107,38 @@ test("migration enforces user isolation and durable capture semantics", {
     databaseSsl,
   });
   t.after(() => database.close());
+
+  assert.equal(await database.getAccount(userThree), null);
+  const registered = await database.registerAccount(userThree, {
+    username: "agent_three",
+    projectAlias: "synapse",
+  });
+  assert.equal(registered.username, "agent_three");
+  assert.equal(registered.projectAlias, "synapse");
+  assert.deepEqual(
+    await database.registerAccount(userThree, {
+      username: "ignored_name",
+      projectAlias: "ignored-project",
+    }),
+    registered,
+  );
+  await assert.rejects(
+    database.registerAccount(userFour, {
+      username: "agent_three",
+      projectAlias: "synapse",
+    }),
+    UsernameTakenError,
+  );
+  const provisioned = await admin.query(
+    `select profile.status::text,
+            (select count(*) from public.memory_nodes
+             where owner_id = $1 and kind = 'root') as roots
+     from public.profiles as profile
+     where profile.id = $1`,
+    [userThree],
+  );
+  assert.deepEqual(provisioned.rows[0], { status: "active", roots: "1" });
+
   const identity = await database.resolveIdentity(userOne, {
     authMethod: "oauth",
     oauthClientId: "codex-test-client",

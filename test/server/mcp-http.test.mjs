@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createApplication } from "../../src/server/app.mjs";
+import {
+  AccountDisabledError,
+  UsernameTakenError,
+} from "../../src/server/database.mjs";
 
 const identity = Object.freeze({
   principalType: "user",
@@ -39,12 +43,14 @@ function createConfig() {
     ),
     supabasePublishableKey: "sb_publishable_example",
     cookieSecret: "x".repeat(32),
+    publicSignup: true,
     requiredScopes: ["openid", "email", "profile"],
   };
 }
 
-async function fixture(t) {
+async function fixture(t, { publicSignup = true } = {}) {
   const saves = [];
+  const accounts = new Map();
   const database = {
     async healthCheck() {},
     async saveSessionMemory(receivedIdentity, input, requestId) {
@@ -58,8 +64,23 @@ async function fixture(t) {
         savedAt: new Date("2026-09-06T00:00:00Z"),
       };
     },
+    async getAccount(userId) {
+      return accounts.get(userId) ?? null;
+    },
+    async registerAccount(userId, account) {
+      if (account.username === "taken") throw new UsernameTakenError();
+      if (account.username === "disabled") throw new AccountDisabledError();
+      const registered = {
+        username: account.username,
+        projectId: "33333333-3333-4333-8333-333333333333",
+        projectAlias: account.projectAlias,
+      };
+      accounts.set(userId, registered);
+      return registered;
+    },
   };
   const config = createConfig();
+  config.publicSignup = publicSignup;
   const verifier = {
     async verifyAccessToken(token) {
       if (token !== "valid") throw new Error("invalid token");
@@ -73,11 +94,21 @@ async function fixture(t) {
       };
     },
   };
+  const sessionVerifier = {
+    async verifyAccessToken(token) {
+      if (token !== "session") throw new Error("invalid session");
+      return {
+        userId: "66666666-6666-4666-8666-666666666666",
+        sessionId: "77777777-7777-4777-8777-777777777777",
+      };
+    },
+  };
   const logger = { info() {}, error() {} };
   const application = await createApplication({
     config,
     database,
     verifier,
+    sessionVerifier,
     logger,
     fetchImplementation: async () =>
       new Response(JSON.stringify({ keys: [{ kid: "test" }] })),
@@ -94,7 +125,12 @@ async function fixture(t) {
     await application.server.close();
   });
   const port = listener.address().port;
-  return { baseUrl: `http://127.0.0.1:${port}`, config, saves };
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    config,
+    saves,
+    accounts,
+  };
 }
 
 async function mcp(baseUrl, body, token = "valid") {
@@ -132,7 +168,9 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
     `${baseUrl}/authorize?authorization_id=oauth-request-1`,
   );
   assert.equal(consent.status, 200);
-  assert.match(await consent.text(), /data-mode="consent"/);
+  const consentHtml = await consent.text();
+  assert.match(consentHtml, /data-mode="consent"/);
+  assert.match(consentHtml, /data-public-signup="true"/);
   const cookie = consent.headers.get("set-cookie").split(";", 1)[0];
   const callback = await fetch(`${baseUrl}/auth/callback`, {
     headers: { cookie },
@@ -169,6 +207,90 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
     unauthorized.response.headers.get("www-authenticate"),
     /resource_metadata="http:\/\/127\.0\.0\.1\/\.well-known\/oauth-protected-resource"/,
   );
+});
+
+test("an authenticated Supabase user can create an idempotent Synapse account", async (t) => {
+  const { baseUrl } = await fixture(t);
+  const headers = { authorization: "Bearer session" };
+
+  const missing = await fetch(`${baseUrl}/auth/account`, { headers });
+  assert.equal(missing.status, 200);
+  assert.equal(missing.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await missing.json(), { status: "setup_required" });
+
+  const created = await fetch(`${baseUrl}/auth/account`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ username: "new_agent", project_alias: "synapse" }),
+  });
+  assert.equal(created.status, 201);
+  assert.deepEqual(await created.json(), {
+    status: "ready",
+    username: "new_agent",
+    project_alias: "synapse",
+  });
+
+  const retried = await fetch(`${baseUrl}/auth/account`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ username: "different", project_alias: "other" }),
+  });
+  assert.equal(retried.status, 200);
+  assert.deepEqual(await retried.json(), {
+    status: "ready",
+    username: "new_agent",
+    project_alias: "synapse",
+  });
+});
+
+test("account setup rejects unauthorized, invalid, conflicting, and closed registration", async (t) => {
+  const { baseUrl } = await fixture(t);
+  const unauthorized = await fetch(`${baseUrl}/auth/account`);
+  assert.equal(unauthorized.status, 401);
+
+  const invalid = await fetch(`${baseUrl}/auth/account`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer session",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ username: "NO", project_alias: "x" }),
+  });
+  assert.equal(invalid.status, 422);
+
+  const conflict = await fetch(`${baseUrl}/auth/account`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer session",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ username: "taken", project_alias: "synapse" }),
+  });
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(await conflict.json(), { error: "username_taken" });
+
+  const disabled = await fetch(`${baseUrl}/auth/account`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer session",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ username: "disabled", project_alias: "synapse" }),
+  });
+  assert.equal(disabled.status, 403);
+  assert.deepEqual(await disabled.json(), { error: "account_disabled" });
+
+  const closedFixture = await fixture(t, { publicSignup: false });
+  const closed = await fetch(`${closedFixture.baseUrl}/auth/account`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer session",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ username: "new_agent", project_alias: "synapse" }),
+  });
+  assert.equal(closed.status, 403);
+  assert.deepEqual(await closed.json(), { error: "registration_closed" });
 });
 
 test("MCP publishes exactly identity and memory-save tools with OAuth schemes", async (t) => {
