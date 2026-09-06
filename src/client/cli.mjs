@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -22,7 +22,11 @@ function usage() {
 
 export function parseArguments(input) {
   const arguments_ = [...input];
-  if (arguments_.includes("--help") || arguments_.includes("-h") || arguments_.length === 0) {
+  if (
+    arguments_.includes("--help") ||
+    arguments_.includes("-h") ||
+    arguments_.length === 0
+  ) {
     return { command: "help" };
   }
   if (arguments_[0] === "recover") {

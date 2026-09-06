@@ -2,17 +2,23 @@ import { execFileSync } from "node:child_process";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  acknowledgeMessage,
-  reserveNextMessage,
-} from "../lib/inbox.mjs";
+import { acknowledgeMessage, reserveNextMessage } from "../lib/inbox.mjs";
+
+const MAX_HOOK_INPUT_BYTES = 1024 * 1024;
+const SAFE_SESSION_ID = /^[a-zA-Z0-9._:-]{1,128}$/;
 
 async function readStdin() {
-  let input = "";
+  const chunks = [];
+  let size = 0;
   for await (const chunk of process.stdin) {
-    input += chunk;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > MAX_HOOK_INPUT_BYTES) {
+      throw new Error("Hook input is too large");
+    }
+    chunks.push(buffer);
   }
-  return input;
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function gitPath(cwd, argument) {
@@ -37,8 +43,22 @@ if (process.argv[2] === "acknowledge") {
   process.exit(0);
 }
 
-const input = JSON.parse((await readStdin()) || "{}");
-if (!input.cwd || !input.session_id) {
+let input;
+try {
+  input = JSON.parse((await readStdin()) || "{}");
+} catch {
+  process.exit(0);
+}
+if (
+  !input ||
+  Array.isArray(input) ||
+  typeof input !== "object" ||
+  typeof input.cwd !== "string" ||
+  input.cwd.length === 0 ||
+  input.cwd.length > 4096 ||
+  typeof input.session_id !== "string" ||
+  !SAFE_SESSION_ID.test(input.session_id)
+) {
   process.exit(0);
 }
 
@@ -77,7 +97,9 @@ const acknowledgeCommand = [
   "<threadId>",
   "<hostId>",
   "<projectId>",
-].map((part) => JSON.stringify(part)).join(" ");
+]
+  .map((part) => JSON.stringify(part))
+  .join(" ");
 
 process.stdout.write(
   JSON.stringify({

@@ -12,10 +12,7 @@
     "longDescription": "Synapse checks a project's inbox on the next owner prompt and routes queued messages into visible, conversational Codex worktree tasks.",
     "developerName": "Synapse",
     "category": "Productivity",
-    "capabilities": [
-      "Read",
-      "Write"
-    ],
+    "capabilities": ["Read", "Write"],
     "defaultPrompt": "Check my Synapse inbox."
   }
 }

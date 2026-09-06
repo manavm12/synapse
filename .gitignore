@@ -1,5 +1,16 @@
 wiki/
 .DS_Store
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+coverage/
+*.log
+npm-debug.log*
 node_modules/
 state/
 .synapse/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
