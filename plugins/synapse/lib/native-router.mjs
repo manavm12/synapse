@@ -11,13 +11,16 @@ export function selectProject(projects, projectRoot) {
   if (!project) {
     throw new Error(`No saved Codex project exactly matches ${projectRoot}`);
   }
+  if (typeof project.projectId !== "string" || project.projectId === "") {
+    throw new Error(`Saved Codex project is missing its ID: ${projectRoot}`);
+  }
   return project;
 }
 
 function taskTarget(project) {
   return {
     type: "project",
-    projectId: project.id,
+    projectId: project.projectId,
     environment: project.isGitRepository
       ? {
           type: "worktree",
@@ -53,7 +56,7 @@ export async function routeDelivery(
     const project = selectProject(listed.projects ?? [], delivery.projectRoot);
     if (
       delivery.channel.projectId &&
-      delivery.channel.projectId !== project.id
+      delivery.channel.projectId !== project.projectId
     ) {
       throw new Error(
         `Channel ${delivery.channelId} belongs to another Codex project`,
@@ -75,7 +78,7 @@ export async function routeDelivery(
         deliveryId: delivery.deliveryId,
         threadId: delivery.channel.threadId,
         hostId: delivery.channel.hostId ?? "local",
-        projectId: project.id,
+        projectId: project.projectId,
       });
     }
 
@@ -97,7 +100,7 @@ export async function routeDelivery(
         deliveryId: delivery.deliveryId,
         threadId: created.threadId,
         hostId,
-        projectId: project.id,
+        projectId: project.projectId,
       });
     }
     if (!created.clientThreadId) {
@@ -107,7 +110,7 @@ export async function routeDelivery(
       jobId: delivery.jobId,
       deliveryId: delivery.deliveryId,
       clientThreadId: created.clientThreadId,
-      projectId: project.id,
+      projectId: project.projectId,
       hostId,
     });
   } finally {

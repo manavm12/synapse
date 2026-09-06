@@ -65,7 +65,7 @@ class FakeClient {
           schemaVersion: 2,
           projects: [
             {
-              id: "project-1",
+              projectId: "project-1",
               path: "/project",
               isGitRepository: true,
             },
@@ -87,11 +87,15 @@ class FakeClient {
 
 test("project selection uses the desktop saved-project path", () => {
   const projects = [
-    { id: "first", path: "/other" },
-    { id: "real", path: "/project" },
+    { projectId: "first", path: "/other" },
+    { projectId: "real", path: "/project" },
   ];
-  assert.equal(selectProject(projects, "/project").id, "real");
+  assert.equal(selectProject(projects, "/project").projectId, "real");
   assert.throws(() => selectProject(projects, "/missing"), /No saved/);
+  assert.throws(
+    () => selectProject([{ path: "/project" }], "/project"),
+    /missing its ID/,
+  );
 });
 
 test("new git tasks are accepted immediately from the temporary ID", async () => {

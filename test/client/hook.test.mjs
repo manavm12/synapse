@@ -128,7 +128,7 @@ async function fakeAppTools(directory, projectRoot) {
             schemaVersion: 2,
             projects: [
               {
-                id: "project-1",
+                projectId: "project-1",
                 path: projectRoot,
                 isGitRepository: true,
               },
