@@ -17,11 +17,11 @@ import {
   VALID_MEMORY_MARKDOWN,
 } from "./_helpers.mjs";
 
-test("capture is due on the fifteenth distinct turn and Stop continuation cannot loop", async (t) => {
+test("capture is due on the third distinct turn and Stop continuation cannot loop", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
 
-  for (let turn = 1; turn < 15; turn += 1) {
+  for (let turn = 1; turn < 3; turn += 1) {
     const result = checkpointMemory(
       {
         sessionId: "session-1",
@@ -31,13 +31,13 @@ test("capture is due on the fifteenth distinct turn and Stop continuation cannot
       { env: fixture.env },
     );
     assert.equal(result.due, false);
-    assert.equal(result.remainingTurns, 15 - turn);
+    assert.equal(result.remainingTurns, 3 - turn);
   }
 
   const due = checkpointMemory(
     {
       sessionId: "session-1",
-      turnId: "turn-15",
+      turnId: "turn-3",
       cwd: fixture.projectRoot,
     },
     { env: fixture.env },
@@ -49,7 +49,7 @@ test("capture is due on the fifteenth distinct turn and Stop continuation cannot
   const repeatedStop = checkpointMemory(
     {
       sessionId: "session-1",
-      turnId: "turn-15",
+      turnId: "turn-3",
       cwd: fixture.projectRoot,
       stopHookActive: true,
     },
@@ -58,14 +58,14 @@ test("capture is due on the fifteenth distinct turn and Stop continuation cannot
   assert.equal(repeatedStop.duplicate, true);
   assert.equal(repeatedStop.due, true);
   assert.equal("decision" in repeatedStop, false);
-  assert.equal(repeatedStop.unsavedTurns, 15);
+  assert.equal(repeatedStop.unsavedTurns, 3);
 });
 
 test("saving updates one document, clears the checkpoint, and starts a new interval", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
 
-  for (let turn = 1; turn <= 15; turn += 1) {
+  for (let turn = 1; turn <= 3; turn += 1) {
     checkpointMemory(
       {
         sessionId: "session-save",
@@ -92,7 +92,7 @@ test("saving updates one document, clears the checkpoint, and starts a new inter
   const duplicateSavedTurn = checkpointMemory(
     {
       sessionId: "session-save",
-      turnId: "turn-15",
+      turnId: "turn-3",
       cwd: fixture.linkedWorktree,
     },
     { env: fixture.env },
@@ -100,7 +100,7 @@ test("saving updates one document, clears the checkpoint, and starts a new inter
   assert.equal(duplicateSavedTurn.unsavedTurns, 0);
   assert.equal(duplicateSavedTurn.due, false);
 
-  for (let turn = 16; turn <= 30; turn += 1) {
+  for (let turn = 4; turn <= 6; turn += 1) {
     const result = checkpointMemory(
       {
         sessionId: "session-save",
@@ -109,7 +109,7 @@ test("saving updates one document, clears the checkpoint, and starts a new inter
       },
       { env: fixture.env },
     );
-    assert.equal(result.due, turn === 30);
+    assert.equal(result.due, turn === 6);
   }
 
   const second = await saveSessionMemory(
@@ -289,7 +289,7 @@ test("sessions cannot cross projects and invalid memory input is rejected", asyn
 test("concurrent sessions retain independent checkpoints", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
-  for (let turn = 1; turn <= 15; turn += 1) {
+  for (let turn = 1; turn <= 3; turn += 1) {
     const first = checkpointMemory(
       { sessionId: "session-a", turnId: `a-${turn}`, cwd: fixture.projectRoot },
       { env: fixture.env },
@@ -298,7 +298,7 @@ test("concurrent sessions retain independent checkpoints", async (t) => {
       { sessionId: "session-b", turnId: `b-${turn}`, cwd: fixture.projectRoot },
       { env: fixture.env },
     );
-    assert.equal(first.due, turn === 15);
-    assert.equal(second.due, turn === 15);
+    assert.equal(first.due, turn === 3);
+    assert.equal(second.due, turn === 3);
   }
 });

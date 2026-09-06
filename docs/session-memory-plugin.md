@@ -1,7 +1,7 @@
 # Session-memory plugin
 
 The Synapse plugin captures one concise Markdown memory per registered Codex
-session. It requests a save after every fifteen distinct completed turns and on the
+session. It requests a save after every three distinct completed turns and on the
 first model continuation after compaction. It does not copy the raw transcript.
 
 ## Local installation
@@ -33,12 +33,12 @@ hooks until their new hash is trusted.
 
 1. Start a new task in a Synapse-registered main checkout or one of its linked
    worktrees.
-2. Complete fifteen ordinary user/assistant turns. The fifteenth Stop hook should
+2. Complete three ordinary user/assistant turns. The third Stop hook should
    create one automatic continuation asking Codex to call
    `save_session_memory`.
 3. Confirm the continuation finishes and inspect
    `~/.synapse/memory/<project-alias>/<session-id>.md`.
-4. Continue for another fifteen turns and confirm the same file advances to the
+4. Continue for another three turns and confirm the same file advances to the
    next revision instead of creating a second document.
 5. Trigger Codex compaction in a long task. The immediate continuation should
    save memory before returning to the original work.

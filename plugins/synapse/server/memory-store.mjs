@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const CHECKPOINT_INTERVAL = 15;
+export const CHECKPOINT_INTERVAL = 3;
 export const REQUIRED_MEMORY_SECTIONS = Object.freeze([
   "Summary",
   "What changed",

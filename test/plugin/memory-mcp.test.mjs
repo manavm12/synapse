@@ -1,14 +1,71 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { cp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import test from "node:test";
-
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import { createMemoryFixture, VALID_MEMORY_MARKDOWN } from "./_helpers.mjs";
 
-const pluginRoot = resolve("plugins/synapse");
+const pluginRoot = resolve(process.env.SYNAPSE_PLUGIN_ROOT ?? "plugins/synapse");
+
+function createStdioClient({ command, args, cwd, env }) {
+  const child = spawn(command, args, {
+    cwd,
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const pending = new Map();
+  let nextId = 1;
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const closed = new Promise((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => {
+      const error = new Error(`MCP server exited ${code}: ${stderr}`);
+      for (const request of pending.values()) request.reject(error);
+      pending.clear();
+      if (code === 0) resolvePromise();
+      else reject(error);
+    });
+  });
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    if (message.error) request.reject(new Error(message.error.message));
+    else request.resolve(message.result);
+  });
+
+  function request(method, params = {}) {
+    const id = nextId++;
+    return new Promise((resolvePromise, reject) => {
+      pending.set(id, { resolve: resolvePromise, reject });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    });
+  }
+
+  return {
+    async connect() {
+      await request("initialize", {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "synapse-memory-test", version: "1.0.0" },
+      });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+    },
+    ping: () => request("ping"),
+    listTools: () => request("tools/list"),
+    callTool: (params) => request("tools/call", params),
+    async close() {
+      child.stdin.end();
+      await closed;
+    },
+  };
+}
 
 test("the dependency-free cache-local MCP exposes and executes exactly two memory tools", async (t) => {
   const fixture = await createMemoryFixture();
@@ -18,17 +75,15 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
   const mcpConfig = JSON.parse(
     await readFile(join(cachedPlugin, ".mcp.json"), "utf8"),
   ).mcpServers["synapse-memory"];
-  const transport = new StdioClientTransport({
+  const client = createStdioClient({
     command: mcpConfig.command,
     args: mcpConfig.args,
     cwd: cachedPlugin,
     env: { ...process.env, ...fixture.env },
-    stderr: "pipe",
   });
-  const client = new Client({ name: "synapse-memory-test", version: "1.0.0" });
 
   try {
-    await client.connect(transport);
+    await client.connect();
     await client.ping();
     const tools = await client.listTools();
     assert.deepEqual(
@@ -53,7 +108,7 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
     assert.match(invalidSave.content[0].text, /missing required headings/);
 
     let checkpoint;
-    for (let turn = 1; turn <= 15; turn += 1) {
+    for (let turn = 1; turn <= 3; turn += 1) {
       checkpoint = await client.callTool({
         name: "memory_checkpoint",
         arguments: {
@@ -64,12 +119,12 @@ test("the dependency-free cache-local MCP exposes and executes exactly two memor
         },
       });
       const hookOutput = JSON.parse(checkpoint.content[0].text);
-      if (turn < 15) {
+      if (turn < 3) {
         assert.deepEqual(hookOutput, {});
       }
     }
     assert.equal(checkpoint.structuredContent.decision, "block");
-    assert.match(checkpoint.structuredContent.reason, /15 completed turns/);
+    assert.match(checkpoint.structuredContent.reason, /3 completed turns/);
     assert.deepEqual(JSON.parse(checkpoint.content[0].text), {
       decision: "block",
       reason: checkpoint.structuredContent.reason,
@@ -100,7 +155,7 @@ test("memory_checkpoint fails open when SQLite state is unavailable", async (t) 
   const mcpConfig = JSON.parse(
     await readFile(join(cachedPlugin, ".mcp.json"), "utf8"),
   ).mcpServers["synapse-memory"];
-  const transport = new StdioClientTransport({
+  const client = createStdioClient({
     command: mcpConfig.command,
     args: mcpConfig.args,
     cwd: cachedPlugin,
@@ -109,12 +164,10 @@ test("memory_checkpoint fails open when SQLite state is unavailable", async (t) 
       ...fixture.env,
       SYNAPSE_MEMORY_DB: fixture.directory,
     },
-    stderr: "pipe",
   });
-  const client = new Client({ name: "synapse-fail-open-test", version: "1.0.0" });
 
   try {
-    await client.connect(transport);
+    await client.connect();
     const result = await client.callTool({
       name: "memory_checkpoint",
       arguments: {
