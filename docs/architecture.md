@@ -14,12 +14,13 @@ flowchart LR
    local inbox.
 2. The next owner prompt for that checkout reserves one eligible message. Linked
    worktrees cannot consume messages.
-3. New task creation is provisionally accepted by its temporary client ID so the
-   owner can resume without waiting for a permanent task ID.
-4. A later owner prompt performs one bounded reconciliation. It accepts the
-   delivery marker only from the native task's immutable initial user input or
-   its `codex_app/create_thread` delegation record, never from generated output.
-5. Synapse binds the permanent task ID only after that evidence is verified.
+3. A background hook calls Codex desktop's native project-task tools. New task
+   creation is provisionally accepted by its temporary client ID, so the owner
+   prompt resumes without waiting for worktree setup or a permanent task ID.
+4. The delegated child starts independently and binds its permanent task ID from
+   the immutable `codex_app/create_thread` delegation record in its transcript.
+5. Existing ready channels are continued directly through their permanent task
+   ID; no later owner prompt is consumed by reconciliation.
 
 Leases are fenced to the original owner session. An expired delivery cannot be
 stolen by another owner, and retries preserve the same delivery identity.
