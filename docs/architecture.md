@@ -14,9 +14,12 @@ flowchart LR
    local inbox.
 2. The next owner prompt for that checkout reserves one eligible message. Linked
    worktrees cannot consume messages.
-3. The hook instructs Codex to reconcile a stable delivery marker before creating
-   or updating the channel's native task.
-4. Synapse acknowledges the message only after native delivery succeeds.
+3. New task creation is provisionally accepted by its temporary client ID so the
+   owner can resume without waiting for a permanent task ID.
+4. A later owner prompt performs one bounded reconciliation. It accepts the
+   delivery marker only from the native task's immutable initial user input or
+   its `codex_app/create_thread` delegation record, never from generated output.
+5. Synapse binds the permanent task ID only after that evidence is verified.
 
 Leases are fenced to the original owner session. An expired delivery cannot be
 stolen by another owner, and retries preserve the same delivery identity.

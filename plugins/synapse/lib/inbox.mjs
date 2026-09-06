@@ -200,6 +200,7 @@ function deliveryFromRow(row, { retrying = false, reconciling = false } = {}) {
     markerVersion: row.marker_version,
     retrying,
     reconciling,
+    ownerSessionId: row.owner_session_id,
     channelId: row.channel_id,
     task: row.task,
     nativePrompt: `${row.task}\n\n<!-- ${deliveryMarker} -->`,
@@ -340,6 +341,7 @@ export function reserveNextMessage(
         job.delivery_id = createDeliveryId();
         requireId(job.delivery_id, "delivery ID");
       }
+      job.owner_session_id = ownerSessionId;
       database
         .prepare(`UPDATE jobs SET status = 'routing', delivery_id = ?, lease_expires_at = ?,
         owner_session_id = ?, updated_at = ? WHERE id = ?`)

@@ -42,6 +42,7 @@ test("a project prompt leases and directly acknowledges one queued message", asy
   queue(path);
   const delivery = reserve(path);
   assert.equal(delivery.task, "create a file");
+  assert.equal(delivery.ownerSessionId, "owner-1");
   assert.equal(
     delivery.nativePrompt,
     "create a file\n\n<!-- synapse-delivery:v2 job=job-1 delivery=delivery-1 -->",

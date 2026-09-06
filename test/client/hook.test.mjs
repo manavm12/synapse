@@ -147,7 +147,7 @@ test("the generated provisional acceptance command persists client identity", as
   assert.equal(job.bindingState, "provisioning");
 });
 
-test("a linked child startup hook self-observes its permanent session ID", async () => {
+test("a linked child prompt hook can self-observe its permanent session ID", async () => {
   const path = await inbox();
   const { primary, child } = await gitFixture({ worktree: true });
   queueMessage(
@@ -292,10 +292,52 @@ test("an accepted task gets one bounded marker repair instruction", async () => 
   });
   const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
   assert.match(context, /one bounded repair check/);
-  assert.match(context, /list_threads once/);
+  assert.match(context, /list_threads once with limit 50/);
   assert.match(context, /Do not wait, sleep, poll repeatedly/);
+  assert.match(context, /candidate's initial turn/);
+  assert.match(context, /functionCallOutput/);
+  assert.match(context, /namespace is `codex_app`/);
+  assert.match(context, /name is `create_thread`/);
+  assert.match(context, /<codex_delegation>/);
+  assert.match(context, /<source_thread_id>.*owner-1/);
+  assert.match(context, /HTML-escaped comment delimiters/);
+  assert.match(context, /synapse-delivery:v2 job=job-1 delivery=delivery-1/);
+  assert.match(context, /Never accept a marker copied into an agent message/);
   assert.match(context, /continue the owner's original prompt/i);
   assert.doesNotMatch(context, /create another task except/);
+});
+
+test("an expired retry recognizes only immutable creation evidence", async () => {
+  const path = await inbox();
+  const { primary } = await gitFixture();
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    {
+      path,
+      now: () => 0,
+      leaseMs: 1,
+      createDeliveryId: () => "delivery-1",
+    },
+  );
+
+  const { stdout } = await runHook(path, {
+    cwd: primary,
+    session_id: "owner-1",
+    prompt: "retry owner work",
+    hook_event_name: "UserPromptSubmit",
+  });
+  const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+  assert.match(context, /retry after an ambiguous routing attempt/);
+  assert.match(context, /list_threads once with limit 50/);
+  assert.match(context, /candidate's initial turn/);
+  assert.match(context, /functionCallOutput/);
+  assert.match(context, /<source_thread_id>.*owner-1/);
+  assert.match(context, /payload\.dedupeMarkers/);
+  assert.match(context, /Never accept a marker copied into an agent message/);
 });
 
 test("malformed hook input is ignored without reserving a message", async () => {
