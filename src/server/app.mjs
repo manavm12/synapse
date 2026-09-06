@@ -65,8 +65,10 @@ export async function createApplication({
     res.json({ status: "ok" });
   });
   app.get("/readyz", async (_req, res) => {
+    let stage = "database";
     try {
       await database.healthCheck();
+      stage = "jwks";
       const response = await fetchImplementation(config.supabaseJwksUrl, {
         signal: AbortSignal.timeout(3_000),
       });
@@ -76,7 +78,15 @@ export async function createApplication({
         throw new Error("JWKS has no signing keys");
       }
       res.json({ status: "ready" });
-    } catch {
+    } catch (error) {
+      logger.error("readiness_check_failed", {
+        stage,
+        error_type: error?.name ?? "Error",
+        error_code:
+          typeof error?.code === "string" || typeof error?.code === "number"
+            ? String(error.code)
+            : null,
+      });
       res.status(503).json({ status: "not_ready" });
     }
   });
