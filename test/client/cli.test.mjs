@@ -44,15 +44,21 @@ test("legacy recovery requires explicit owner-stopped confirmation", () => {
   assert.throws(() => parseArguments(["recover", "job-1"]), /Usage:/);
 });
 
+test("status accepts exactly one job ID", () => {
+  assert.deepEqual(parseArguments(["status", "job-1"]), {
+    command: "status",
+    jobId: "job-1",
+  });
+  assert.throws(() => parseArguments(["status"]), /Usage:/);
+});
+
 test("help exits successfully through the CLI entrypoint", async (t) => {
   const writes = [];
   t.mock.method(process.stdout, "write", (chunk) => {
     writes.push(String(chunk));
     return true;
   });
-
   await main(["--help"]);
-
   assert.match(writes.join(""), /^Usage:/);
 });
 

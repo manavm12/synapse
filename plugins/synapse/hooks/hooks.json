@@ -1,5 +1,5 @@
 {
-  "description": "Route Synapse messages and capture durable session memory.",
+  "description": "Route and reconcile Synapse messages while capturing durable session memory.",
   "hooks": {
     "SessionStart": [
       {

@@ -1,29 +1,31 @@
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
-import { access, mkdtemp, realpath } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { access, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
 
-import { getJob, queueMessage } from "../../plugins/synapse/lib/inbox.mjs";
+import {
+  acceptProvisioning,
+  getJob,
+  queueMessage,
+  reserveNextMessage,
+} from "../../plugins/synapse/lib/inbox.mjs";
 
 const pluginRoot = resolve(
   process.env.SYNAPSE_PLUGIN_ROOT ?? "plugins/synapse",
 );
 const hookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
-const execFileAsync = promisify(execFile);
 
-async function primaryGitCheckout() {
-  const path = await mkdtemp(join(tmpdir(), "synapse-project-test-"));
-  await execFileAsync("git", ["init", "--quiet", path]);
-  return realpath(path);
-}
-
-function runHook(path, input, arguments_ = []) {
+function runHook(
+  path,
+  input,
+  { arguments_ = [], env = {}, rawInput = false } = {},
+) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [hookPath, ...arguments_], {
-      env: { ...process.env, SYNAPSE_INBOX_PATH: path },
+      env: { ...process.env, SYNAPSE_INBOX_PATH: path, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -38,78 +40,298 @@ function runHook(path, input, arguments_ = []) {
     });
     child.once("error", reject);
     child.once("close", (code) => {
-      if (code === 0) resolvePromise(stdout);
+      if (code === 0) resolvePromise({ stdout, stderr });
       else reject(new Error(`hook exited ${code}: ${stderr}`));
     });
-    child.stdin.end(input);
+    child.stdin.end(rawInput ? input : JSON.stringify(input));
   });
 }
 
-test("the next local project prompt receives native routing context", async () => {
-  const projectRoot = await primaryGitCheckout();
-  const path = join(
-    await mkdtemp(join(tmpdir(), "synapse-hook-test-")),
+async function gitFixture({ worktree = false } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-hook-git-"));
+  const primaryPath = join(directory, "primary");
+  execFileSync("git", ["init", "-b", "main", primaryPath]);
+  const primary = realpathSync(primaryPath);
+  execFileSync("git", [
+    "-C",
+    primary,
+    "config",
+    "user.email",
+    "synapse@example.test",
+  ]);
+  execFileSync("git", ["-C", primary, "config", "user.name", "Synapse Test"]);
+  await writeFile(join(primary, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", primary, "add", "README.md"]);
+  execFileSync("git", ["-C", primary, "commit", "-m", "fixture"]);
+  if (!worktree) return { directory, primary, child: null };
+  const childPath = join(directory, "child");
+  execFileSync("git", [
+    "-C",
+    primary,
+    "worktree",
+    "add",
+    "-b",
+    "child",
+    childPath,
+  ]);
+  const child = realpathSync(childPath);
+  return { directory, primary, child };
+}
+
+async function inbox() {
+  return join(
+    await mkdtemp(join(tmpdir(), "synapse-hook-inbox-")),
     "inbox.sqlite",
   );
+}
+
+test("a primary project prompt gets immediate nonblocking provisional acceptance", async () => {
+  const path = await inbox();
+  const { primary } = await gitFixture();
   queueMessage(
     {
       id: "job-1",
       channelId: "demo",
       task: "create TEST.md",
-      projectRoot,
+      projectRoot: primary,
     },
     { path },
   );
-  const stdout = await runHook(
-    path,
-    JSON.stringify({
-      cwd: projectRoot,
-      session_id: "owner-1",
-      hook_event_name: "UserPromptSubmit",
-    }),
-  );
+  const { stdout } = await runHook(path, {
+    cwd: primary,
+    session_id: "owner-1",
+    prompt: "owner work",
+    hook_event_name: "UserPromptSubmit",
+  });
   const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
   assert.match(context, /codex_app__create_thread/);
-  assert.match(context, /codex_app__send_message_to_thread/);
-  assert.match(context, /codex_app__read_thread/);
-  assert.match(context, /create TEST\.md/);
-  assert.match(context, /synapse-delivery:job-1/);
-  assert.match(context, /marker already exists.*do not create or send again/);
+  assert.match(context, /dispatch\.mjs.*accept.*<clientThreadId>.*<projectId>/);
+  assert.match(context, /durably records Codex acceptance/);
+  assert.match(context, /Continue the owner's original prompt immediately/);
   assert.match(context, /do not execute it in this owner task/);
+  assert.match(context, /synapse-delivery:v2 job=job-1 delivery=/);
+  assert.doesNotMatch(context, /list_threads/);
+  assert.doesNotMatch(context, /read_thread/);
+  assert.doesNotMatch(context, /wait_threads/);
+  assert.doesNotMatch(context, /wait until/i);
+});
+
+test("the generated provisional acceptance command persists client identity", async () => {
+  const path = await inbox();
+  const { primary } = await gitFixture();
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  const { stdout } = await runHook(
+    path,
+    {},
+    {
+      arguments_: [
+        "accept",
+        "job-1",
+        "delivery-1",
+        "client-1",
+        "project-1",
+        "local",
+      ],
+    },
+  );
+  assert.equal(JSON.parse(stdout).status, "accepted");
+  const job = getJob("job-1", { path });
+  assert.equal(job.clientThreadId, "client-1");
+  assert.equal(job.bindingState, "provisioning");
+});
+
+test("a linked child startup hook self-observes its permanent session ID", async () => {
+  const path = await inbox();
+  const { primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  acceptProvisioning(
+    {
+      jobId: "job-1",
+      deliveryId: "delivery-1",
+      clientThreadId: "client-1",
+      projectId: "project-1",
+      hostId: "local",
+    },
+    { path },
+  );
+
+  const result = await runHook(path, {
+    cwd: child,
+    session_id: "thread-1",
+    prompt: delivery.nativePrompt,
+    hook_event_name: "UserPromptSubmit",
+  });
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  const job = getJob("job-1", { path });
+  assert.equal(job.status, "completed");
+  assert.equal(job.channelThreadId, "thread-1");
+});
+
+test("child observation can arrive before the owner records client acceptance", async () => {
+  const path = await inbox();
+  const { primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  await runHook(path, {
+    cwd: child,
+    session_id: "thread-1",
+    prompt: delivery.nativePrompt,
+    hook_event_name: "UserPromptSubmit",
+  });
+  assert.equal(getJob("job-1", { path }).status, "completed");
+  assert.equal(
+    acceptProvisioning(
+      {
+        jobId: "job-1",
+        deliveryId: "delivery-1",
+        clientThreadId: "client-1",
+        projectId: "project-1",
+      },
+      { path },
+    ).status,
+    "completed",
+  );
+});
+
+test("the child identity compatibility guard disables self-observation", async () => {
+  const path = await inbox();
+  const { primary, child } = await gitFixture({ worktree: true });
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  await runHook(
+    path,
+    {
+      cwd: child,
+      session_id: "thread-1",
+      prompt: delivery.nativePrompt,
+      hook_event_name: "UserPromptSubmit",
+    },
+    { env: { SYNAPSE_TRUST_HOOK_SESSION_ID: "0" } },
+  );
+  assert.equal(getJob("job-1", { path }).status, "routing");
+});
+
+test("a marker from a different repository cannot bind a child task", async () => {
+  const path = await inbox();
+  const first = await gitFixture();
+  const second = await gitFixture({ worktree: true });
+  queueMessage(
+    {
+      id: "job-1",
+      channelId: "demo",
+      task: "work",
+      projectRoot: first.primary,
+    },
+    { path },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: first.primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  await runHook(path, {
+    cwd: second.child,
+    session_id: "thread-evil",
+    prompt: delivery.nativePrompt,
+    hook_event_name: "UserPromptSubmit",
+  });
+  assert.equal(getJob("job-1", { path }).status, "routing");
+});
+
+test("an accepted task gets one bounded marker repair instruction", async () => {
+  const path = await inbox();
+  const { primary } = await gitFixture();
+  queueMessage(
+    { id: "job-1", channelId: "demo", task: "work", projectRoot: primary },
+    { path },
+  );
+  reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner-1" },
+    { path, createDeliveryId: () => "delivery-1" },
+  );
+  acceptProvisioning(
+    {
+      jobId: "job-1",
+      deliveryId: "delivery-1",
+      clientThreadId: "client-1",
+      projectId: "project-1",
+    },
+    { path, now: () => 1 },
+  );
+  const { stdout } = await runHook(path, {
+    cwd: primary,
+    session_id: "owner-2",
+    prompt: "later owner work",
+    hook_event_name: "UserPromptSubmit",
+  });
+  const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+  assert.match(context, /one bounded repair check/);
+  assert.match(context, /list_threads once/);
+  assert.match(context, /Do not wait, sleep, poll repeatedly/);
+  assert.match(context, /continue the owner's original prompt/i);
+  assert.doesNotMatch(context, /create another task except/);
 });
 
 test("malformed hook input is ignored without reserving a message", async () => {
-  const path = join(
-    await mkdtemp(join(tmpdir(), "synapse-hook-test-")),
-    "inbox.sqlite",
-  );
+  const path = await inbox();
+  const { primary } = await gitFixture();
   queueMessage(
     {
       id: "job-1",
       channelId: "demo",
       task: "leave pending",
-      projectRoot: process.cwd(),
+      projectRoot: primary,
     },
     { path },
   );
 
-  assert.equal(await runHook(path, "{not-json"), "");
   assert.equal(
-    await runHook(
-      path,
-      JSON.stringify({ cwd: process.cwd(), session_id: "not valid" }),
-    ),
+    (await runHook(path, "{not-json", { rawInput: true })).stdout,
+    "",
+  );
+  assert.equal(
+    (
+      await runHook(path, {
+        cwd: primary,
+        session_id: "not valid",
+      })
+    ).stdout,
     "",
   );
   assert.equal(getJob("job-1", { path }).status, "pending");
 });
 
 test("oversized hook input is ignored without creating an inbox", async () => {
-  const path = join(
-    await mkdtemp(join(tmpdir(), "synapse-hook-test-")),
-    "inbox.sqlite",
-  );
-  const stdout = await runHook(path, "x".repeat(1024 * 1024 + 1));
+  const path = await inbox();
+  const { stdout } = await runHook(path, "x".repeat(1024 * 1024 + 1), {
+    rawInput: true,
+  });
   assert.equal(stdout, "");
   await assert.rejects(() => access(path), /ENOENT/);
 });
