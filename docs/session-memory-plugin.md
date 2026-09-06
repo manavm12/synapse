@@ -22,7 +22,7 @@ Add the repository marketplace and install the plugin:
 
 ```sh
 codex plugin marketplace add /Users/manavmehta/synapse-memory-capture
-codex plugin add synapse@personal
+codex plugin add synapse@synapse
 ```
 
 Start a new Codex task after installation. Open `/hooks`, review the Synapse
@@ -46,4 +46,4 @@ hooks until their new hash is trusted.
    memory file is created.
 
 To pick up later local edits, update the plugin cachebuster with the Codex
-plugin-creator helper, reinstall `synapse@personal`, and start another new task.
+plugin-creator helper, reinstall `synapse@synapse`, and start another new task.

@@ -63,7 +63,7 @@ assert(!hooks.PreCompact && !hooks.SessionEnd, "unsupported recovery hooks must 
 const marketplacePath = resolve(repositoryRoot, ".agents/plugins/marketplace.json");
 const marketplace = await readJson(marketplacePath);
 const entry = marketplace.plugins?.find((plugin) => plugin.name === "synapse");
-assert(marketplace.name === "personal", "local marketplace must be named personal");
+assert(marketplace.name === "synapse", "repository marketplace must be named synapse");
 assert(entry?.source?.source === "local", "marketplace source must be local");
 assert(entry?.source?.path === "./plugins/synapse", "marketplace source path is invalid");
 assert(entry?.policy?.installation === "AVAILABLE", "plugin must be available");
