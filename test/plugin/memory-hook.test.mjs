@@ -202,7 +202,6 @@ test("plugin hook configuration uses only the planned lifecycle events", async (
     session_id: `\${session_id}`,
     turn_id: `\${turn_id}`,
     cwd: `\${cwd}`,
-    stop_hook_active: `\${stop_hook_active}`,
   });
   const promptMemory = hooks.UserPromptSubmit[0].hooks[1];
   assert.equal(promptMemory.type, "command");

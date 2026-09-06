@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import {
   checkpointMemory,
@@ -17,6 +20,27 @@ import {
   registerProject,
   VALID_MEMORY_MARKDOWN,
 } from "./_helpers.mjs";
+
+const execFileAsync = promisify(execFile);
+const memoryStoreUrl = pathToFileURL(
+  resolve("plugins/synapse/server/memory-store.mjs"),
+).href;
+
+async function saveMemoryInChildProcess(input, env) {
+  const worker = [
+    `import { saveSessionMemory } from ${JSON.stringify(memoryStoreUrl)};`,
+    "const result = await saveSessionMemory(JSON.parse(process.env.SAVE_INPUT));",
+    "process.stdout.write(JSON.stringify(result));",
+  ].join("\n");
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    ["--input-type=module", "--eval", worker],
+    {
+      env: { ...process.env, ...env, SAVE_INPUT: JSON.stringify(input) },
+    },
+  );
+  return JSON.parse(stdout);
+}
 
 test("the fifteenth distinct Stop marks capture due without blocking", async (t) => {
   const fixture = await createMemoryFixture();
@@ -168,8 +192,8 @@ test("concurrent saves to one session serialize revisions without losing an upda
     { sessionId: "same-session", turnId: "turn-1", cwd: fixture.projectRoot },
     { env: fixture.env },
   );
-  const saves = await Promise.all([
-    saveSessionMemory(
+  const saves = await Promise.all(
+    [
       {
         sessionId: "same-session",
         title: "Concurrent A",
@@ -179,9 +203,6 @@ test("concurrent saves to one session serialize revisions without losing an upda
           "Save A.",
         ),
       },
-      { env: fixture.env },
-    ),
-    saveSessionMemory(
       {
         sessionId: "same-session",
         title: "Concurrent B",
@@ -191,9 +212,8 @@ test("concurrent saves to one session serialize revisions without losing an upda
           "Save B.",
         ),
       },
-      { env: fixture.env },
-    ),
-  ]);
+    ].map((input) => saveMemoryInChildProcess(input, fixture.env)),
+  );
 
   assert.deepEqual(
     saves.map((save) => save.revision).sort((left, right) => left - right),

@@ -10,10 +10,10 @@ Compaction still requests an immediate save. It does not copy the raw transcript
 The initial implementation requires macOS, Node.js 24 or newer, and a project
 registered in Synapse's `~/.synapse/host.sqlite` database.
 
-From this worktree, validate the dependency-free plugin runtime:
+From the repository worktree, validate the dependency-free plugin runtime:
 
 ```sh
-cd /Users/manavmehta/synapse-memory-capture
+cd <path-to-synapse-worktree>
 npm install
 npm test
 npm run validate:plugin
@@ -22,7 +22,7 @@ npm run validate:plugin
 Add the repository marketplace and install the plugin:
 
 ```sh
-codex plugin marketplace add /Users/manavmehta/synapse-memory-capture
+codex plugin marketplace add <path-to-synapse-worktree>
 codex plugin add synapse@synapse
 ```
 

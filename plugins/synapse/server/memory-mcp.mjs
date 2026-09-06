@@ -8,7 +8,6 @@ const SUPPORTED_PROTOCOL_VERSIONS = new Set([
   "2025-06-18",
   "2025-03-26",
   "2024-11-05",
-  "2024-10-07",
 ]);
 
 const TOOLS = Object.freeze([

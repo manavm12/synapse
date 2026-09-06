@@ -42,8 +42,7 @@
             "input": {
               "session_id": "${session_id}",
               "turn_id": "${turn_id}",
-              "cwd": "${cwd}",
-              "stop_hook_active": "${stop_hook_active}"
+              "cwd": "${cwd}"
             },
             "timeout": 10,
             "statusMessage": "Recording Synapse memory checkpoint"

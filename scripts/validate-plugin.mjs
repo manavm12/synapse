@@ -4,6 +4,34 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pluginRoot = resolve(repositoryRoot, "plugins/synapse");
+const semverPattern =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
+export function isValidSemver(value) {
+  return typeof value === "string" && semverPattern.test(value);
+}
+
+export function findRuntimePackageLoads(source) {
+  const specifiers = new Set();
+  const patterns = [
+    /\b(?:import|export)\s+(?!["'])[\s\S]*?\s+from\s+["']([^"']+)["']/g,
+    /\bimport\s+["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']/g,
+    /\brequire\s*\(\s*["']([^"']+)["']/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1];
+      if (!specifier.startsWith("node:") && !specifier.startsWith(".")) {
+        specifiers.add(specifier);
+      }
+    }
+  }
+  if (/\bcreateRequire\s*\(/.test(source)) {
+    specifiers.add("createRequire()");
+  }
+  return [...specifiers];
+}
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -19,10 +47,7 @@ const manifest = await readJson(
   resolve(pluginRoot, ".codex-plugin/plugin.json"),
 );
 assert(manifest.name === "synapse", "plugin name must match its directory");
-assert(
-  /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifest.version),
-  "invalid plugin semver",
-);
+assert(isValidSemver(manifest.version), "invalid plugin semver");
 assert(
   typeof manifest.description === "string" && manifest.description,
   "missing description",
@@ -73,9 +98,10 @@ const serverDirectory = resolve(pluginRoot, "server");
 for (const file of await readdir(serverDirectory)) {
   if (!file.endsWith(".mjs")) continue;
   const serverSource = await readFile(resolve(serverDirectory, file), "utf8");
+  const runtimePackages = findRuntimePackageLoads(serverSource);
   assert(
-    !/^\s*import\s+.*?\s+from\s+["'](?!node:|\.)/m.test(serverSource),
-    `${file} must not import runtime packages`,
+    runtimePackages.length === 0,
+    `${file} must not load runtime packages: ${runtimePackages.join(", ")}`,
   );
 }
 
