@@ -103,6 +103,13 @@ test environment.
 | `npm run check` | Run formatting, linting, tests, and coverage. |
 | `npm run audit` | Fail on high-severity npm advisories. |
 
+The full coverage gate needs `TEST_DATABASE_URL` pointing to a **disposable**
+PostgreSQL 17 database with database/role creation privileges. SQL suites create
+synthetic accounts and databases; never point this at production. Set
+`DATABASE_SSL=disable` only for a local test database. Without that URL,
+`npm test` skips SQL suites and is not the release gate. CI runs the full gate
+with its own PostgreSQL service.
+
 Changes must go through a pull request and pass `CI / verify` and
 `Security / secrets` before merging to `main`.
 
