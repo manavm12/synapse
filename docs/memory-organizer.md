@@ -40,7 +40,8 @@ The injected API contract is `structured(stage, prompt, schema, { signal }) ->
 { value, model, usage: { input_tokens, output_tokens } }`. Stages are `extract`,
 `reconcile`, and `review`. The production adapter calls the
 [Responses API with strict structured output](https://developers.openai.com/api/docs/guides/structured-outputs),
-`store: false`, disabled truncation, no tools, a response byte limit and a deadline
+`store: false`, explicit standard service (`service_tier: "default"`), disabled
+truncation, no tools, a response byte limit and a deadline
 covering fetch and body reads. Provider error bodies and credentials are never
 copied into errors or audit records. Cancellation aborts active requests.
 

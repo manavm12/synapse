@@ -264,6 +264,7 @@ test("real API adapter uses strict Responses output, store false and bounded req
   assert.equal(requests[0].url, "https://api.openai.com/v1/responses");
   assert.equal(requests[0].redirect, "error");
   assert.equal(request.store, false);
+  assert.equal(request.service_tier, "default");
   assert.equal(request.truncation, "disabled");
   assert.equal(request.text.format.strict, true);
   assert.equal(request.max_output_tokens, 8000);

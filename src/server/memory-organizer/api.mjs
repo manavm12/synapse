@@ -120,6 +120,7 @@ export function createMemoryInferenceAPI({
                 signal: controller.signal,
                 body: JSON.stringify({
                   model: selectedModel,
+                  service_tier: "default",
                   store: false,
                   truncation: "disabled",
                   input: [{ role: "user", content: prompt }],
