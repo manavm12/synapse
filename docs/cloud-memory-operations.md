@@ -296,9 +296,24 @@ that session until investigated. Disabling the worker preserves captures and
 queued jobs; it does not manufacture organized results.
 
 Existing revisions predating queue integration are not automatically backfilled,
-and an exact capture replay does not create a missing job. Plan any historical
-backfill explicitly before claiming all past memory has been organized. Exact
-source reads can still access an authorized revision without a derived ledger.
+and an exact capture replay does not create a missing job. Use the operator-only
+bounded backfill command with `DATABASE_ADMIN_URL` and verified TLS configured:
+
+```sh
+npm run memory:backfill -- --owner-id <owner-uuid> --project-id <project-uuid> --limit 100
+# Review the dry-run IDs/counts, authorize inference cost, then explicitly enqueue:
+npm run memory:backfill -- --owner-id <owner-uuid> --project-id <project-uuid> --limit 100 --apply
+```
+
+The default is a read-only preview, both UUIDs are required, and the batch limit
+is 1–1000. The active owner/project relationship is verified in the database.
+Apply adds only missing processor-v1 jobs; repeated/concurrent runs do not reset
+existing queued, completed, or failed jobs. It never starts a worker or model
+request, but an already-running worker can consume newly enqueued jobs and incur
+cost. Pause that worker before backfilling if inference has not been authorized.
+Repeat bounded batches until `has_more` is false. Failed older jobs still require
+separate investigation and can block later revisions of the same session.
+Exact source reads remain available without a derived ledger.
 
 ## 7. Release gate
 

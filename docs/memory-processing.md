@@ -8,6 +8,10 @@ rolled-back capture creates no job. Existing response fields remain compatible;
 the optional `revision_id` also identifies the immutable source for retrieval.
 Capture performs no inference. Revisions saved before queue integration are not
 automatically backfilled, including when an old capture is replayed exactly.
+Use the explicit, dry-run-first `npm run memory:backfill -- --owner-id <UUID>
+--project-id <UUID>` operator command described in the
+[operations runbook](cloud-memory-operations.md) for bounded historical enqueue.
+It never resets existing jobs or invokes inference itself.
 
 ## Worker boundary
 

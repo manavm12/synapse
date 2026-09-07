@@ -13,6 +13,7 @@
     "check": "biome check . && npm run test:coverage",
     "configure:plugin": "node scripts/configure-plugin.mjs",
     "db:migrate": "node scripts/migrate.mjs",
+    "memory:backfill": "node scripts/backfill-memory.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",

@@ -39,6 +39,11 @@ import acknowledgement in one SQLite transaction. A staged message cannot be
 sent to Codex until the server confirms ownership by this installation.
 
 Native task creation and continuation are fenced on disk before the mutation.
+Immediately before issuing either mutation, routing checks the current local
+binding and fresh cloud authorization, then rechecks the local binding after
+the network response. Disconnecting or rebinding during that check denies the
+stale reservation. Revocation after the final check cannot atomically undo a
+native mutation that is already being issued.
 If Codex may have accepted a mutation but its response is lost or malformed,
 the job becomes `needs_attention`; Synapse does not automatically repeat it.
 Receipt upload failures remain in a local outbox for a later prompt. A cloud
@@ -51,3 +56,11 @@ Codex already accepted:
 ```sh
 npm run synapse -- receiver disconnect .
 ```
+
+Disconnect also cancels an unapproved pairing or an installation whose browser
+approval succeeded but whose local `finish` failed. Cancellation is repeat-safe
+and prevents delayed approval of that pairing. If the network or credential
+cleanup fails, rerun disconnect; durable local recovery state is retained.
+Cancelled credentials cannot be reused for enrollment. A fresh connect creates
+a new credential and installation-scoped conversation channels; old assigned
+jobs and native task bindings are not silently transferred.

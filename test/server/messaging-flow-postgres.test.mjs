@@ -33,6 +33,7 @@ const ssl = process.env.DATABASE_SSL === "disable" ? false : undefined;
 
 test("signup, username send, receiver enrollment, local delivery and cloud receipts compose", {
   skip: !adminUrl,
+  timeout: 60_000,
 }, async (t) => {
   // Only this randomly named database and temporary directory are mutated.
   // Auth, Keychain and native Codex transport are explicit test doubles.
@@ -255,9 +256,10 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   );
   assert.equal(delivery.jobId, sent.message_id);
   const nativeCalls = [];
-  await routeDelivery(delivery, {
+  const routeOptions = {
     ownerThreadId: "fixture-owner",
     turnId: "fixture-turn",
+    cloudAuthorizationOptions: options,
     createClient: () => ({
       async start() {},
       async close() {},
@@ -283,7 +285,8 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     }),
     markIssued: (input) => markNativeMutationIssued(input, inboxOptions),
     acknowledge: (input) => acknowledgeMessage(input, inboxOptions),
-  });
+  };
+  await routeDelivery(delivery, routeOptions);
   assert.deepEqual(
     nativeCalls.map(({ name }) => name),
     ["list_projects", "create_thread"],
@@ -333,7 +336,33 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   );
   assert.equal(next.jobId, later.message_id);
   assert.equal(next.channel.threadId, "fixture-native-child");
+  // Hold a real successful identity response while local+remote revocation wins.
+  const identityRead = Promise.withResolvers();
+  const resumeIdentity = Promise.withResolvers();
+  const racingRoute = routeDelivery(next, {
+    ...routeOptions,
+    cloudAuthorizationOptions: {
+      ...options,
+      createReceiverClient: (clientOptions) =>
+        new ReceiverClient({
+          ...clientOptions,
+          fetchImpl: async (url, init) => {
+            const response = await fetch(url, init);
+            identityRead.resolve();
+            await resumeIdentity.promise;
+            return response;
+          },
+        }),
+    },
+  });
+  const blockedRace = assert.rejects(
+    racingRoute,
+    /authorization is no longer current/,
+  );
+  await identityRead.promise;
   await disconnectReceiver({}, options);
+  resumeIdentity.resolve();
+  await blockedRace;
   assert.equal(secrets.size, 0);
   assert.equal((await receiver.disconnect()).disconnected, true);
   await assert.rejects(receiver.claim(), (error) => error.status === 401);
@@ -346,4 +375,98 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   });
   assert.equal(disconnected.status, "needs_attention");
   assert.equal(disconnected.failure_reason, "receiver_disconnected");
+  // A previously authorized reservation must not outlive local revocation.
+  await assert.rejects(
+    routeDelivery(next, routeOptions),
+    /authorization is no longer current/,
+  );
+  assert.deepEqual(
+    nativeCalls.map(({ name }) => name),
+    ["list_projects", "create_thread", "list_projects", "list_projects"],
+  );
+
+  // Approval may succeed remotely while local completion rejects the binding.
+  const localRegistry = new DatabaseSync(registryPath);
+  localRegistry
+    .prepare("UPDATE projects SET alias = ? WHERE root = ?")
+    .run("wrong-alias", root);
+  localRegistry.close();
+  const mismatched = await startReceiverConnection(
+    { serverUrl: baseUrl },
+    options,
+  );
+  assert.equal(
+    (
+      await post(
+        `/auth/receiver-pairings/${mismatched.pairingId}/approve`,
+        "session:bob",
+      )
+    ).status,
+    200,
+  );
+  await assert.rejects(finishReceiverConnection({}, options), /alias/);
+  await disconnectReceiver({}, options);
+  assert.equal(secrets.size, 0);
+  const resetRegistry = new DatabaseSync(registryPath);
+  resetRegistry
+    .prepare("UPDATE projects SET alias = ? WHERE root = ?")
+    .run("demo", root);
+  resetRegistry.close();
+
+  // Cancelling before approval must prevent a delayed browser approval as well.
+  const cancelled = await startReceiverConnection(
+    { serverUrl: baseUrl },
+    options,
+  );
+  await disconnectReceiver({}, options);
+  assert.notEqual(
+    (
+      await post(
+        `/auth/receiver-pairings/${cancelled.pairingId}/approve`,
+        "session:bob",
+      )
+    ).status,
+    200,
+  );
+
+  const replacementPending = await startReceiverConnection(
+    { serverUrl: baseUrl },
+    options,
+  );
+  assert.equal(
+    (
+      await post(
+        `/auth/receiver-pairings/${replacementPending.pairingId}/approve`,
+        "session:bob",
+      )
+    ).status,
+    200,
+  );
+  const replacement = await finishReceiverConnection({}, options);
+  assert.notEqual(
+    replacement.identity.installationId,
+    connection.identity.installationId,
+  );
+  const afterReconnect = await call("alice", "send_message", {
+    ...request,
+    request_id: randomUUID(),
+    conversation_id: sent.conversation_id,
+  });
+  assert.equal(afterReconnect.sequence, 4);
+  const replacementSync = await syncReceiver(
+    { projectRoot: root },
+    syncOptions,
+  );
+  assert.equal(replacementSync.activated, 1);
+  const replacementDelivery = reserveNextMessage(
+    { projectRoot: root, ownerSessionId: "fixture-owner" },
+    { ...inboxOptions, receiverIdentity: replacementSync.identity },
+  );
+  assert.equal(replacementDelivery.jobId, afterReconnect.message_id);
+  assert.notEqual(replacementDelivery.channelId, next.channelId);
+  assert.equal(replacementDelivery.channel.threadId, null);
+  // Old assigned work is never silently transferred to the new installation.
+  assert.equal(getJob(later.message_id, inboxOptions).status, "routing");
+  await disconnectReceiver({}, options);
+  assert.equal(secrets.size, 0);
 });

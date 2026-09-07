@@ -25,8 +25,11 @@ requires dedicated credentials and explicit models.
 The setup login-output bug, database URL TLS override, queue scheduling/locking
 findings, core source-replay checks, messaging import authorization/quota/expired
 revocation findings, and retrieval discovery/historical-topic findings have
-corrections integrated. Receiver findings and combined end-to-end acceptance
-remain under parent review. Passing a feature's tests is not final acceptance.
+corrections integrated. Independent re-review cleared the receiver's local
+identity, dispatch/revocation races, reconnect isolation, bounded response reads,
+and resumable cancellation, plus backend atomic approval/cancellation. The
+combined disposable-Postgres gate passed 182 tests without failures or skips.
+This is local acceptance; live deployment gates below remain outstanding.
 
 Local fixtures, real subprocess tests, and disposable Postgres are distinct from
 live OAuth/email, real macOS/native-task operation, and paid semantic-quality
@@ -64,8 +67,8 @@ original `codex/local-memory-organizer` worktree unchanged.
 | Finish Synapse setup and diagnostics | `01a07ab5-5c30-7e80-ad9a-9cc106876b83` | `codex/local-setup-doctor` / `cc3647d`, `8d1ddef` |
 | Build Synapse memory processing queue | `01a07ab5-5c30-7e80-ad9a-9cb9a912f923` | `codex/memory-processing-queue` / `cd8584f`, `5db01dd` |
 | Prepare Synapse memory organizer core | `01a07ab5-5cdc-7f21-a1a6-29eca009d27d` | `codex/deterministic-organizer-core` / `01c3392`, `38b73e8`, `480e602`, `2501fc2` |
-| Implement Synapse cloud messaging backend | `01a07abf-8c82-7b90-adf3-59d2684b992a` | `codex/messaging-backend` / `0c5af7c`, `2c15faf`, `c5f6ffc` |
-| Implement Synapse receiver client and hooks | `01a07abf-8bda-7623-8ce1-781b69e05e76` | `codex/local-receiver-client` / `ba78f2e`; corrections pending |
+| Implement Synapse cloud messaging backend | `01a07abf-8c82-7b90-adf3-59d2684b992a` | `codex/messaging-backend` / `0c5af7c`, `2c15faf`, `c5f6ffc`, `92b73db` |
+| Implement Synapse receiver client and hooks | `01a07abf-8bda-7623-8ce1-781b69e05e76` | `codex/local-receiver-client` / `ba78f2e`, `93573ed`, `136dc5e`, `26b4628` |
 | Implement Synapse cloud memory retrieval | `01a07ac2-52f4-7a00-853e-16be4acb5588` | `codex/cloud-memory-retrieval` / `0ace619`, `670e1fd` |
 
 Independent reviews cover feature boundaries and the combined composition.
@@ -142,11 +145,14 @@ Never print credentials or expose them through command arguments.
    `provisioning`, `delivered`, `needs_attention`. Deduplicate stable event UUIDs,
    validate installation ownership and transitions, and never regress delivered.
    No native Codex IDs, paths, or message contents belong in these receipts.
-9. `POST /receiver/disconnect` disables/revokes this receiver and returns
+9. `POST /receiver/disconnect` cancels the known pairing and revokes any
+   installation, including approval that local completion did not record. It returns
    `{disconnected: true}`. A matching expired/revoked credential can only repeat
    revocation, not claim or read jobs. Unfinished assigned jobs become
    `needs_attention` without changing installation ownership. This does not
    cancel already-dispatched tasks or automatically hand work to another device.
+   Cancellation and approval lock pairing before installation; cancelled
+   pairings cannot be approved or reuse their credential for another enrollment.
 
 `ReceiverIdentity` is `{installation_id, user_id, username, project_id,
 project_alias, expires_at, enabled: true}`. UUIDs and names come from the server.
@@ -170,6 +176,12 @@ record in one SQLite transaction. Stage -> routable only after cloud confirms
 that same installation. Native status changes and receipt outbox entries also
 commit together. An ambiguous native mutation response requires reconciliation,
 not automatic replay. Network failure must not block the owner prompt.
+Local conversation channels include the installation ID, so new installations
+can receive future messages without inheriting old jobs or native task bindings.
+
+Historical captures have an operator-only, dry-run-first bounded backfill command;
+it requires exact owner/project scope and never resets existing jobs or invokes
+inference. A separately enabled worker may consume newly enqueued jobs.
 
 Use existing sender OAuth for MCP `send_message`, `get_message_status`, and
 `list_inbox`. Keep `get_identity` and `save_session_memory` compatible. Sender
