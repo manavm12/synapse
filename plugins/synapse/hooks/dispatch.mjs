@@ -59,10 +59,10 @@ try {
 }
 if (gitDirectory !== commonDirectory) process.exit(0);
 
-let receiverAuthorized = false;
+let receiverIdentity = null;
 try {
   const receiver = await syncReceiver({ projectRoot });
-  receiverAuthorized = receiver.authorized;
+  receiverIdentity = receiver.authorized ? receiver.identity : null;
 } catch {
   // Receiver transport is best-effort and must never delay or block the owner prompt.
 }
@@ -72,7 +72,7 @@ const delivery = reserveNextMessage(
     projectRoot,
     ownerSessionId: input.session_id,
   },
-  { allowCloud: receiverAuthorized },
+  { receiverIdentity },
 );
 if (!delivery) process.exit(0);
 
@@ -85,6 +85,7 @@ try {
       typeof input.turn_id === "string" && SAFE_SESSION_ID.test(input.turn_id)
         ? input.turn_id
         : undefined,
+    receiverIdentity,
   });
 } catch (error) {
   process.stderr.write(

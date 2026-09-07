@@ -12,6 +12,8 @@ import {
   getLocalProject,
   getReceiverConnection,
   markReceiverDisconnected,
+  markReceiverDisconnecting,
+  markReceiverRevoked,
   receiverRegistryPath,
   recordReceiverPairing,
   removeReceiverConnection,
@@ -46,6 +48,28 @@ function validateHttpsUrl(value, env, label) {
   }
 }
 
+async function revokeReceiverConnection(
+  connection,
+  { env, registryPath, secretStore, createClient },
+) {
+  if (connection.status !== "revoked") {
+    const credential = await secretStore.get(connection.credentialAccount);
+    markReceiverDisconnecting(connection.connectionId, { path: registryPath });
+    const client = createClient({
+      serverUrl: connection.serverUrl,
+      credential,
+      allowInsecureHttp: allowInsecure(env),
+    });
+    const result = await client.disconnect();
+    if (result.disconnected !== true) {
+      throw new Error("Receiver disconnect was not confirmed");
+    }
+    markReceiverRevoked(connection.connectionId, { path: registryPath });
+  }
+  await secretStore.delete(connection.credentialAccount);
+  markReceiverDisconnected(connection.connectionId, { path: registryPath });
+}
+
 export async function startReceiverConnection(
   { project = ".", cwd = process.cwd(), serverUrl },
   {
@@ -73,22 +97,31 @@ export async function startReceiverConnection(
     );
   }
   let connection = getReceiverConnection(projectRoot, { path: registryPath });
+  if (connection && connection.serverUrl !== serverUrl) {
+    throw new Error(`Receiver enrollment uses ${connection.serverUrl}`);
+  }
   const credentialExpired =
     connection?.identity?.expiresAt &&
     Date.parse(connection.identity.expiresAt) <= now();
-  if (connection?.status === "disconnected" || credentialExpired) {
-    if (credentialExpired)
-      await secretStore.delete(connection.credentialAccount);
+  let credential;
+  if (credentialExpired) {
+    await revokeReceiverConnection(connection, {
+      env,
+      registryPath,
+      secretStore,
+      createClient,
+    });
+    removeReceiverConnection(connection.connectionId, { path: registryPath });
+    connection = null;
+  } else if (["disconnecting", "revoked"].includes(connection?.status)) {
+    throw new Error(
+      "Receiver disconnect is incomplete; rerun receiver disconnect before connecting",
+    );
+  } else if (connection?.status === "disconnected") {
     removeReceiverConnection(connection.connectionId, { path: registryPath });
     connection = null;
   }
-  let credential;
   if (connection) {
-    if (connection.serverUrl !== serverUrl) {
-      throw new Error(
-        `Pending receiver enrollment uses ${connection.serverUrl}`,
-      );
-    }
     credential = await secretStore.get(connection.credentialAccount);
   } else {
     const connectionId = createId();
@@ -208,16 +241,14 @@ export async function disconnectReceiver(
   const projectRoot = await resolveRoot(project, cwd);
   const connection = getReceiverConnection(projectRoot, { path: registryPath });
   if (!connection) throw new Error("No receiver connection for this project");
-  const credential = await secretStore.get(connection.credentialAccount);
-  const client = createClient({
-    serverUrl: connection.serverUrl,
-    credential,
-    allowInsecureHttp: allowInsecure(env),
+  if (connection.status === "disconnected") {
+    return { disconnected: true, projectRoot };
+  }
+  await revokeReceiverConnection(connection, {
+    env,
+    registryPath,
+    secretStore,
+    createClient,
   });
-  const result = await client.disconnect();
-  if (result.disconnected !== true)
-    throw new Error("Receiver disconnect was not confirmed");
-  await secretStore.delete(connection.credentialAccount);
-  markReceiverDisconnected(connection.connectionId, { path: registryPath });
   return { disconnected: true, projectRoot };
 }

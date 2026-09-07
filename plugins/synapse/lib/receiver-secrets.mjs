@@ -8,7 +8,11 @@ const SAFE_CREDENTIAL = /^syn_recv_[a-zA-Z0-9_-]{43}$/;
 
 function collect(
   child,
-  { input, timeoutMs = DEFAULT_KEYCHAIN_TIMEOUT_MS } = {},
+  {
+    input,
+    timeoutMs = DEFAULT_KEYCHAIN_TIMEOUT_MS,
+    allowedExitCodes = [],
+  } = {},
 ) {
   return new Promise((resolvePromise, reject) => {
     const stdout = [];
@@ -42,7 +46,7 @@ function collect(
     child.once("close", (code) => {
       const output = Buffer.concat(stdout).toString("utf8");
       finish(() =>
-        code === 0
+        code === 0 || allowedExitCodes.includes(code)
           ? resolvePromise(output)
           : reject(new Error("macOS Keychain operation failed")),
       );
@@ -133,6 +137,9 @@ export class MacOsKeychainStore {
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
-    await collect(child, { timeoutMs: this.timeoutMs });
+    await collect(child, {
+      timeoutMs: this.timeoutMs,
+      allowedExitCodes: [44],
+    });
   }
 }

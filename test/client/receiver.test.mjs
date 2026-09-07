@@ -8,6 +8,7 @@ import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 
 import {
+  acceptProvisioning,
   acknowledgeMessage,
   confirmCloudImport,
   getJob,
@@ -31,6 +32,7 @@ import {
 import {
   beginReceiverConnection,
   completeReceiverConnection,
+  getReceiverConnection,
   recordReceiverPairing,
 } from "../../plugins/synapse/lib/receiver-registry.mjs";
 import {
@@ -145,7 +147,7 @@ test("cloud import is staged atomically, deduplicated, and ordered by server seq
   assert.equal(
     reserveNextMessage(
       { projectRoot: "/project", ownerSessionId: "owner-1" },
-      { path: inbox, allowCloud: true },
+      { path: inbox, receiverIdentity: identity },
     ),
     null,
   );
@@ -166,7 +168,11 @@ test("cloud import is staged atomically, deduplicated, and ordered by server seq
   );
   const first = reserveNextMessage(
     { projectRoot: "/project", ownerSessionId: "owner-1" },
-    { path: inbox, allowCloud: true, createDeliveryId: () => "delivery-1" },
+    {
+      path: inbox,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-1",
+    },
   );
   assert.equal(first.jobId, earlier.messageId);
   assert.match(first.nativePrompt, /from @alice/);
@@ -183,7 +189,11 @@ test("cloud import is staged atomically, deduplicated, and ordered by server seq
   );
   const second = reserveNextMessage(
     { projectRoot: "/project", ownerSessionId: "owner-1" },
-    { path: inbox, allowCloud: true, createDeliveryId: () => "delivery-2" },
+    {
+      path: inbox,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-2",
+    },
   );
   assert.equal(second.jobId, later.messageId);
   assert.equal(second.channel.threadId, "thread-1");
@@ -195,6 +205,107 @@ test("cloud import is staged atomically, deduplicated, and ordered by server seq
     () => stage(inbox, { ...earlier, message: "changed" }, 7),
     /Conflicting cloud payload/,
   );
+});
+
+test("overlapping prompts do not invalidate a live issued native mutation", async () => {
+  const { inbox } = await paths();
+  const message = cloudMessage();
+  stage(inbox, message);
+  confirmCloudImport(
+    { messageId: message.messageId, installationId: identity.installationId },
+    { path: inbox },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
+    {
+      path: inbox,
+      now: () => 10,
+      leaseMs: 100,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-1",
+    },
+  );
+  markNativeMutationIssued(
+    {
+      jobId: delivery.jobId,
+      deliveryId: delivery.deliveryId,
+      receiverIdentity: identity,
+    },
+    { path: inbox, now: () => 11 },
+  );
+  assert.equal(
+    reserveNextMessage(
+      { projectRoot: "/project", ownerSessionId: "owner-2" },
+      { path: inbox, now: () => 12, receiverIdentity: identity },
+    ),
+    null,
+  );
+  assert.equal(getJob(message.messageId, { path: inbox }).status, "routing");
+  acceptProvisioning(
+    {
+      jobId: delivery.jobId,
+      deliveryId: delivery.deliveryId,
+      clientThreadId: "client-thread-1",
+      projectId: "codex-project",
+    },
+    { path: inbox, now: () => 13 },
+  );
+  assert.equal(getJob(message.messageId, { path: inbox }).status, "accepted");
+});
+
+test("expired pre-mutation cloud intent can move to a newly authorized owner", async () => {
+  const { inbox } = await paths();
+  const message = cloudMessage();
+  stage(inbox, message);
+  confirmCloudImport(
+    { messageId: message.messageId, installationId: identity.installationId },
+    { path: inbox },
+  );
+  reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
+    {
+      path: inbox,
+      now: () => 10,
+      leaseMs: 20,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-old",
+    },
+  );
+  const reassigned = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-2" },
+    {
+      path: inbox,
+      now: () => 31,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-new",
+    },
+  );
+  assert.equal(reassigned.ownerSessionId, "owner-2");
+  assert.equal(reassigned.deliveryId, "delivery-new");
+});
+
+test("fresh authorization cannot route an old installation's imported job", async () => {
+  const { inbox } = await paths();
+  const message = cloudMessage();
+  stage(inbox, message);
+  confirmCloudImport(
+    { messageId: message.messageId, installationId: identity.installationId },
+    { path: inbox },
+  );
+  const replacement = {
+    ...identity,
+    installationId: "99999999-9999-4999-8999-999999999999",
+    userId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    projectId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  };
+  assert.equal(
+    reserveNextMessage(
+      { projectRoot: "/project", ownerSessionId: "owner-new" },
+      { path: inbox, receiverIdentity: replacement },
+    ),
+    null,
+  );
+  assert.equal(getJob(message.messageId, { path: inbox }).status, "pending");
 });
 
 test("sync reconciles an ambiguous import response without replaying the local job", async () => {
@@ -328,7 +439,11 @@ test("revoked or unavailable sync cannot authorize dispatch and failed receipts 
   }
   const delivery = reserveNextMessage(
     { projectRoot: root, ownerSessionId: "owner-1" },
-    { path: inbox, allowCloud: true, createDeliveryId: () => "delivery-1" },
+    {
+      path: inbox,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-1",
+    },
   );
   acknowledgeMessage(
     {
@@ -365,7 +480,7 @@ test("revoked or unavailable sync cannot authorize dispatch and failed receipts 
   assert.equal(
     reserveNextMessage(
       { projectRoot: root, ownerSessionId: "owner-2" },
-      { path: inbox, allowCloud: false },
+      { path: inbox },
     ),
     null,
   );
@@ -491,7 +606,11 @@ test("delivery receipts remain in an outbox until the server accepts their stabl
   );
   const delivery = reserveNextMessage(
     { projectRoot: "/project", ownerSessionId: "owner-1" },
-    { path: inbox, allowCloud: true, createDeliveryId: () => "delivery-1" },
+    {
+      path: inbox,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-1",
+    },
   );
   acknowledgeMessage(
     {
@@ -522,10 +641,18 @@ test("an issued native mutation with an uncertain response is fenced from replay
   );
   const delivery = reserveNextMessage(
     { projectRoot: "/project", ownerSessionId: "owner-1" },
-    { path: inbox, allowCloud: true, createDeliveryId: () => "delivery-1" },
+    {
+      path: inbox,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-1",
+    },
   );
   markNativeMutationIssued(
-    { jobId: delivery.jobId, deliveryId: delivery.deliveryId },
+    {
+      jobId: delivery.jobId,
+      deliveryId: delivery.deliveryId,
+      receiverIdentity: identity,
+    },
     { path: inbox },
   );
   markNativeMutationUncertain(
@@ -540,7 +667,7 @@ test("an issued native mutation with an uncertain response is fenced from replay
   assert.equal(
     reserveNextMessage(
       { projectRoot: "/project", ownerSessionId: "owner-1" },
-      { path: inbox, allowCloud: true },
+      { path: inbox, receiverIdentity: identity },
     ),
     null,
   );
@@ -571,7 +698,11 @@ test("the native router classifies a cloud mutation timeout as uncertain, not re
   );
   const delivery = reserveNextMessage(
     { projectRoot: "/project", ownerSessionId: "owner-1" },
-    { path: inbox, allowCloud: true, createDeliveryId: () => "delivery-1" },
+    {
+      path: inbox,
+      receiverIdentity: identity,
+      createDeliveryId: () => "delivery-1",
+    },
   );
   const client = {
     start: async () => {},
@@ -697,6 +828,40 @@ test("receiver HTTP auth stays in headers and localhost HTTP is opt-in", async (
   );
 });
 
+test("receiver HTTP deadline covers a stalled response body", async () => {
+  const client = new ReceiverClient({
+    serverUrl: "https://synapse.example",
+    credential: "syn_recv_secret",
+    timeoutMs: 20,
+    fetchImpl: async () =>
+      new Response(
+        new ReadableStream({
+          start() {},
+        }),
+        { status: 200 },
+      ),
+  });
+  await assert.rejects(client.getIdentity(), /timed out/);
+});
+
+test("receiver HTTP rejects an oversized body before buffering it", async () => {
+  const client = new ReceiverClient({
+    serverUrl: "https://synapse.example",
+    credential: "syn_recv_secret",
+    fetchImpl: async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      ),
+  });
+  await assert.rejects(client.getIdentity(), /response is too large/);
+});
+
 test("macOS Keychain writes the credential through stdin, never argv", async () => {
   const invocations = [];
   let written = "";
@@ -763,6 +928,83 @@ test("Keychain reads tolerate an ignored stdin stream and validate the result", 
     },
   });
   assert.equal(await store.get("receiver:one"), secret);
+});
+
+test("disconnect resumes after lost remote response and failed secret cleanup", async () => {
+  const { registry, root } = await paths();
+  const database = new DatabaseSync(registry);
+  database.exec(
+    "CREATE TABLE projects (alias TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE)",
+  );
+  database.prepare("INSERT INTO projects VALUES (?, ?)").run("demo", root);
+  database.close();
+  beginReceiverConnection(
+    {
+      connectionId: "connection-1",
+      projectRoot: root,
+      projectAlias: "demo",
+      serverUrl: "https://synapse.example",
+      credentialAccount: "receiver:connection-1",
+      credentialHash: "a".repeat(64),
+    },
+    { path: registry },
+  );
+  recordReceiverPairing(
+    {
+      connectionId: "connection-1",
+      pairingId: "pairing-1",
+      verificationUrl: "https://synapse.example/pair",
+      expiresAt: identity.expiresAt,
+    },
+    { path: registry },
+  );
+  completeReceiverConnection(
+    { connectionId: "connection-1", identity },
+    { path: registry },
+  );
+  let remoteCalls = 0;
+  let deleteCalls = 0;
+  const dependencies = {
+    registryPath: registry,
+    resolveRoot: async () => root,
+    secretStore: {
+      get: async () => `syn_recv_${"A".repeat(43)}`,
+      delete: async () => {
+        deleteCalls += 1;
+        if (deleteCalls === 1) throw new Error("Keychain temporarily locked");
+      },
+    },
+    createClient: () => ({
+      disconnect: async () => {
+        remoteCalls += 1;
+        if (remoteCalls === 1) throw new Error("response lost");
+        return { disconnected: true };
+      },
+    }),
+  };
+  await assert.rejects(
+    disconnectReceiver({ project: root }, dependencies),
+    /response lost/,
+  );
+  assert.equal(
+    getReceiverConnection(root, { path: registry }).status,
+    "disconnecting",
+  );
+  await assert.rejects(
+    disconnectReceiver({ project: root }, dependencies),
+    /Keychain temporarily locked/,
+  );
+  assert.equal(
+    getReceiverConnection(root, { path: registry }).status,
+    "revoked",
+  );
+  await disconnectReceiver({ project: root }, dependencies);
+  assert.equal(
+    getReceiverConnection(root, { path: registry }).status,
+    "disconnected",
+  );
+  assert.equal(remoteCalls, 2);
+  assert.equal(deleteCalls, 2);
 });
 
 test("enrollment stores only a credential hash locally and resumes completion", async () => {

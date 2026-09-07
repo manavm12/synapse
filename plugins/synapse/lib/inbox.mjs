@@ -223,7 +223,10 @@ function channelFromRow(row) {
   };
 }
 
-function deliveryFromRow(row, { retrying = false } = {}) {
+function deliveryFromRow(
+  row,
+  { retrying = false, receiverIdentity = null } = {},
+) {
   const deliveryMarker =
     row.marker_version === 1
       ? formatLegacyDeliveryMarker(row.id)
@@ -254,6 +257,7 @@ function deliveryFromRow(row, { retrying = false } = {}) {
     projectRoot: row.project_root,
     source: row.source,
     nativeMutationState: row.native_mutation_state,
+    receiverAuthorization: row.source === "cloud" ? receiverIdentity : null,
     cloud:
       row.source === "cloud"
         ? {
@@ -271,6 +275,14 @@ function deliveryFromRow(row, { retrying = false } = {}) {
         : null,
     channel: channelFromRow(row),
   };
+}
+
+function cloudIdentityMatches(row, identity) {
+  return (
+    identity?.installationId === row.receiver_installation_id &&
+    identity?.userId === row.recipient_user_id &&
+    identity?.projectId === row.recipient_project_id
+  );
 }
 
 const DELIVERY_SELECT = `
@@ -669,7 +681,7 @@ export function reserveNextMessage(
     now = Date.now,
     leaseMs = 5 * 60_000,
     createDeliveryId = randomUUID,
-    allowCloud = false,
+    receiverIdentity = null,
   } = {},
 ) {
   requireProjectRoot(projectRoot);
@@ -680,8 +692,9 @@ export function reserveNextMessage(
       const currentTime = now();
       const abandonedIssued = database
         .prepare(`SELECT * FROM jobs WHERE project_root = ? AND source = 'cloud'
-          AND status = 'routing' AND native_mutation_state = 'issued'`)
-        .all(projectRoot);
+          AND status = 'routing' AND native_mutation_state = 'issued'
+          AND lease_expires_at <= ?`)
+        .all(projectRoot, currentTime);
       for (const issued of abandonedIssued) {
         database
           .prepare(`UPDATE jobs SET status = 'uncertain', native_mutation_state = 'uncertain',
@@ -695,21 +708,48 @@ export function reserveNextMessage(
           errorCode: "native_response_uncertain",
         });
       }
+      database
+        .prepare(`UPDATE jobs SET status = 'pending', delivery_id = NULL,
+          lease_expires_at = NULL, owner_session_id = NULL,
+          native_mutation_state = NULL, updated_at = ?, last_error = NULL
+          WHERE project_root = ? AND source = 'cloud' AND status = 'routing'
+            AND native_mutation_state = 'intent' AND lease_expires_at <= ?
+            AND receiver_installation_id = ? AND recipient_user_id = ?
+            AND recipient_project_id = ?`)
+        .run(
+          currentTime,
+          projectRoot,
+          currentTime,
+          receiverIdentity?.installationId ?? "",
+          receiverIdentity?.userId ?? "",
+          receiverIdentity?.projectId ?? "",
+        );
       let job = database
         .prepare(`${DELIVERY_SELECT}
         WHERE jobs.project_root = ? AND jobs.owner_session_id = ?
           AND jobs.status = 'routing' AND jobs.lease_expires_at <= ?
-          AND (jobs.source = 'local' OR (? = 1 AND jobs.cloud_import_state = 'confirmed'))
+          AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
+            AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
+            AND jobs.recipient_project_id = ?))
           AND (jobs.source = 'local' OR jobs.native_mutation_state <> 'issued')
         ORDER BY jobs.created_at, jobs.id LIMIT 1
       `)
-        .get(projectRoot, ownerSessionId, currentTime, allowCloud ? 1 : 0);
+        .get(
+          projectRoot,
+          ownerSessionId,
+          currentTime,
+          receiverIdentity?.installationId ?? "",
+          receiverIdentity?.userId ?? "",
+          receiverIdentity?.projectId ?? "",
+        );
       const retrying = Boolean(job);
       if (!job) {
         job = database
           .prepare(`${DELIVERY_SELECT}
           WHERE jobs.project_root = ? AND jobs.status = 'pending'
-            AND (jobs.source = 'local' OR (? = 1 AND jobs.cloud_import_state = 'confirmed'))
+            AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
+              AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
+              AND jobs.recipient_project_id = ?))
             AND NOT EXISTS (SELECT 1 FROM jobs AS active
               WHERE active.channel_id = jobs.channel_id AND active.status IN (${ACTIVE_STATUSES}))
             AND NOT EXISTS (SELECT 1 FROM jobs AS earlier
@@ -719,7 +759,12 @@ export function reserveNextMessage(
                 AND earlier.status <> 'completed')
           ORDER BY jobs.created_at, jobs.id LIMIT 1
         `)
-          .get(projectRoot, allowCloud ? 1 : 0);
+          .get(
+            projectRoot,
+            receiverIdentity?.installationId ?? "",
+            receiverIdentity?.userId ?? "",
+            receiverIdentity?.projectId ?? "",
+          );
       }
       if (!job) return null;
       if (!retrying) {
@@ -740,7 +785,10 @@ export function reserveNextMessage(
           currentTime,
           job.id,
         );
-      return deliveryFromRow(job, { retrying });
+      return deliveryFromRow(job, {
+        retrying,
+        receiverIdentity: job.source === "cloud" ? receiverIdentity : null,
+      });
     });
   } finally {
     database.close();
@@ -1104,7 +1152,7 @@ export function retryRoutingMessage(
 }
 
 export function getReservedDelivery(
-  { jobId, deliveryId },
+  { jobId, deliveryId, receiverIdentity = null },
   { path = inboxPath() } = {},
 ) {
   requireId(jobId, "job ID");
@@ -1114,14 +1162,23 @@ export function getReservedDelivery(
     const row = database
       .prepare(`${DELIVERY_SELECT} WHERE jobs.id = ? AND jobs.delivery_id = ?`)
       .get(jobId, deliveryId);
-    return row?.status === "routing" ? deliveryFromRow(row) : null;
+    if (row?.status !== "routing") return null;
+    if (
+      row.source === "cloud" &&
+      !cloudIdentityMatches(row, receiverIdentity)
+    ) {
+      return null;
+    }
+    return deliveryFromRow(row, {
+      receiverIdentity: row.source === "cloud" ? receiverIdentity : null,
+    });
   } finally {
     database.close();
   }
 }
 
 export function markNativeMutationIssued(
-  { jobId, deliveryId },
+  { jobId, deliveryId, receiverIdentity = null },
   { path = inboxPath(), now = Date.now } = {},
 ) {
   requireId(jobId, "job ID");
@@ -1137,6 +1194,9 @@ export function markNativeMutationIssued(
         throw new Error(`Stale native mutation for job ${jobId}`);
       }
       if (job.source !== "cloud") return { jobId, source: "local" };
+      if (!cloudIdentityMatches(job, receiverIdentity)) {
+        throw new Error(`Receiver identity mismatch for cloud job ${jobId}`);
+      }
       if (job.native_mutation_state !== "intent") {
         throw new Error(
           `Cloud job ${jobId} has no durable native mutation intent`,

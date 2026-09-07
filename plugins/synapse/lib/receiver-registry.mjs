@@ -212,6 +212,39 @@ export function markReceiverDisconnected(
   }
 }
 
+export function markReceiverDisconnecting(
+  connectionId,
+  { path = receiverRegistryPath(), now = Date.now } = {},
+) {
+  const database = openRegistry(path);
+  try {
+    const result = database
+      .prepare(`UPDATE receiver_connections SET status = 'disconnecting',
+        updated_at = ? WHERE connection_id = ? AND status IN ('connected', 'disconnecting')`)
+      .run(now(), connectionId);
+    if (result.changes !== 1) throw new Error("Receiver is not connected");
+  } finally {
+    database.close();
+  }
+}
+
+export function markReceiverRevoked(
+  connectionId,
+  { path = receiverRegistryPath(), now = Date.now } = {},
+) {
+  const database = openRegistry(path);
+  try {
+    const result = database
+      .prepare(`UPDATE receiver_connections SET status = 'revoked',
+        updated_at = ? WHERE connection_id = ? AND status IN ('disconnecting', 'revoked')`)
+      .run(now(), connectionId);
+    if (result.changes !== 1)
+      throw new Error("Receiver revocation is not pending");
+  } finally {
+    database.close();
+  }
+}
+
 export function removeReceiverConnection(
   connectionId,
   { path = receiverRegistryPath() } = {},

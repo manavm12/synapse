@@ -21,10 +21,54 @@ function requireHttps(serverUrl, allowInsecureHttp) {
   return url;
 }
 
-async function readJson(response) {
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+async function readJson(response, signal) {
+  const declaredLength = Number.parseInt(
+    response.headers?.get?.("content-length") ?? "",
+    10,
+  );
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => {});
     throw new ReceiverProtocolError("Receiver response is too large");
+  }
+  const reader = response.body?.getReader();
+  let text;
+  if (reader) {
+    const chunks = [];
+    let size = 0;
+    const aborted = new Promise((_, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason ?? new Error("Receiver request aborted"));
+        return;
+      }
+      signal.addEventListener(
+        "abort",
+        () => reject(signal.reason ?? new Error("Receiver request aborted")),
+        { once: true },
+      );
+    });
+    try {
+      while (true) {
+        const { done, value } = await Promise.race([reader.read(), aborted]);
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_RESPONSE_BYTES) {
+          await reader.cancel().catch(() => {});
+          throw new ReceiverProtocolError("Receiver response is too large");
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } catch (error) {
+      await reader.cancel(error).catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    text = Buffer.concat(chunks, size).toString("utf8");
+  } else {
+    // A standards-compliant Response exposes any non-empty body as a stream.
+    // Treat a missing stream as an empty body instead of falling back to
+    // response.text(), which cannot enforce the byte limit before buffering.
+    text = "";
   }
   if (!text) return {};
   try {
@@ -133,9 +177,8 @@ export class ReceiverClient {
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response;
     try {
-      response = await this.fetchImpl(new URL(path, this.baseUrl), {
+      const response = await this.fetchImpl(new URL(path, this.baseUrl), {
         method,
         headers: {
           accept: "application/json",
@@ -148,7 +191,30 @@ export class ReceiverClient {
         redirect: "error",
         signal: controller.signal,
       });
+      const result = await readJson(response, controller.signal);
+      if (!result || Array.isArray(result) || typeof result !== "object") {
+        throw new ReceiverProtocolError(
+          "Receiver returned an invalid JSON object",
+        );
+      }
+      if (!response.ok) {
+        throw new ReceiverHttpError(
+          `Receiver request failed with HTTP ${response.status}`,
+          {
+            status: response.status,
+            code: typeof result?.code === "string" ? result.code : undefined,
+          },
+        );
+      }
+      return { ...result, statusCode: response.status };
     } catch (error) {
+      if (
+        error instanceof ReceiverHttpError ||
+        error instanceof ReceiverProtocolError ||
+        error instanceof ReceiverNetworkError
+      ) {
+        throw error;
+      }
       const timedOut = controller.signal.aborted;
       throw new ReceiverNetworkError(
         timedOut
@@ -159,21 +225,5 @@ export class ReceiverClient {
     } finally {
       clearTimeout(timer);
     }
-    const result = await readJson(response);
-    if (!result || Array.isArray(result) || typeof result !== "object") {
-      throw new ReceiverProtocolError(
-        "Receiver returned an invalid JSON object",
-      );
-    }
-    if (!response.ok) {
-      throw new ReceiverHttpError(
-        `Receiver request failed with HTTP ${response.status}`,
-        {
-          status: response.status,
-          code: typeof result?.code === "string" ? result.code : undefined,
-        },
-      );
-    }
-    return { ...result, statusCode: response.status };
   }
 }

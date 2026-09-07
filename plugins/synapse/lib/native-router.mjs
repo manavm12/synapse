@@ -72,6 +72,7 @@ export async function routeDelivery(
         markIssued({
           jobId: delivery.jobId,
           deliveryId: delivery.deliveryId,
+          receiverIdentity: delivery.receiverAuthorization,
         });
         mutationIssued = true;
       }
@@ -97,6 +98,7 @@ export async function routeDelivery(
       markIssued({
         jobId: delivery.jobId,
         deliveryId: delivery.deliveryId,
+        receiverIdentity: delivery.receiverAuthorization,
       });
       mutationIssued = true;
     }
@@ -140,7 +142,7 @@ export async function routeDelivery(
 }
 
 export async function runReservedDelivery(
-  { jobId, deliveryId, ownerThreadId, turnId },
+  { jobId, deliveryId, ownerThreadId, turnId, receiverIdentity = null },
   {
     load = getReservedDelivery,
     route = routeDelivery,
@@ -148,7 +150,7 @@ export async function runReservedDelivery(
     uncertain = markNativeMutationUncertain,
   } = {},
 ) {
-  const delivery = load({ jobId, deliveryId });
+  const delivery = load({ jobId, deliveryId, receiverIdentity });
   if (!delivery) return null;
   try {
     return await route(delivery, { ownerThreadId, turnId });
