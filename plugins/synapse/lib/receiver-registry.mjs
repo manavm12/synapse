@@ -220,9 +220,12 @@ export function markReceiverDisconnecting(
   try {
     const result = database
       .prepare(`UPDATE receiver_connections SET status = 'disconnecting',
-        updated_at = ? WHERE connection_id = ? AND status IN ('connected', 'disconnecting')`)
+        updated_at = ? WHERE connection_id = ?
+          AND status IN ('starting', 'pending', 'connected', 'disconnecting')`)
       .run(now(), connectionId);
-    if (result.changes !== 1) throw new Error("Receiver is not connected");
+    if (result.changes !== 1) {
+      throw new Error("Receiver cannot begin disconnect recovery");
+    }
   } finally {
     database.close();
   }

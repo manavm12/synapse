@@ -7,6 +7,68 @@ import {
   markNativeMutationUncertain,
   retryRoutingMessage,
 } from "./inbox.mjs";
+import { ReceiverClient } from "./receiver-client.mjs";
+import { validateReceiverIdentity } from "./receiver-contract.mjs";
+import {
+  getReceiverConnection,
+  receiverRegistryPath,
+} from "./receiver-registry.mjs";
+import { MacOsKeychainStore } from "./receiver-secrets.mjs";
+
+function sameReceiverIdentity(expected, actual) {
+  return (
+    expected?.installationId === actual?.installationId &&
+    expected?.userId === actual?.userId &&
+    expected?.projectId === actual?.projectId &&
+    expected?.projectAlias === actual?.projectAlias
+  );
+}
+
+function allowInsecure(env) {
+  return env.SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP === "1";
+}
+
+export async function authorizeCloudDelivery(
+  delivery,
+  {
+    env = process.env,
+    registryPath = receiverRegistryPath(env),
+    secretStore = null,
+    createReceiverClient = (options) => new ReceiverClient(options),
+    now = Date.now,
+  } = {},
+) {
+  if (delivery.source !== "cloud") return null;
+  const expected = delivery.receiverAuthorization;
+  const connection = getReceiverConnection(delivery.projectRoot, {
+    path: registryPath,
+  });
+  if (
+    !expected ||
+    connection?.status !== "connected" ||
+    !sameReceiverIdentity(expected, connection.identity) ||
+    !(Date.parse(connection.identity.expiresAt) > now())
+  ) {
+    throw new Error("Cloud receiver authorization is no longer current");
+  }
+  const credentials = secretStore ?? new MacOsKeychainStore();
+  const credential = await credentials.get(connection.credentialAccount);
+  const client = createReceiverClient({
+    serverUrl: connection.serverUrl,
+    credential,
+    allowInsecureHttp: allowInsecure(env),
+    timeoutMs: 2_500,
+  });
+  const response = await client.getIdentity();
+  const fresh = validateReceiverIdentity(response.identity);
+  if (
+    !sameReceiverIdentity(expected, fresh) ||
+    !(Date.parse(fresh.expiresAt) > now())
+  ) {
+    throw new Error("Cloud receiver authorization is no longer current");
+  }
+  return fresh;
+}
 
 export function selectProject(projects, projectRoot) {
   const project = projects.find((candidate) => candidate.path === projectRoot);
@@ -41,6 +103,8 @@ export async function routeDelivery(
     accept = acceptProvisioning,
     acknowledge = acknowledgeMessage,
     markIssued = markNativeMutationIssued,
+    authorizeCloud = authorizeCloudDelivery,
+    cloudAuthorizationOptions,
   } = {},
 ) {
   const client = createClient();
@@ -69,6 +133,7 @@ export async function routeDelivery(
 
     if (delivery.channel.threadId) {
       if (delivery.source === "cloud") {
+        await authorizeCloud(delivery, cloudAuthorizationOptions);
         markIssued({
           jobId: delivery.jobId,
           deliveryId: delivery.deliveryId,
@@ -95,6 +160,7 @@ export async function routeDelivery(
     }
 
     if (delivery.source === "cloud") {
+      await authorizeCloud(delivery, cloudAuthorizationOptions);
       markIssued({
         jobId: delivery.jobId,
         deliveryId: delivery.deliveryId,

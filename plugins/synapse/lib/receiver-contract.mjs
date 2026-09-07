@@ -112,8 +112,12 @@ export function validateCloudMessage(value, identity) {
   };
 }
 
-export function cloudChannelId(recipientUserId, conversationId) {
-  const value = `cloud:${recipientUserId}:${conversationId}`;
+export function cloudChannelId(
+  receiverInstallationId,
+  recipientUserId,
+  conversationId,
+) {
+  const value = `cloud:${receiverInstallationId}:${recipientUserId}:${conversationId}`;
   if (value.length > 128)
     throw new Error("Derived cloud channel ID is too long");
   return value;

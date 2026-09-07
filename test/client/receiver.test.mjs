@@ -33,6 +33,7 @@ import {
   beginReceiverConnection,
   completeReceiverConnection,
   getReceiverConnection,
+  markReceiverDisconnected,
   recordReceiverPairing,
 } from "../../plugins/synapse/lib/receiver-registry.mjs";
 import {
@@ -128,7 +129,11 @@ function stage(path, message, now = 1) {
       message,
       identity,
       projectRoot: "/project",
-      channelId: cloudChannelId(identity.userId, message.conversationId),
+      channelId: cloudChannelId(
+        identity.installationId,
+        identity.userId,
+        message.conversationId,
+      ),
     },
     { path, now: () => now },
   );
@@ -308,6 +313,69 @@ test("fresh authorization cannot route an old installation's imported job", asyn
   assert.equal(getJob(message.messageId, { path: inbox }).status, "pending");
 });
 
+test("a replacement installation isolates messages in the same conversation", async () => {
+  const { inbox } = await paths();
+  const replacement = {
+    ...identity,
+    installationId: "99999999-9999-4999-8999-999999999999",
+  };
+  const oldMessage = cloudMessage({ sequence: 1 });
+  const newMessage = cloudMessage({
+    id: "77777777-7777-4777-8777-777777777777",
+    sequence: 2,
+  });
+  const oldChannel = cloudChannelId(
+    identity.installationId,
+    identity.userId,
+    oldMessage.conversationId,
+  );
+  const newChannel = cloudChannelId(
+    replacement.installationId,
+    replacement.userId,
+    newMessage.conversationId,
+  );
+  assert.notEqual(oldChannel, newChannel);
+  stageCloudMessage(
+    {
+      message: oldMessage,
+      identity,
+      projectRoot: "/project",
+      channelId: oldChannel,
+    },
+    { path: inbox },
+  );
+  confirmCloudImport(
+    {
+      messageId: oldMessage.messageId,
+      installationId: identity.installationId,
+    },
+    { path: inbox },
+  );
+  stageCloudMessage(
+    {
+      message: newMessage,
+      identity: replacement,
+      projectRoot: "/project",
+      channelId: newChannel,
+    },
+    { path: inbox },
+  );
+  confirmCloudImport(
+    {
+      messageId: newMessage.messageId,
+      installationId: replacement.installationId,
+    },
+    { path: inbox },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-new" },
+    { path: inbox, receiverIdentity: replacement },
+  );
+  assert.equal(delivery.jobId, newMessage.messageId);
+  assert.equal(delivery.channelId, newChannel);
+  assert.equal(getJob(oldMessage.messageId, { path: inbox }).status, "pending");
+});
+
 test("sync reconciles an ambiguous import response without replaying the local job", async () => {
   const { inbox, registry, root } = await paths();
   const database = new DatabaseSync(registry);
@@ -428,7 +496,11 @@ test("revoked or unavailable sync cannot authorize dispatch and failed receipts 
         message,
         identity,
         projectRoot: root,
-        channelId: cloudChannelId(identity.userId, message.conversationId),
+        channelId: cloudChannelId(
+          identity.installationId,
+          identity.userId,
+          message.conversationId,
+        ),
       },
       { path: inbox },
     );
@@ -744,6 +816,7 @@ test("the native router classifies a cloud mutation timeout as uncertain, not re
           routeDelivery(value, {
             ...metadata,
             createClient: () => client,
+            authorizeCloud: async () => {},
             markIssued: (input) =>
               markNativeMutationIssued(input, { path: inbox }),
           }),
@@ -761,6 +834,97 @@ test("the native router classifies a cloud mutation timeout as uncertain, not re
   );
   assert.equal(retries, 0);
   assert.equal(getJob(message.messageId, { path: inbox }).status, "uncertain");
+});
+
+test("a disconnected receiver cannot issue a previously reserved native mutation", async () => {
+  const { inbox, registry } = await paths();
+  const database = new DatabaseSync(registry);
+  database.exec(
+    "CREATE TABLE projects (alias TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE)",
+  );
+  database
+    .prepare("INSERT INTO projects VALUES (?, ?)")
+    .run("demo", "/project");
+  database.close();
+  beginReceiverConnection(
+    {
+      connectionId: "connection-1",
+      projectRoot: "/project",
+      projectAlias: "demo",
+      serverUrl: "https://synapse.example",
+      credentialAccount: "receiver:connection-1",
+      credentialHash: "a".repeat(64),
+    },
+    { path: registry },
+  );
+  recordReceiverPairing(
+    {
+      connectionId: "connection-1",
+      pairingId: "pairing-1",
+      verificationUrl: "https://synapse.example/pair",
+      expiresAt: identity.expiresAt,
+    },
+    { path: registry },
+  );
+  completeReceiverConnection(
+    { connectionId: "connection-1", identity },
+    { path: registry },
+  );
+  const message = cloudMessage();
+  stage(inbox, message);
+  confirmCloudImport(
+    { messageId: message.messageId, installationId: identity.installationId },
+    { path: inbox },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner-1" },
+    { path: inbox, receiverIdentity: identity },
+  );
+  markReceiverDisconnected("connection-1", { path: registry });
+  const nativeCalls = [];
+  const client = {
+    start: async () => {},
+    close: async () => {},
+    callTool: async (name) => {
+      if (name === "list_projects") {
+        return {
+          success: true,
+          contentItems: [
+            {
+              type: "inputText",
+              text: JSON.stringify({
+                projects: [
+                  {
+                    projectId: "codex-project",
+                    path: "/project",
+                    isGitRepository: true,
+                  },
+                ],
+              }),
+            },
+          ],
+        };
+      }
+      nativeCalls.push(name);
+      throw new Error("native mutation must not run");
+    },
+  };
+  await assert.rejects(
+    routeDelivery(delivery, {
+      createClient: () => client,
+      cloudAuthorizationOptions: {
+        registryPath: registry,
+        secretStore: {
+          get: async () => {
+            throw new Error("disconnected secret must not be read");
+          },
+        },
+      },
+    }),
+    /authorization is no longer current/,
+  );
+  assert.deepEqual(nativeCalls, []);
+  assert.equal(getJob(message.messageId, { path: inbox }).status, "routing");
 });
 
 test("receiver HTTP auth stays in headers and localhost HTTP is opt-in", async () => {
@@ -930,6 +1094,32 @@ test("Keychain reads tolerate an ignored stdin stream and validate the result", 
   assert.equal(await store.get("receiver:one"), secret);
 });
 
+test("Keychain deletion treats only the absent-item exit as idempotent", async () => {
+  const exitCodes = [44, 45];
+  const store = new MacOsKeychainStore({
+    platform: "darwin",
+    spawnImpl: () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = null;
+      child.kill = () => {};
+      const exitCode = exitCodes.shift();
+      queueMicrotask(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", exitCode);
+      });
+      return child;
+    },
+  });
+  await store.delete("receiver:one");
+  await assert.rejects(
+    store.delete("receiver:one"),
+    /Keychain operation failed/,
+  );
+});
+
 test("disconnect resumes after lost remote response and failed secret cleanup", async () => {
   const { registry, root } = await paths();
   const database = new DatabaseSync(registry);
@@ -1005,6 +1195,210 @@ test("disconnect resumes after lost remote response and failed secret cleanup", 
   );
   assert.equal(remoteCalls, 2);
   assert.equal(deleteCalls, 2);
+  let replacementStored = false;
+  const replacement = await startReceiverConnection(
+    { project: root, serverUrl: "https://synapse.example" },
+    {
+      registryPath: registry,
+      resolveRoot: async () => root,
+      now: () => Date.parse("2028-01-01T00:00:00.000Z"),
+      createId: () => "connection-2",
+      createBytes: () => Buffer.alloc(32, 8),
+      openBrowser: false,
+      secretStore: {
+        get: async () => {
+          throw new Error("disconnected secret must not be read");
+        },
+        set: async () => {
+          replacementStored = true;
+        },
+      },
+      createClient: () => ({
+        createPairing: async () => ({
+          pairing_id: "pairing-2",
+          verification_url: "https://synapse.example/pairing-2",
+          expires_at: "2028-02-01T00:00:00.000Z",
+        }),
+      }),
+    },
+  );
+  assert.equal(replacement.connectionId, "connection-2");
+  assert.equal(replacementStored, true);
+});
+
+test("an approved pending enrollment can be durably cancelled after local completion fails", async () => {
+  const { registry, root } = await paths();
+  const database = new DatabaseSync(registry);
+  database.exec(
+    "CREATE TABLE projects (alias TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE)",
+  );
+  database.prepare("INSERT INTO projects VALUES (?, ?)").run("demo", root);
+  database.close();
+  beginReceiverConnection(
+    {
+      connectionId: "connection-1",
+      projectRoot: root,
+      projectAlias: "demo",
+      serverUrl: "https://synapse.example",
+      credentialAccount: "receiver:connection-1",
+      credentialHash: "a".repeat(64),
+    },
+    { path: registry },
+  );
+  recordReceiverPairing(
+    {
+      connectionId: "connection-1",
+      pairingId: "pairing-1",
+      verificationUrl: "https://synapse.example/pair",
+      expiresAt: identity.expiresAt,
+    },
+    { path: registry },
+  );
+  let disconnected = 0;
+  let secretDeleted = 0;
+  const dependencies = {
+    registryPath: registry,
+    resolveRoot: async () => root,
+    secretStore: {
+      get: async () => `syn_recv_${"A".repeat(43)}`,
+      delete: async () => {
+        secretDeleted += 1;
+      },
+    },
+    createClient: () => ({
+      completePairing: async () => ({
+        statusCode: 200,
+        status: "connected",
+        identity: wireIdentity({ project_alias: "other-project" }),
+      }),
+      disconnect: async () => {
+        disconnected += 1;
+        return { disconnected: true };
+      },
+    }),
+  };
+  await assert.rejects(
+    finishReceiverConnection({ project: root }, dependencies),
+    /does not match local alias/,
+  );
+  assert.equal(
+    getReceiverConnection(root, { path: registry }).status,
+    "pending",
+  );
+  await disconnectReceiver({ project: root }, dependencies);
+  assert.equal(
+    getReceiverConnection(root, { path: registry }).status,
+    "disconnected",
+  );
+  assert.equal(disconnected, 1);
+  assert.equal(secretDeleted, 1);
+});
+
+test("connecting after credential expiry revokes the old installation before replacement", async () => {
+  const { registry, root } = await paths();
+  const database = new DatabaseSync(registry);
+  database.exec(
+    "CREATE TABLE projects (alias TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE)",
+  );
+  database.prepare("INSERT INTO projects VALUES (?, ?)").run("demo", root);
+  database.close();
+  beginReceiverConnection(
+    {
+      connectionId: "connection-old",
+      projectRoot: root,
+      projectAlias: "demo",
+      serverUrl: "https://synapse.example",
+      credentialAccount: "receiver:connection-old",
+      credentialHash: "a".repeat(64),
+    },
+    { path: registry },
+  );
+  recordReceiverPairing(
+    {
+      connectionId: "connection-old",
+      pairingId: "pairing-old",
+      verificationUrl: "https://synapse.example/pair",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    },
+    { path: registry },
+  );
+  completeReceiverConnection(
+    {
+      connectionId: "connection-old",
+      identity: { ...identity, expiresAt: "2026-01-01T00:00:00.000Z" },
+    },
+    { path: registry },
+  );
+  const oldCredential = `syn_recv_${"A".repeat(43)}`;
+  const secrets = new Map([["receiver:connection-old", oldCredential]]);
+  const events = [];
+  let disconnectCalls = 0;
+  const dependencies = {
+    registryPath: registry,
+    resolveRoot: async () => root,
+    now: () => Date.parse("2026-02-01T00:00:00.000Z"),
+    createId: () => "connection-new",
+    createBytes: () => Buffer.alloc(32, 7),
+    openBrowser: false,
+    secretStore: {
+      get: async (account) => secrets.get(account),
+      set: async (account, secret) => {
+        events.push(`set:${account}`);
+        secrets.set(account, secret);
+      },
+      delete: async (account) => {
+        events.push(`delete:${account}`);
+        secrets.delete(account);
+      },
+    },
+    createClient: ({ credential }) => ({
+      disconnect: async () => {
+        disconnectCalls += 1;
+        assert.equal(credential, oldCredential);
+        events.push("disconnect-old");
+        if (disconnectCalls === 1) throw new Error("response lost");
+        return { disconnected: true };
+      },
+      createPairing: async () => {
+        assert.notEqual(credential, oldCredential);
+        events.push("pair-new");
+        return {
+          pairing_id: "pairing-new",
+          verification_url: "https://synapse.example/pairing-new",
+          expires_at: "2026-03-01T00:00:00.000Z",
+        };
+      },
+    }),
+  };
+  await assert.rejects(
+    startReceiverConnection(
+      { project: root, serverUrl: "https://synapse.example" },
+      dependencies,
+    ),
+    /response lost/,
+  );
+  assert.equal(
+    getReceiverConnection(root, { path: registry }).status,
+    "disconnecting",
+  );
+  assert.equal(secrets.get("receiver:connection-old"), oldCredential);
+  assert.deepEqual(events, ["disconnect-old"]);
+
+  const replacement = await startReceiverConnection(
+    { project: root, serverUrl: "https://synapse.example" },
+    dependencies,
+  );
+  assert.equal(replacement.connectionId, "connection-new");
+  assert.equal(replacement.status, "pending");
+  assert.equal(secrets.has("receiver:connection-old"), false);
+  assert.equal(secrets.has("receiver:connection-new"), true);
+  assert.deepEqual(events, [
+    "disconnect-old",
+    "disconnect-old",
+    "delete:receiver:connection-old",
+    "set:receiver:connection-new",
+    "pair-new",
+  ]);
 });
 
 test("enrollment stores only a credential hash locally and resumes completion", async () => {

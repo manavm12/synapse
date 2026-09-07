@@ -97,6 +97,10 @@ export async function startReceiverConnection(
     );
   }
   let connection = getReceiverConnection(projectRoot, { path: registryPath });
+  if (connection?.status === "disconnected") {
+    removeReceiverConnection(connection.connectionId, { path: registryPath });
+    connection = null;
+  }
   if (connection && connection.serverUrl !== serverUrl) {
     throw new Error(`Receiver enrollment uses ${connection.serverUrl}`);
   }
@@ -117,9 +121,6 @@ export async function startReceiverConnection(
     throw new Error(
       "Receiver disconnect is incomplete; rerun receiver disconnect before connecting",
     );
-  } else if (connection?.status === "disconnected") {
-    removeReceiverConnection(connection.connectionId, { path: registryPath });
-    connection = null;
   }
   if (connection) {
     credential = await secretStore.get(connection.credentialAccount);

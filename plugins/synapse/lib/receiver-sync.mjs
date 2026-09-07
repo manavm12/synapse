@@ -165,7 +165,11 @@ export async function syncReceiver(
         message,
         identity,
         projectRoot,
-        channelId: cloudChannelId(identity.userId, message.conversationId),
+        channelId: cloudChannelId(
+          identity.installationId,
+          identity.userId,
+          message.conversationId,
+        ),
       },
       inboxOptions,
     );
