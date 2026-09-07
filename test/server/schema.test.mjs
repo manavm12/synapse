@@ -836,6 +836,26 @@ test("migration enforces user isolation and durable capture semantics", {
     otherUserPairing.pairingId,
   );
   assert.equal(otherUserReceiver.userId, userThree);
+  await assert.rejects(
+    database.importReceiverMessage(otherUserCredential, {
+      messageId: laterInbound.messageId,
+      claimToken: "0".repeat(64),
+    }),
+    (error) => error.code === "forbidden",
+  );
+  const unclaimedAfterCrossTenantAttempt = await admin.query(
+    `select assigned_installation_id, claim_token_hash, claim_expires_at,
+            imported_at, status::text
+     from public.message_jobs where id = $1`,
+    [laterInbound.messageId],
+  );
+  assert.deepEqual(unclaimedAfterCrossTenantAttempt.rows[0], {
+    assigned_installation_id: null,
+    claim_token_hash: null,
+    claim_expires_at: null,
+    imported_at: null,
+    status: "queued",
+  });
 
   const simultaneousClaims = await Promise.all([
     database.claimReceiverMessages(credential, 1),

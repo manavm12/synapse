@@ -149,7 +149,9 @@ declare
   existing public.receiver_pairings%rowtype;
   created public.receiver_pairings%rowtype;
 begin
-  if octet_length(candidate_hash) <> 32 or octet_length(request_hash) <> 32 then
+  if candidate_hash is null or request_hash is null
+    or octet_length(candidate_hash) <> 32
+    or octet_length(request_hash) <> 32 then
     raise exception 'invalid pairing hash' using errcode = '22023';
   end if;
   perform pg_advisory_xact_lock(hashtextextended(encode(candidate_hash, 'hex'), 0));
@@ -197,6 +199,9 @@ declare
   installation public.receiver_installations%rowtype;
   actor_username text;
 begin
+  if actor_id is null then
+    raise exception 'authenticated identity is required' using errcode = '42501';
+  end if;
   select * into pairing from public.receiver_pairings
     where id = requested_pairing_id for update;
   if pairing.id is null
@@ -204,7 +209,7 @@ begin
     raise exception 'pairing is unavailable or expired' using errcode = 'P0002';
   end if;
   if pairing.status = 'approved' then
-    if pairing.owner_id <> actor_id then
+    if pairing.owner_id is distinct from actor_id then
       raise exception 'pairing belongs to another account' using errcode = '42501';
     end if;
     return query select * from synapse_private.receiver_identity(pairing.credential_hash);
@@ -228,7 +233,8 @@ begin
     and enabled_installation.enabled
     and enabled_installation.revoked_at is null
   for update;
-  if installation.id is not null and installation.credential_hash <> pairing.credential_hash then
+  if installation.id is not null
+    and installation.credential_hash is distinct from pairing.credential_hash then
     raise exception 'project already has an enabled receiver' using errcode = '23505';
   end if;
   if installation.id is null then
@@ -371,14 +377,18 @@ begin
     raise exception 'receiver is unauthorized' using errcode = '42501';
   end if;
   select * into job from public.message_jobs where id = requested_message_id for update;
-  if job.id is null or job.assigned_installation_id <> identity.installation_id then
+  if job.id is null
+    or job.assigned_installation_id is null
+    or job.assigned_installation_id is distinct from identity.installation_id then
     raise exception 'message is unavailable' using errcode = '42501';
   end if;
-  if job.claim_token_hash <> candidate_claim_hash then
+  if job.claim_token_hash is null
+    or candidate_claim_hash is null
+    or job.claim_token_hash is distinct from candidate_claim_hash then
     raise exception 'claim token is invalid or superseded' using errcode = '42501';
   end if;
   if job.imported_at is null then
-    if job.claim_expires_at <= now() then
+    if job.claim_expires_at is null or job.claim_expires_at <= now() then
       raise exception 'claim token is expired' using errcode = 'P0002';
     end if;
     update public.message_jobs set status = 'in_receiver_inbox', imported_at = now()
