@@ -4,6 +4,8 @@ import pg from "pg";
 
 import { databaseConnectionOptions } from "../database-ssl.mjs";
 
+const MEMORY_PROCESSOR_VERSION = 1;
+
 export class MemoryConflictError extends Error {
   constructor(message = "capture_id was already used with different content") {
     super(message);
@@ -292,7 +294,7 @@ export function createDatabase(config) {
            capture_id, capture_reason, revision, title, summary,
            markdown, content_hash
          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         returning created_at`,
+         returning id, created_at`,
         [
           identity.userId,
           project.id,
@@ -306,6 +308,10 @@ export function createDatabase(config) {
           input.markdown,
           hash,
         ],
+      );
+      await client.query(
+        `select synapse_private.enqueue_memory_processing($1, $2)`,
+        [revisionResult.rows[0].id, MEMORY_PROCESSOR_VERSION],
       );
       await client.query(
         `update public.memory_nodes

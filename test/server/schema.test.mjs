@@ -26,6 +26,13 @@ function runtimeUrl(connectionString) {
   return url.href;
 }
 
+function roleUrl(connectionString, username, password) {
+  const url = new URL(connectionString);
+  url.username = username;
+  url.password = password;
+  return url.href;
+}
+
 test("migration enforces user isolation and durable capture semantics", {
   skip: !adminUrl,
 }, async (t) => {
@@ -187,4 +194,255 @@ test("migration enforces user isolation and durable capture semantics", {
   );
   assert.equal(Number(counts.rows[0].revisions), 1);
   assert.equal(Number(counts.rows[0].conflicts), 1);
+  assert.equal(
+    Number(
+      (
+        await admin.query(
+          `select count(*) from synapse_private.memory_processing_jobs
+           where owner_id = $1`,
+          [userOne],
+        )
+      ).rows[0].count,
+    ),
+    1,
+  );
+
+  await admin.query(
+    "alter role synapse_memory_worker with login password 'memory-worker-test-password'",
+  );
+  await admin.query(
+    `create table synapse_private.test_memory_processing_results (
+       revision_id uuid primary key,
+       marker text not null
+     )`,
+  );
+  await admin.query(
+    `grant select, insert on synapse_private.test_memory_processing_results
+     to synapse_memory_worker`,
+  );
+  const { createMemoryProcessingStorage, MemoryProcessingLeaseLostError } =
+    await import("../../src/server/memory-processing/storage.mjs");
+  const workerUrl = roleUrl(
+    adminUrl,
+    "synapse_memory_worker",
+    "memory-worker-test-password",
+  );
+  const storage = createMemoryProcessingStorage({
+    databaseUrl: workerUrl,
+    databaseSsl,
+    retryDelay: () => 0,
+  });
+  t.after(() => storage.close());
+  const processingTime = new Date(Date.now() + 60_000);
+  const firstJob = await storage.claimNext({
+    workerId: "worker-one",
+    leaseDurationMs: 5_000,
+    now: processingTime,
+  });
+  assert.equal(firstJob.source.version, 1);
+  assert.equal(firstJob.source.ownerId, userOne);
+  assert.equal(firstJob.source.revision, 1);
+  assert.equal(firstJob.source.captureId, input.captureId);
+  assert.equal(firstJob.source.sessionId, input.sessionId);
+  assert.equal(firstJob.source.markdown, input.markdown);
+
+  const secondInput = {
+    ...input,
+    captureId: "00000000-0000-4000-8000-000000000102",
+    summary: "A second accepted revision.",
+    markdown: "# Summary\nA second accepted revision.",
+  };
+  const secondSave = await database.saveSessionMemory(
+    identity,
+    secondInput,
+    "00000000-0000-4000-8000-000000000204",
+  );
+  assert.equal(secondSave.revision, 2);
+  const parallelInput = {
+    ...input,
+    captureId: "00000000-0000-4000-8000-000000000105",
+    sessionId: "codex-session-parallel",
+    summary: "A different session in the same project.",
+  };
+  await database.saveSessionMemory(
+    identity,
+    parallelInput,
+    "00000000-0000-4000-8000-000000000207",
+  );
+  assert.equal(
+    await storage.claimNext({
+      workerId: "worker-two",
+      leaseDurationMs: 5_000,
+      now: processingTime,
+    }),
+    null,
+  );
+  await assert.rejects(
+    storage.complete(
+      firstJob,
+      async (client) => {
+        await client.query(
+          `insert into synapse_private.test_memory_processing_results
+           (revision_id, marker) values ($1, 'must-roll-back')`,
+          [firstJob.revisionId],
+        );
+        throw new Error("derived commit rejected");
+      },
+      { now: processingTime },
+    ),
+    /derived commit rejected/,
+  );
+  assert.equal(
+    Number(
+      (
+        await admin.query(
+          `select count(*)
+           from synapse_private.test_memory_processing_results`,
+        )
+      ).rows[0].count,
+    ),
+    0,
+  );
+  assert.equal(
+    await storage.complete(
+      firstJob,
+      (client) =>
+        client.query(
+          `insert into synapse_private.test_memory_processing_results
+         (revision_id, marker) values ($1, 'committed')`,
+          [firstJob.revisionId],
+        ),
+      { now: processingTime },
+    ),
+    true,
+  );
+  assert.equal(
+    await storage.complete(firstJob, async () => {}, { now: processingTime }),
+    false,
+  );
+  const concurrentClaims = await Promise.all([
+    storage.claimNext({
+      workerId: "worker-two-a",
+      leaseDurationMs: 5_000,
+      now: processingTime,
+    }),
+    storage.claimNext({
+      workerId: "worker-two-b",
+      leaseDurationMs: 5_000,
+      now: processingTime,
+    }),
+  ]);
+  const claimedJobs = concurrentClaims.filter(Boolean);
+  assert.equal(claimedJobs.length, 1);
+  await storage.complete(claimedJobs[0], async () => {}, {
+    now: processingTime,
+  });
+  const remainingProjectJob = await storage.claimNext({
+    workerId: "worker-two-c",
+    leaseDurationMs: 5_000,
+    now: processingTime,
+  });
+  const processedSources = [
+    claimedJobs[0].source,
+    remainingProjectJob.source,
+  ].map(({ sessionId, revision }) => `${sessionId}:${revision}`);
+  assert.deepEqual(processedSources.sort(), [
+    `${input.sessionId}:2`,
+    `${parallelInput.sessionId}:1`,
+  ]);
+  await storage.complete(remainingProjectJob, async () => {}, {
+    now: processingTime,
+  });
+
+  const identityTwo = await database.resolveIdentity(userTwo, {
+    authMethod: "oauth",
+    oauthClientId: "codex-test-client",
+  });
+  await database.saveSessionMemory(
+    identityTwo,
+    {
+      ...input,
+      captureId: "00000000-0000-4000-8000-000000000103",
+      sessionId: "codex-session-crash",
+    },
+    "00000000-0000-4000-8000-000000000205",
+  );
+  const crashedJob = await storage.claimNext({
+    workerId: "crashed-worker",
+    leaseDurationMs: 100,
+    now: processingTime,
+  });
+  const recoveredAt = new Date(processingTime.getTime() + 101);
+  const recoveredJob = await storage.claimNext({
+    workerId: "replacement-worker",
+    leaseDurationMs: 5_000,
+    now: recoveredAt,
+  });
+  assert.equal(recoveredJob.id, crashedJob.id);
+  assert.ok(BigInt(recoveredJob.leaseFence) > BigInt(crashedJob.leaseFence));
+  let staleCommitCalled = false;
+  await assert.rejects(
+    storage.complete(
+      crashedJob,
+      async () => {
+        staleCommitCalled = true;
+      },
+      { now: recoveredAt },
+    ),
+    MemoryProcessingLeaseLostError,
+  );
+  assert.equal(staleCommitCalled, false);
+  await storage.complete(recoveredJob, async () => {}, { now: recoveredAt });
+
+  const thirdInput = {
+    ...secondInput,
+    captureId: "00000000-0000-4000-8000-000000000104",
+    summary: "A retry test.",
+  };
+  await database.saveSessionMemory(
+    identity,
+    thirdInput,
+    "00000000-0000-4000-8000-000000000206",
+  );
+  await admin.query(
+    `update synapse_private.memory_processing_jobs
+     set max_attempts = 2
+     where revision_id = (
+       select id from public.memory_revisions where capture_id = $1
+     )`,
+    [thirdInput.captureId],
+  );
+  const retryOne = await storage.claimNext({
+    workerId: "retry-worker",
+    leaseDurationMs: 5_000,
+    now: processingTime,
+  });
+  assert.equal(
+    await storage.fail(retryOne, new Error("first failure"), {
+      now: processingTime,
+    }),
+    "pending",
+  );
+  const retryTwo = await storage.claimNext({
+    workerId: "retry-worker",
+    leaseDurationMs: 5_000,
+    now: processingTime,
+  });
+  assert.equal(retryTwo.id, retryOne.id);
+  assert.equal(
+    await storage.fail(retryTwo, new Error("final failure"), {
+      now: processingTime,
+    }),
+    "failed",
+  );
+  const finalJob = await admin.query(
+    `select status::text, attempt_count, last_error
+     from synapse_private.memory_processing_jobs where id = $1`,
+    [retryTwo.id],
+  );
+  assert.deepEqual(finalJob.rows[0], {
+    status: "failed",
+    attempt_count: 2,
+    last_error: "final failure",
+  });
 });
