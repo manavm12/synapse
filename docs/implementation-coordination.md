@@ -6,19 +6,46 @@ This supersedes the earlier planning-only and library-only phase limits. Keep
 the original organizer worktree intact, preserve memory capture compatibility,
 and retain the selected any-signed-in-user receiving policy after receiver opt-in.
 
-The parent integration branch is `codex/product-integration` at
-`/Users/manavmehta/synapse-integration`. Feature tasks commit locally; the parent
+The parent integration branch is `codex/product-integration`. Feature tasks
+commit locally; the parent
 reviews and cherry-picks specific commits. No feature task merges to main,
 changes production infrastructure, or changes installed user plugin settings.
 The user approved up to US$5 total for fresh live validation. The parent owns
 the budget and live requests centrally; feature tasks must not spend separately.
 
+## Implementation and review checkpoint
+
+The integration branch now contains setup/doctor, immutable capture plus a
+durable processing queue, the deterministic organizer core and Postgres adapter,
+bounded inference, authenticated lexical retrieval, cloud messaging, and the
+receiver client/hooks. This is an assembled candidate, not a deployment claim.
+The HTTP service and `npm run worker` remain separate; the worker is opt-in and
+requires dedicated credentials and explicit models.
+
+The setup login-output bug, database URL TLS override, queue scheduling/locking
+findings, core source-replay checks, messaging import authorization/quota/expired
+revocation findings, and retrieval discovery/historical-topic findings have
+corrections integrated. Receiver findings and combined end-to-end acceptance
+remain under parent review. Passing a feature's tests is not final acceptance.
+
+Local fixtures, real subprocess tests, and disposable Postgres are distinct from
+live OAuth/email, real macOS/native-task operation, and paid semantic-quality
+validation. At this checkpoint, the US$5 live-validation allowance is unspent
+and an inference key is unavailable. Do not silently spend in feature tasks or
+label mocked model output as live inference.
+
+The existing task “Plan session memory graphing”
+(`01a0753c-ff61-7951-9b7c-d2a2fabb33c9`) supplied organizer design and fixtures.
+Its historical 28/34 retrieval result did not meet its prior quality target;
+that result does not establish this integration's semantic recall. Keep the
+original `codex/local-memory-organizer` worktree unchanged.
+
 ## Ownership
 
-- Setup task: finish setup/doctor; retain its commit for parent integration.
+- Setup task: owns setup/doctor and interactive-login regressions.
 - Memory queue task: owns `src/server/memory-processing/` and migration
   `202609070002_memory_processing_queue.sql`; commit and provide worker contract.
-- Memory core task: extend its core result with a tenant-isolated Postgres ledger
+- Memory core task: owns its deterministic core and tenant-isolated Postgres ledger
   adapter and inference handler in `src/server/memory-organizer/` and migration
   `202609070004_memory_ledger.sql`, reusing the existing graphing experiment.
 - Messaging backend task: owns `src/server/messaging/`, receiver server pages and
@@ -30,19 +57,45 @@ the budget and live requests centrally; feature tasks must not spend separately.
   service and MCP registrations. Parent resolves registration/CLI/manifest
   overlaps and owns server/worker startup integration and combined testing.
 
-## Active task registry
+## Task registry
 
-| Task | Task ID | Branch / first feature commit |
+| Task | Task ID | Branch / integrated commits |
 | --- | --- | --- |
-| Setup and diagnostics | `01a07ab5-5c30-7e80-ad9a-9cc106876b83` | `codex/local-setup-doctor` / `a58518c` |
-| Processing queue | `01a07ab5-5c30-7e80-ad9a-9cb9a912f923` | `codex/memory-processing-queue` / `243fcc9` |
-| Organizer core and adapter | `01a07ab5-5cdc-7f21-a1a6-29eca009d27d` | `codex/deterministic-organizer-core` / `8731509` |
-| Cloud messaging backend | `01a07abf-8c82-7b90-adf3-59d2684b992a` | `codex/messaging-backend` |
-| Receiver client and hooks | `01a07abf-8bda-7623-8ce1-781b69e05e76` | `codex/local-receiver-client` |
+| Finish Synapse setup and diagnostics | `01a07ab5-5c30-7e80-ad9a-9cc106876b83` | `codex/local-setup-doctor` / `cc3647d`, `8d1ddef` |
+| Build Synapse memory processing queue | `01a07ab5-5c30-7e80-ad9a-9cb9a912f923` | `codex/memory-processing-queue` / `cd8584f`, `5db01dd` |
+| Prepare Synapse memory organizer core | `01a07ab5-5cdc-7f21-a1a6-29eca009d27d` | `codex/deterministic-organizer-core` / `01c3392`, `38b73e8`, `480e602`, `2501fc2` |
+| Implement Synapse cloud messaging backend | `01a07abf-8c82-7b90-adf3-59d2684b992a` | `codex/messaging-backend` / `0c5af7c`, `2c15faf`, `c5f6ffc` |
+| Implement Synapse receiver client and hooks | `01a07abf-8bda-7623-8ce1-781b69e05e76` | `codex/local-receiver-client` / `ba78f2e`; corrections pending |
+| Implement Synapse cloud memory retrieval | `01a07ac2-52f4-7a00-853e-16be4acb5588` | `codex/cloud-memory-retrieval` / `0ace619`, `670e1fd` |
 
-Independent reviews cover the setup, queue and organizer commits. Passing tests
-alone is not acceptance: reproduced findings require regressions and a re-review.
+Independent reviews cover feature boundaries and the combined composition.
+Reproduced findings require regressions and a re-review.
 Dependency cherry-picks in feature worktrees are not new feature commits.
+
+Parent-owned integration includes the bounded worker lifecycle, shared TLS
+connection validation (`526b6c2`), separate worker entrypoint, retrieval startup
+composition, and guarded live evaluation (`79e0cf2`). Deployment instructions in
+[Cloud operations](cloud-memory-operations.md) supersede the old phase-only
+limits in planning documents.
+
+## User and deployment sequence
+
+1. Operator applies all migrations, provisions separate runtime/worker roles,
+   verifies TLS and reverse-proxy configuration, and configures Supabase
+   OAuth/email. Private repository access is required for local installation;
+   arbitrary external email signup requires custom SMTP.
+2. User runs setup with the cloud project alias, then verifies `get_identity` in
+   a fresh task. A doctor login receipt does not establish live token validity.
+3. Receiver enrollment is `receiver connect` → browser **Enable incoming tasks**
+   → `receiver finish`. The explicit policy accepts any active signed-in sender.
+4. A receiver's owner-prompt hook syncs and routes confirmed cloud jobs; there is
+   no continuously polling receiver daemon. Transport `delivered` is native
+   acceptance, not completed work.
+5. Operator separately enables `npm run worker` with its own database credential,
+   inference key, explicit model and spend limit. Capture remains available while
+   organization is disabled; source reads can precede derived retrieval.
+6. Parent completes independent review and the serialized disposable-Postgres
+   release gate before any approved real-user/native/paid-model smoke tests.
 
 ## Receiver transport contract v1
 
@@ -66,8 +119,9 @@ Never print credentials or expose them through command arguments.
    identity; the server never issues a secret in a response.
 4. `GET /receiver/identity`, bearer receiver credential, returns
    `{identity: ReceiverIdentity}`. Recheck enabled status, expiry, and active
-   account for each receiver request. Receiver credentials cannot call MCP or
-   access memory/account management.
+   account for operational receiver requests. The revoke-only endpoint below
+   intentionally accepts a matching expired credential. Receiver credentials
+   cannot call MCP or access memory/account management.
 5. `POST /receiver/claim` with `{limit: 10}` returns
    `{identity: ReceiverIdentity, messages: [CloudMessage]}`. Initial lease is
    60 seconds; the assigned installation persists beyond lease expiry. Claim
@@ -78,7 +132,8 @@ Never print credentials or expose them through command arguments.
    persistence and returns `{message_id, status: "in_receiver_inbox"}`. Exact
    repeats after confirmation succeed for the same installation even if the
    original lease elapsed. Before confirmation, an expired/superseded claim
-   cannot be confirmed. Preserve staged jobs until ownership is verified.
+   cannot be confirmed. Unassigned jobs and absent/mismatched tokens are always
+   rejected. Preserve staged jobs until ownership is verified.
 7. `GET /receiver/messages/:message_id` returns assignment/transport status for
    that installation only, including `{message_id, status, imported}`. It can
    reconcile a lost import response and cannot expose another installation's job.
@@ -88,7 +143,10 @@ Never print credentials or expose them through command arguments.
    validate installation ownership and transitions, and never regress delivered.
    No native Codex IDs, paths, or message contents belong in these receipts.
 9. `POST /receiver/disconnect` disables/revokes this receiver and returns
-   `{disconnected: true}`; it does not claim to cancel already-dispatched tasks.
+   `{disconnected: true}`. A matching expired/revoked credential can only repeat
+   revocation, not claim or read jobs. Unfinished assigned jobs become
+   `needs_attention` without changing installation ownership. This does not
+   cancel already-dispatched tasks or automatically hand work to another device.
 
 `ReceiverIdentity` is `{installation_id, user_id, username, project_id,
 project_alias, expires_at, enabled: true}`. UUIDs and names come from the server.
@@ -102,8 +160,9 @@ inbound sequence numbers need not be contiguous because replies have the other
 recipient. Native payload assembly must remain below 64 KiB.
 
 Use one enabled receiver installation per user/project initially. No automatic
-handoff to another device; registration must not strand or duplicate an existing
-installation's work. Cloud public status: `queued`, `in_receiver_inbox`,
+handoff to another device; reconnecting requires explicit revocation of an old
+installation, and its assigned jobs require separate reconciliation. Cloud
+public status: `queued`, `in_receiver_inbox`,
 `provisioning`, `delivered`, `needs_attention`.
 
 Local import stages immutable payload plus an import acknowledgement outbox
@@ -115,6 +174,9 @@ not automatic replay. Network failure must not block the owner prompt.
 Use existing sender OAuth for MCP `send_message`, `get_message_status`, and
 `list_inbox`. Keep `get_identity` and `save_session_memory` compatible. Sender
 cannot select a receiver's local path, native task ID, git state or permissions.
+Quota defaults are 100 sends per sender per hour and 1000 unfinished messages
+per recipient; the operator can change the corresponding `app_config` values.
+Sorted participant locks serialize both checks under concurrent sends.
 
 Feature tasks may adjust internal APIs. Wire/schema changes require reporting
 the exact correction to the parent before clients and server diverge. Tests use

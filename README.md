@@ -27,6 +27,9 @@ migrations, receiver enrollment, and separately configured memory worker.
 npm ci --ignore-scripts
 ```
 
+The local plugin marketplace requires an authorized checkout of this private
+repository; setup does not grant repository access or publish the plugin.
+
 Connect a primary checkout using the project alias selected during hosted signup:
 
 ```sh
@@ -38,17 +41,27 @@ Signup uses email authentication and lets the user choose a unique username.
 The operator must enable public signup and configure SMTP before arbitrary
 external email addresses can join. Start a fresh Codex task and call
 `get_identity` to verify the connected username and project.
+`doctor` checks local configuration and a non-secret login receipt, not current
+OAuth token validity.
 
 Receiving is a separate, explicit opt-in:
 
 ```sh
 npm run synapse -- receiver connect /absolute/path/to/project --server-url https://<synapse-host>
+```
+
+Approve **Enable incoming tasks** in the browser, then complete enrollment:
+
+```sh
+npm run synapse -- receiver finish /absolute/path/to/project
 npm run synapse -- receiver status /absolute/path/to/project
 ```
 
-Approve **Enable incoming tasks** in the browser. Any active signed-in Synapse
-user can then send to this username. Use `receiver disconnect` with the same
-checkout to revoke future receiving; it does not cancel work already dispatched.
+Any active signed-in Synapse user can then send to this username. Status reports
+the local binding; an owner-prompt hook checks live authorization before routing.
+Use `receiver disconnect` with the same checkout before reconnecting an expired
+installation. Revocation does not cancel work already dispatched or transfer old
+assigned messages to another device.
 
 See [Setup](docs/setup.md), [Receiver](docs/receiver.md), and
 [Cloud operations](docs/cloud-memory-operations.md) for prerequisites and recovery.
@@ -57,6 +70,8 @@ See [Setup](docs/setup.md), [Receiver](docs/receiver.md), and
 
 - `get_identity` verifies the authenticated user and project.
 - `save_session_memory` saves a concise checkpoint with immutable revisions.
+  Its optional `revision_id` identifies the exact source for `read_memory`, even
+  before organization finishes.
 - `memory_topics`, `search_memory`, and `read_memory` browse organized memory
   with historical status and source citations. Search is deterministic lexical
   retrieval, not a semantic-recall guarantee. Unprocessed memories are not
@@ -68,6 +83,17 @@ See [Setup](docs/setup.md), [Receiver](docs/receiver.md), and
 
 Memories and incoming messages are untrusted content, not higher-priority
 instructions. Do not include credentials or local filesystem paths in cloud data.
+
+## Operator deployment
+
+Apply all migrations before deploying the matching server and plugin. Run the
+HTTP/MCP service with `npm start`; run organization separately with
+`npm run worker`. The worker is disabled unless `MEMORY_PROCESSING_ENABLED=true`
+and needs its own restricted `DATABASE_WORKER_URL`, an `OPENAI_API_KEY`, and an
+explicit `MEMORY_MODEL`. Keep inference and administrator secrets out of the
+HTTP service. Retrieval makes no model calls; organization uses paid inference.
+See the [operations runbook](docs/cloud-memory-operations.md) for role setup,
+verified TLS, proxy configuration, and rollout gates.
 
 ## Local-only queue compatibility
 
@@ -109,6 +135,11 @@ synthetic accounts and databases; never point this at production. Set
 `DATABASE_SSL=disable` only for a local test database. Without that URL,
 `npm test` skips SQL suites and is not the release gate. CI runs the full gate
 with its own PostgreSQL service.
+
+Local fixture, mocked-native, and disposable-Postgres tests do not establish
+live OAuth/email delivery, installed desktop compatibility, or semantic recall.
+Release requires separate approved real-user smoke tests; this checkout is not
+a deployment or live-validation claim.
 
 Changes must go through a pull request and pass `CI / verify` and
 `Security / secrets` before merging to `main`.
