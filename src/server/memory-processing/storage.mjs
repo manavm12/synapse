@@ -1,5 +1,7 @@
 import pg from "pg";
 
+import { databaseConnectionOptions } from "../../database-ssl.mjs";
+
 export class MemoryProcessingLeaseLostError extends Error {
   constructor(message = "memory processing lease is no longer valid") {
     super(message);
@@ -78,13 +80,15 @@ export function createMemoryProcessingStorage({
   const ownsPool = !suppliedPool;
   const pool =
     suppliedPool ??
-    new pg.Pool({
-      connectionString: databaseUrl,
-      ssl: databaseSsl,
-      max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
-    });
+    new pg.Pool(
+      databaseConnectionOptions({
+        connectionString: databaseUrl,
+        ssl: databaseSsl,
+        max: 10,
+        idleTimeoutMillis: 30_000,
+        connectionTimeoutMillis: 5_000,
+      }),
+    );
 
   async function transaction(operation) {
     const client = await pool.connect();

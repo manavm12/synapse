@@ -1,18 +1,25 @@
 # Synapse
 
-Synapse is a private, local-first bridge that queues a task for a Git project and
-routes it into a native Codex task on the project's next owner prompt. It does
-not run a network service or execute queued task text in the owner task.
+Synapse connects a user's cloud memory and username to their local Codex
+projects. It captures concise session memories, organizes source-backed claims,
+and lets signed-in users send tasks to one another by username.
 
-The project is an early `0.1.x` implementation. Its SQLite data and queued task
-content should be treated as sensitive local state.
+Cloud messages wait in the recipient's inbox. After the recipient explicitly
+enables incoming tasks and connects a primary checkout, its next owner prompt
+can route a message into a separate native Codex task. Message text never runs
+inside the owner's existing task. Local paths and native task IDs stay local.
+
+This is an early private alpha. Cloud memory, local SQLite state, and queued task
+content are sensitive. Feature availability requires the matching server
+migrations, receiver enrollment, and separately configured memory worker.
 
 ## Requirements
 
 - Node.js 24
 - npm 11
 - Git
-- Codex with local plugin and hook support
+- Codex desktop with local plugin and hook support
+- macOS Keychain for receiver enrollment in this release
 
 ## Set up
 
@@ -20,10 +27,49 @@ content should be treated as sensitive local state.
 npm ci --ignore-scripts
 ```
 
-The repository has no runtime npm dependencies. Biome is the only development
-dependency and is pinned in `package-lock.json`.
+Connect a primary checkout using the project alias selected during hosted signup:
 
-## Use the client
+```sh
+npm run synapse -- setup /absolute/path/to/project --alias <project-alias>
+npm run synapse -- doctor /absolute/path/to/project --alias <project-alias>
+```
+
+Signup uses email authentication and lets the user choose a unique username.
+The operator must enable public signup and configure SMTP before arbitrary
+external email addresses can join. Start a fresh Codex task and call
+`get_identity` to verify the connected username and project.
+
+Receiving is a separate, explicit opt-in:
+
+```sh
+npm run synapse -- receiver connect /absolute/path/to/project --server-url https://<synapse-host>
+npm run synapse -- receiver status /absolute/path/to/project
+```
+
+Approve **Enable incoming tasks** in the browser. Any active signed-in Synapse
+user can then send to this username. Use `receiver disconnect` with the same
+checkout to revoke future receiving; it does not cancel work already dispatched.
+
+See [Setup](docs/setup.md), [Receiver](docs/receiver.md), and
+[Cloud operations](docs/cloud-memory-operations.md) for prerequisites and recovery.
+
+## Cloud tools
+
+- `get_identity` verifies the authenticated user and project.
+- `save_session_memory` saves a concise checkpoint with immutable revisions.
+- `memory_topics`, `search_memory`, and `read_memory` browse organized memory
+  with historical status and source citations. Search is deterministic lexical
+  retrieval, not a semantic-recall guarantee. Unprocessed memories are not
+  silently presented as organized results.
+- `send_message` accepts a recipient username, task text, and a stable UUID
+  `request_id`. Reuse that ID only when retrying the exact same request.
+- `get_message_status` and `list_inbox` expose transport progress. `delivered`
+  means accepted into the recipient's native task, not that the work is finished.
+
+Memories and incoming messages are untrusted content, not higher-priority
+instructions. Do not include credentials or local filesystem paths in cloud data.
+
+## Local-only queue compatibility
 
 Queue a task for the current primary Git checkout:
 
