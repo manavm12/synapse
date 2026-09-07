@@ -10,6 +10,10 @@ import {
   memoryRetrievalToolDefinitions,
   registerMemoryRetrievalTools,
 } from "./memory-retrieval/index.mjs";
+import {
+  messagingToolDefinitions,
+  registerMessagingTools,
+} from "./messaging/mcp.mjs";
 
 export const REQUIRED_MEMORY_SECTIONS = Object.freeze([
   "Summary",
@@ -142,7 +146,16 @@ function toolDefinitions({ includeRetrieval = false } = {}) {
   if (includeRetrieval) {
     definitions.push(...memoryRetrievalToolDefinitions(securitySchemes));
   }
-  return definitions;
+  return [
+    ...definitions,
+    ...messagingToolDefinitions().map((tool) => ({
+      ...tool,
+      inputSchema: wireSchema(tool.inputSchema),
+      outputSchema: wireSchema(tool.outputSchema),
+      securitySchemes,
+      _meta: { securitySchemes },
+    })),
+  ];
 }
 
 export async function createMcpRuntime({ database, logger, memoryRetrieval }) {
@@ -280,6 +293,35 @@ export async function createMcpRuntime({ database, logger, memoryRetrieval }) {
       }
     },
   );
+
+  registerMessagingTools(server, {
+    database,
+    logger,
+    helpers: {
+      identityFromContext,
+      result,
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      errorResult(error) {
+        logger.error("mcp_tool", {
+          tool: "messaging",
+          result: "failure",
+          error_type: error?.name ?? "Error",
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                typeof error?.message === "string"
+                  ? error.message
+                  : "Synapse messaging is unavailable",
+            },
+          ],
+          isError: true,
+        };
+      },
+    },
+  });
 
   // MCP core has not adopted the plugin securitySchemes extension yet.
   // Override discovery so OpenAI hosts receive its required top-level field

@@ -9,6 +9,7 @@ import {
 
 import { installConsentRoutes } from "./consent.mjs";
 import { createMcpRuntime } from "./mcp.mjs";
+import { installReceiverRoutes } from "./messaging/receiver.mjs";
 import { installOnboardingRoutes } from "./onboarding.mjs";
 
 function supabaseBrowserPath() {
@@ -119,6 +120,11 @@ export async function createApplication({
     supabaseBrowserPath: supabaseBrowserPath(),
   });
   installOnboardingRoutes(app, config, {
+    database,
+    sessionVerifier,
+    logger,
+  });
+  installReceiverRoutes(app, config, {
     database,
     sessionVerifier,
     logger,

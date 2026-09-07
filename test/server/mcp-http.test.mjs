@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
+
 import { createApplication } from "../../src/server/app.mjs";
 import {
   AccountDisabledError,
@@ -15,6 +17,16 @@ const identity = Object.freeze({
   projectAlias: "synapse",
   oauthClientId: "codex-client",
   authMethod: "oauth",
+});
+const receiverCredential = `syn_recv_${"A".repeat(43)}`;
+const receiverIdentity = Object.freeze({
+  installationId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  userId: "66666666-6666-4666-8666-666666666666",
+  username: "receiver",
+  projectId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  projectAlias: "synapse",
+  expiresAt: new Date("2026-12-01T00:00:00Z"),
+  enabled: true,
 });
 const memoryMarkdown = [
   "# Summary",
@@ -50,6 +62,8 @@ function createConfig() {
 
 async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
   const saves = [];
+  const sentMessages = [];
+  let receiverPairingApproved = false;
   const accounts = new Map();
   const database = {
     async healthCheck() {},
@@ -78,12 +92,79 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       accounts.set(userId, registered);
       return registered;
     },
+    async sendMessage(receivedIdentity, input) {
+      sentMessages.push({ receivedIdentity, input });
+      return {
+        messageId: "88888888-8888-4888-8888-888888888888",
+        conversationId: "99999999-9999-4999-8999-999999999999",
+        sequence: 1,
+        recipient: {
+          userId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          username: "recipient",
+        },
+        status: "queued",
+        idempotent: false,
+      };
+    },
+    async getMessageStatus(_receivedIdentity, messageId) {
+      return {
+        messageId,
+        conversationId: "99999999-9999-4999-8999-999999999999",
+        sequence: 1,
+        status: "queued",
+        queuedAt: new Date("2026-09-07T00:00:00Z"),
+        importedAt: null,
+        provisioningAt: null,
+        deliveredAt: null,
+        needsAttentionAt: null,
+        failureReason: null,
+        receiverActionNeeded: true,
+      };
+    },
+    async listInbox() {
+      return { messages: [], next: null };
+    },
+    async createReceiverPairing() {
+      return {
+        pairingId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        expiresAt: new Date("2026-09-07T00:10:00Z"),
+      };
+    },
+    async approveReceiverPairing() {
+      receiverPairingApproved = true;
+      return receiverIdentity;
+    },
+    async completeReceiverPairing() {
+      return receiverPairingApproved
+        ? { status: "connected", identity: receiverIdentity }
+        : { status: "pending" };
+    },
+    async getReceiverIdentity(credential) {
+      return credential === receiverCredential ? receiverIdentity : null;
+    },
+    async claimReceiverMessages() {
+      return { messages: [] };
+    },
+    async importReceiverMessage(_credential, input) {
+      return { messageId: input.messageId, status: "in_receiver_inbox" };
+    },
+    async getReceiverMessage(_credential, messageId) {
+      return { messageId, status: "in_receiver_inbox", imported: true };
+    },
+    async recordReceiverEvents(_credential, events) {
+      return events.map((event) => event.eventId);
+    },
+    async disconnectReceiver() {
+      return true;
+    },
   };
   const config = createConfig();
   config.publicSignup = publicSignup;
   const verifier = {
     async verifyAccessToken(token) {
-      if (token !== "valid") throw new Error("invalid token");
+      if (token !== "valid") {
+        throw new OAuthError(OAuthErrorCode.InvalidToken, "invalid token");
+      }
       return {
         token,
         clientId: identity.oauthClientId,
@@ -130,6 +211,7 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
     baseUrl: `http://127.0.0.1:${port}`,
     config,
     saves,
+    sentMessages,
     accounts,
   };
 }
@@ -294,7 +376,7 @@ test("account setup rejects unauthorized, invalid, conflicting, and closed regis
   assert.deepEqual(await closed.json(), { error: "registration_closed" });
 });
 
-test("MCP publishes exactly identity and memory-save tools with OAuth schemes", async (t) => {
+test("MCP publishes memory and messaging tools with OAuth schemes", async (t) => {
   const { baseUrl } = await fixture(t);
   const initialized = await mcp(baseUrl, {
     jsonrpc: "2.0",
@@ -317,7 +399,13 @@ test("MCP publishes exactly identity and memory-save tools with OAuth schemes", 
   });
   assert.deepEqual(
     listed.body.result.tools.map((tool) => tool.name),
-    ["get_identity", "save_session_memory"],
+    [
+      "get_identity",
+      "save_session_memory",
+      "send_message",
+      "get_message_status",
+      "list_inbox",
+    ],
   );
   for (const tool of listed.body.result.tools) {
     assert.deepEqual(tool.securitySchemes, [
@@ -384,9 +472,12 @@ test("MCP publishes and authenticates bounded memory retrieval tools", async (t)
       "memory_topics",
       "search_memory",
       "read_memory",
+      "send_message",
+      "get_message_status",
+      "list_inbox",
     ],
   );
-  const retrievalTools = listed.body.result.tools.slice(2);
+  const retrievalTools = listed.body.result.tools.slice(2, 5);
   assert.ok(
     retrievalTools.every(
       (tool) => !/owner_id|project_id/.test(JSON.stringify(tool.inputSchema)),
@@ -422,6 +513,191 @@ test("MCP publishes and authenticates bounded memory retrieval tools", async (t)
   });
   assert.equal(rejected.body.result.isError, true);
   assert.equal(calls.length, 1);
+});
+
+test("messaging MCP sends by username and exposes participant status", async (t) => {
+  const { baseUrl, sentMessages } = await fixture(t);
+  const sent = await mcp(baseUrl, {
+    jsonrpc: "2.0",
+    id: 10,
+    method: "tools/call",
+    params: {
+      name: "send_message",
+      arguments: {
+        to_username: "@recipient",
+        message: "Please investigate the durable queue.",
+        request_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      },
+    },
+  });
+  assert.equal(sent.body.result.structuredContent.status, "queued");
+  assert.equal(
+    sent.body.result.structuredContent.recipient.username,
+    "recipient",
+  );
+  assert.equal(sentMessages[0].receivedIdentity, identity);
+  assert.equal(sentMessages[0].input.toUsername, "@recipient");
+
+  const status = await mcp(baseUrl, {
+    jsonrpc: "2.0",
+    id: 11,
+    method: "tools/call",
+    params: {
+      name: "get_message_status",
+      arguments: { message_id: "88888888-8888-4888-8888-888888888888" },
+    },
+  });
+  assert.equal(
+    status.body.result.structuredContent.receiver_action_needed,
+    true,
+  );
+  assert.equal(status.body.result.structuredContent.imported_at, null);
+});
+
+test("receiver pairing and scoped transport routes preserve the v1 wire shape", async (t) => {
+  const { baseUrl } = await fixture(t);
+  const pairing = await fetch(`${baseUrl}/receiver/pairings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ credential_hash: "a".repeat(64) }),
+  });
+  assert.equal(pairing.status, 201);
+  const pairingBody = await pairing.json();
+  assert.equal(pairingBody.pairing_id, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  assert.match(pairingBody.verification_url, /\/receiver\/pairings\//);
+
+  const verificationPath = new URL(pairingBody.verification_url).pathname;
+  const page = await fetch(baseUrl + verificationPath);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Enable incoming tasks/);
+
+  const pending = await fetch(
+    `${baseUrl}/receiver/pairings/${pairingBody.pairing_id}/complete`,
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${receiverCredential}` },
+    },
+  );
+  assert.equal(pending.status, 202);
+  assert.deepEqual(await pending.json(), { status: "pending" });
+
+  const approved = await fetch(
+    `${baseUrl}/auth/receiver-pairings/${pairingBody.pairing_id}/approve`,
+    { method: "POST", headers: { authorization: "Bearer session" } },
+  );
+  assert.equal(approved.status, 200);
+  assert.equal((await approved.json()).identity.project_alias, "synapse");
+
+  const completed = await fetch(
+    `${baseUrl}/receiver/pairings/${pairingBody.pairing_id}/complete`,
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${receiverCredential}` },
+    },
+  );
+  assert.equal(completed.status, 200);
+  assert.equal((await completed.json()).status, "connected");
+
+  const identityResponse = await fetch(`${baseUrl}/receiver/identity`, {
+    headers: { authorization: `Bearer ${receiverCredential}` },
+  });
+  assert.equal(identityResponse.status, 200);
+  assert.equal((await identityResponse.json()).identity.username, "receiver");
+
+  const claim = await fetch(`${baseUrl}/receiver/claim`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${receiverCredential}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ limit: 10 }),
+  });
+  assert.deepEqual((await claim.json()).messages, []);
+
+  const imported = await fetch(`${baseUrl}/receiver/import`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${receiverCredential}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      message_id: "88888888-8888-4888-8888-888888888888",
+      claim_token: "b".repeat(64),
+    }),
+  });
+  assert.deepEqual(await imported.json(), {
+    message_id: "88888888-8888-4888-8888-888888888888",
+    status: "in_receiver_inbox",
+  });
+
+  const message = await fetch(
+    `${baseUrl}/receiver/messages/88888888-8888-4888-8888-888888888888`,
+    { headers: { authorization: `Bearer ${receiverCredential}` } },
+  );
+  assert.deepEqual(await message.json(), {
+    message_id: "88888888-8888-4888-8888-888888888888",
+    status: "in_receiver_inbox",
+    imported: true,
+  });
+
+  const eventId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const events = await fetch(`${baseUrl}/receiver/events`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${receiverCredential}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      events: [
+        {
+          event_id: eventId,
+          message_id: "88888888-8888-4888-8888-888888888888",
+          kind: "delivered",
+          occurred_at: "2026-09-07T00:00:00.000Z",
+        },
+      ],
+    }),
+  });
+  assert.deepEqual(await events.json(), { accepted_event_ids: [eventId] });
+
+  const unsafeEvent = await fetch(`${baseUrl}/receiver/events`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${receiverCredential}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      events: [
+        {
+          event_id: eventId,
+          message_id: "88888888-8888-4888-8888-888888888888",
+          kind: "delivered",
+          occurred_at: "2026-09-07T00:00:00.000Z",
+          error_code: "/private/native/task/id",
+        },
+      ],
+    }),
+  });
+  assert.equal(unsafeEvent.status, 422);
+
+  const receiverCannotUseMcp = await mcp(
+    baseUrl,
+    { jsonrpc: "2.0", id: 20, method: "tools/list", params: {} },
+    receiverCredential,
+  );
+  assert.equal(receiverCannotUseMcp.response.status, 401);
+
+  const otherCredential = `syn_recv_${"B".repeat(43)}`;
+  const denied = await fetch(`${baseUrl}/receiver/identity`, {
+    headers: { authorization: `Bearer ${otherCredential}` },
+  });
+  assert.equal(denied.status, 401);
+
+  const disconnected = await fetch(`${baseUrl}/receiver/disconnect`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${receiverCredential}` },
+  });
+  assert.deepEqual(await disconnected.json(), { disconnected: true });
 });
 
 test("get_identity exposes the user principal and save preserves attribution", async (t) => {

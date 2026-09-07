@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -53,6 +53,20 @@ test("migration enforces user isolation and durable capture semantics", {
   await admin.query(
     "alter role synapse_runtime with login password 'synapse-runtime-test-password'",
   );
+  const messagingPrivileges = await admin.query(
+    `select
+       has_function_privilege('synapse_runtime',
+         'synapse_private.claim_receiver_messages(bytea,integer)', 'execute') as runtime_claim,
+       has_function_privilege('authenticated',
+         'synapse_private.claim_receiver_messages(bytea,integer)', 'execute') as browser_claim,
+       has_table_privilege('synapse_runtime',
+         'public.receiver_installations', 'select') as runtime_receiver_table`,
+  );
+  assert.deepEqual(messagingPrivileges.rows[0], {
+    runtime_claim: true,
+    browser_claim: false,
+    runtime_receiver_table: false,
+  });
 
   const userOne = "00000000-0000-4000-8000-000000000001";
   const userTwo = "00000000-0000-4000-8000-000000000002";
@@ -669,4 +683,291 @@ test("migration enforces user isolation and durable capture semantics", {
     },
   );
   /* node:coverage enable */
+
+  const identityThree = await database.resolveIdentity(userThree, {
+    authMethod: "oauth",
+    oauthClientId: "codex-test-client",
+  });
+  const sendInput = {
+    toUsername: "@USER_TWO",
+    message: "Investigate the durable messaging queue.",
+    requestId: "00000000-0000-4000-8000-000000000301",
+  };
+  const concurrent = await Promise.all([
+    database.sendMessage(identity, sendInput),
+    database.sendMessage(identity, sendInput),
+  ]);
+  assert.equal(new Set(concurrent.map((item) => item.messageId)).size, 1);
+  assert.deepEqual(concurrent.map((item) => item.idempotent).sort(), [
+    false,
+    true,
+  ]);
+  const firstMessage = concurrent[0];
+  assert.equal(firstMessage.recipient.username, "user_two");
+  await assert.rejects(
+    database.sendMessage(identity, { ...sendInput, message: "Changed body" }),
+    (error) => error.code === "conflict",
+  );
+
+  const reply = await database.sendMessage(identityTwo, {
+    toUsername: "user_one",
+    message: "I am working on it.",
+    requestId: "00000000-0000-4000-8000-000000000302",
+    conversationId: firstMessage.conversationId,
+  });
+  assert.equal(reply.sequence, firstMessage.sequence + 1);
+  const laterInbound = await database.sendMessage(identity, {
+    toUsername: "user_two",
+    message: "This must remain behind the first inbound message.",
+    requestId: "00000000-0000-4000-8000-000000000304",
+    conversationId: firstMessage.conversationId,
+  });
+  assert.equal(laterInbound.sequence, reply.sequence + 1);
+  await assert.rejects(
+    database.sendMessage(identityThree, {
+      toUsername: "user_two",
+      message: "Attempt to reuse a private conversation.",
+      requestId: "00000000-0000-4000-8000-000000000303",
+      conversationId: firstMessage.conversationId,
+    }),
+    (error) => error.code === "forbidden",
+  );
+  assert.equal(
+    (await database.getMessageStatus(identity, firstMessage.messageId)).status,
+    "queued",
+  );
+  assert.equal(
+    (await database.getMessageStatus(identityTwo, firstMessage.messageId))
+      .status,
+    "queued",
+  );
+  assert.equal(
+    await database.getMessageStatus(identityThree, firstMessage.messageId),
+    null,
+  );
+  const inbox = await database.listInbox(identityTwo, { limit: 10 });
+  assert.equal(
+    inbox.messages.some((item) => item.messageId === firstMessage.messageId),
+    true,
+  );
+
+  const participantRls = await admin.connect();
+  try {
+    await participantRls.query("begin");
+    await participantRls.query("set local role synapse_runtime");
+    await participantRls.query(
+      "select set_config('app.current_user_id', $1, true)",
+      [userThree],
+    );
+    assert.equal(
+      Number(
+        (await participantRls.query("select count(*) from public.message_jobs"))
+          .rows[0].count,
+      ),
+      0,
+    );
+    await assert.rejects(
+      participantRls.query(
+        "select count(*) from public.receiver_installations",
+      ),
+      /permission denied/,
+    );
+    await participantRls.query("rollback");
+  } finally {
+    participantRls.release();
+  }
+
+  const credential = `syn_recv_${Buffer.alloc(32, 7).toString("base64url")}`;
+  const credentialHex = createHash("sha256").update(credential).digest("hex");
+  const requesterHash = createHash("sha256")
+    .update("schema-test-requester")
+    .digest();
+  const pairing = await database.createReceiverPairing(
+    credentialHex,
+    requesterHash,
+  );
+  const pairingReplay = await database.createReceiverPairing(
+    credentialHex,
+    requesterHash,
+  );
+  assert.equal(pairingReplay.pairingId, pairing.pairingId);
+  assert.deepEqual(
+    await database.completeReceiverPairing(credential, pairing.pairingId),
+    { status: "pending" },
+  );
+  const approved = await database.approveReceiverPairing(
+    userTwo,
+    pairing.pairingId,
+  );
+  assert.equal(approved.userId, userTwo);
+  const completed = await database.completeReceiverPairing(
+    credential,
+    pairing.pairingId,
+  );
+  assert.equal(completed.status, "connected");
+  assert.equal(completed.identity.installationId, approved.installationId);
+  await admin.query(
+    "update public.receiver_pairings set expires_at = now() - interval '1 second' where id = $1",
+    [pairing.pairingId],
+  );
+  assert.equal(
+    (await database.completeReceiverPairing(credential, pairing.pairingId))
+      .identity.installationId,
+    approved.installationId,
+  );
+
+  const secondCredential = `syn_recv_${Buffer.alloc(32, 8).toString("base64url")}`;
+  const secondPairing = await database.createReceiverPairing(
+    createHash("sha256").update(secondCredential).digest("hex"),
+    requesterHash,
+  );
+  await assert.rejects(
+    database.approveReceiverPairing(userTwo, secondPairing.pairingId),
+    (error) => error.code === "conflict",
+  );
+
+  const otherUserCredential = `syn_recv_${Buffer.alloc(32, 10).toString("base64url")}`;
+  const otherUserPairing = await database.createReceiverPairing(
+    createHash("sha256").update(otherUserCredential).digest("hex"),
+    requesterHash,
+  );
+  const otherUserReceiver = await database.approveReceiverPairing(
+    userThree,
+    otherUserPairing.pairingId,
+  );
+  assert.equal(otherUserReceiver.userId, userThree);
+
+  const simultaneousClaims = await Promise.all([
+    database.claimReceiverMessages(credential, 1),
+    database.claimReceiverMessages(credential, 1),
+  ]);
+  const claimedMessages = simultaneousClaims.flatMap((claim) => claim.messages);
+  assert.equal(
+    claimedMessages.filter((item) => item.messageId === firstMessage.messageId)
+      .length,
+    1,
+  );
+  assert.equal(
+    claimedMessages.some((item) => item.messageId === laterInbound.messageId),
+    false,
+  );
+  const blockedByEarlierLease = await database.claimReceiverMessages(
+    credential,
+    10,
+  );
+  assert.equal(
+    blockedByEarlierLease.messages.some(
+      (item) => item.messageId === laterInbound.messageId,
+    ),
+    false,
+  );
+  const firstClaim = claimedMessages.find(
+    (item) => item.messageId === firstMessage.messageId,
+  );
+  await admin.query(
+    "update public.message_jobs set claim_expires_at = now() - interval '1 second' where id = $1",
+    [firstMessage.messageId],
+  );
+  await assert.rejects(
+    database.importReceiverMessage(credential, {
+      messageId: firstMessage.messageId,
+      claimToken: firstClaim.claimToken,
+    }),
+    (error) => error.code === "not_found",
+  );
+  const renewed = await database.claimReceiverMessages(credential, 10);
+  const renewedClaim = renewed.messages.find(
+    (item) => item.messageId === firstMessage.messageId,
+  );
+  assert.ok(renewedClaim);
+  assert.equal(
+    renewed.messages.some((item) => item.messageId === laterInbound.messageId),
+    true,
+  );
+  assert.notEqual(renewedClaim.claimToken, firstClaim.claimToken);
+  const imported = await database.importReceiverMessage(credential, {
+    messageId: firstMessage.messageId,
+    claimToken: renewedClaim.claimToken,
+  });
+  assert.equal(imported.status, "in_receiver_inbox");
+  await admin.query(
+    "update public.message_jobs set claim_expires_at = now() - interval '1 second' where id = $1",
+    [firstMessage.messageId],
+  );
+  assert.equal(
+    (
+      await database.importReceiverMessage(credential, {
+        messageId: firstMessage.messageId,
+        claimToken: renewedClaim.claimToken,
+      })
+    ).status,
+    "in_receiver_inbox",
+  );
+  assert.equal(
+    await database.getReceiverMessage(
+      otherUserCredential,
+      firstMessage.messageId,
+    ),
+    null,
+  );
+
+  const provisioningEvent = {
+    eventId: "00000000-0000-4000-8000-000000000401",
+    messageId: firstMessage.messageId,
+    kind: "provisioning",
+    occurredAt: new Date().toISOString(),
+  };
+  assert.deepEqual(
+    await database.recordReceiverEvents(credential, [provisioningEvent]),
+    [provisioningEvent.eventId],
+  );
+  assert.deepEqual(
+    await database.recordReceiverEvents(credential, [provisioningEvent]),
+    [provisioningEvent.eventId],
+  );
+  const deliveredEvent = {
+    eventId: "00000000-0000-4000-8000-000000000402",
+    messageId: firstMessage.messageId,
+    kind: "delivered",
+    occurredAt: new Date().toISOString(),
+  };
+  await database.recordReceiverEvents(credential, [deliveredEvent]);
+  await database.recordReceiverEvents(credential, [
+    {
+      eventId: "00000000-0000-4000-8000-000000000403",
+      messageId: firstMessage.messageId,
+      kind: "needs_attention",
+      occurredAt: new Date().toISOString(),
+      errorCode: "delayed_timeout",
+    },
+  ]);
+  assert.equal(
+    (await database.getMessageStatus(identity, firstMessage.messageId)).status,
+    "delivered",
+  );
+
+  const expiredCredential = `syn_recv_${Buffer.alloc(32, 9).toString("base64url")}`;
+  const expiredPairing = await database.createReceiverPairing(
+    createHash("sha256").update(expiredCredential).digest("hex"),
+    requesterHash,
+  );
+  await admin.query(
+    "update public.receiver_pairings set expires_at = now() - interval '1 second' where id = $1",
+    [expiredPairing.pairingId],
+  );
+  await assert.rejects(
+    database.completeReceiverPairing(
+      expiredCredential,
+      expiredPairing.pairingId,
+    ),
+    (error) => error.code === "not_found",
+  );
+
+  assert.equal(await database.disconnectReceiver(credential), true);
+  assert.equal(await database.getReceiverIdentity(credential), null);
+  await admin.query(
+    "update public.profiles set status = 'disabled' where id = $1",
+    [userThree],
+  );
+  assert.equal(await database.getReceiverIdentity(otherUserCredential), null);
 });

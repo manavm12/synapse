@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import pg from "pg";
 
 import { databaseConnectionOptions } from "../database-ssl.mjs";
+import { createMessagingDatabase } from "./messaging/database.mjs";
 
 const MEMORY_PROCESSOR_VERSION = 1;
 
@@ -354,12 +355,15 @@ export function createDatabase(config) {
     return result;
   }
 
+  const messaging = createMessagingDatabase(pool, withUser);
+
   return {
     resolveIdentity,
     getAccount,
     registerAccount,
     exchangeDevelopmentToken,
     saveSessionMemory,
+    ...messaging,
     async healthCheck() {
       await pool.query("select 1");
     },
