@@ -28,6 +28,14 @@ function allowInsecure(env) {
   return env.SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP === "1";
 }
 
+function connectionAuthorizes(connection, expected, now) {
+  return (
+    connection?.status === "connected" &&
+    sameReceiverIdentity(expected, connection.identity) &&
+    Date.parse(connection.identity.expiresAt) > now
+  );
+}
+
 export async function authorizeCloudDelivery(
   delivery,
   {
@@ -43,12 +51,7 @@ export async function authorizeCloudDelivery(
   const connection = getReceiverConnection(delivery.projectRoot, {
     path: registryPath,
   });
-  if (
-    !expected ||
-    connection?.status !== "connected" ||
-    !sameReceiverIdentity(expected, connection.identity) ||
-    !(Date.parse(connection.identity.expiresAt) > now())
-  ) {
+  if (!expected || !connectionAuthorizes(connection, expected, now())) {
     throw new Error("Cloud receiver authorization is no longer current");
   }
   const credentials = secretStore ?? new MacOsKeychainStore();
@@ -64,6 +67,17 @@ export async function authorizeCloudDelivery(
   if (
     !sameReceiverIdentity(expected, fresh) ||
     !(Date.parse(fresh.expiresAt) > now())
+  ) {
+    throw new Error("Cloud receiver authorization is no longer current");
+  }
+  const current = getReceiverConnection(delivery.projectRoot, {
+    path: registryPath,
+  });
+  if (
+    !connectionAuthorizes(current, expected, now()) ||
+    current.connectionId !== connection.connectionId ||
+    current.credentialAccount !== connection.credentialAccount ||
+    current.serverUrl !== connection.serverUrl
   ) {
     throw new Error("Cloud receiver authorization is no longer current");
   }

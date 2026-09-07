@@ -836,7 +836,7 @@ test("the native router classifies a cloud mutation timeout as uncertain, not re
   assert.equal(getJob(message.messageId, { path: inbox }).status, "uncertain");
 });
 
-test("a disconnected receiver cannot issue a previously reserved native mutation", async () => {
+test("a disconnect completed during fresh authorization prevents native mutation", async () => {
   const { inbox, registry } = await paths();
   const database = new DatabaseSync(registry);
   database.exec(
@@ -880,7 +880,6 @@ test("a disconnected receiver cannot issue a previously reserved native mutation
     { projectRoot: "/project", ownerSessionId: "owner-1" },
     { path: inbox, receiverIdentity: identity },
   );
-  markReceiverDisconnected("connection-1", { path: registry });
   const nativeCalls = [];
   const client = {
     start: async () => {},
@@ -909,20 +908,33 @@ test("a disconnected receiver cannot issue a previously reserved native mutation
       throw new Error("native mutation must not run");
     },
   };
-  await assert.rejects(
-    routeDelivery(delivery, {
-      createClient: () => client,
-      cloudAuthorizationOptions: {
-        registryPath: registry,
-        secretStore: {
-          get: async () => {
-            throw new Error("disconnected secret must not be read");
-          },
-        },
+  let identityRequestedResolve;
+  const identityRequested = new Promise((resolve) => {
+    identityRequestedResolve = resolve;
+  });
+  let releaseIdentity;
+  const routed = routeDelivery(delivery, {
+    createClient: () => client,
+    cloudAuthorizationOptions: {
+      registryPath: registry,
+      now: () => Date.parse("2026-09-07T00:00:00.000Z"),
+      secretStore: {
+        get: async () => `syn_recv_${"A".repeat(43)}`,
       },
-    }),
-    /authorization is no longer current/,
-  );
+      createReceiverClient: () => ({
+        getIdentity: async () => {
+          identityRequestedResolve();
+          return await new Promise((resolve) => {
+            releaseIdentity = () => resolve({ identity: wireIdentity() });
+          });
+        },
+      }),
+    },
+  });
+  await identityRequested;
+  markReceiverDisconnected("connection-1", { path: registry });
+  releaseIdentity();
+  await assert.rejects(routed, /authorization is no longer current/);
   assert.deepEqual(nativeCalls, []);
   assert.equal(getJob(message.messageId, { path: inbox }).status, "routing");
 });
