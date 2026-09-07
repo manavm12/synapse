@@ -984,6 +984,36 @@ test("migration enforces user isolation and durable capture semantics", {
     ),
     (error) => error.code === "not_found",
   );
+  assert.equal(await database.disconnectReceiver(expiredCredential), true);
+  assert.equal(await database.disconnectReceiver(expiredCredential), true);
+  await assert.rejects(
+    database.approveReceiverPairing(userOne, expiredPairing.pairingId),
+    (error) => error.code === "not_found",
+  );
+  await assert.rejects(
+    database.createReceiverPairing(
+      createHash("sha256").update(expiredCredential).digest("hex"),
+      requesterHash,
+    ),
+    (error) => error.code === "conflict",
+  );
+  const pendingCancelCredential = `syn_recv_${Buffer.alloc(32, 12).toString("base64url")}`;
+  const pendingCancelPairing = await database.createReceiverPairing(
+    createHash("sha256").update(pendingCancelCredential).digest("hex"),
+    requesterHash,
+  );
+  assert.equal(
+    await database.disconnectReceiver(pendingCancelCredential),
+    true,
+  );
+  assert.equal(
+    await database.disconnectReceiver(pendingCancelCredential),
+    true,
+  );
+  await assert.rejects(
+    database.approveReceiverPairing(userOne, pendingCancelPairing.pairingId),
+    (error) => error.code === "not_found",
+  );
 
   const senderCount = Number(
     (
@@ -1086,6 +1116,45 @@ test("migration enforces user isolation and durable capture semantics", {
     ),
     false,
   );
+  assert.equal(await database.disconnectReceiver(otherUserCredential), true);
+  assert.equal(await database.disconnectReceiver(otherUserCredential), true);
+  await assert.rejects(
+    database.completeReceiverPairing(
+      otherUserCredential,
+      otherUserPairing.pairingId,
+    ),
+    (error) => error.code === "not_found",
+  );
+
+  const registeredFour = await database.registerAccount(userFour, {
+    username: "agent_four",
+    projectAlias: "synapse",
+  });
+  assert.equal(registeredFour.username, "agent_four");
+  const raceCredential = `syn_recv_${Buffer.alloc(32, 11).toString("base64url")}`;
+  const racePairing = await database.createReceiverPairing(
+    createHash("sha256").update(raceCredential).digest("hex"),
+    requesterHash,
+  );
+  const approvalCancellationRace = await Promise.allSettled([
+    database.approveReceiverPairing(userFour, racePairing.pairingId),
+    database.disconnectReceiver(raceCredential),
+  ]);
+  assert.equal(approvalCancellationRace[1].status, "fulfilled");
+  assert.equal(approvalCancellationRace[1].value, true);
+  assert.equal(await database.getReceiverIdentity(raceCredential), null);
+  await assert.rejects(
+    database.approveReceiverPairing(userFour, racePairing.pairingId),
+    (error) => error.code === "not_found",
+  );
+  const raceState = await admin.query(
+    `select pairing.status::text,
+            (select count(*) from public.receiver_installations as installation
+             where installation.owner_id = $1 and installation.enabled) as enabled
+     from public.receiver_pairings as pairing where pairing.id = $2`,
+    [userFour, racePairing.pairingId],
+  );
+  assert.deepEqual(raceState.rows[0], { status: "cancelled", enabled: "0" });
   await admin.query(
     "update public.profiles set status = 'disabled' where id = $1",
     [userThree],

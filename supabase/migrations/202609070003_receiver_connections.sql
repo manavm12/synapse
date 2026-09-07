@@ -1,4 +1,6 @@
-create type public.receiver_pairing_status as enum ('pending', 'approved');
+create type public.receiver_pairing_status as enum (
+  'pending', 'approved', 'cancelled'
+);
 create type public.message_delivery_kind as enum (
   'provisioning', 'delivered', 'needs_attention'
 );
@@ -14,15 +16,21 @@ create table public.receiver_pairings (
   created_at timestamptz not null default now(),
   expires_at timestamptz not null default (now() + interval '10 minutes'),
   approved_at timestamptz,
+  cancelled_at timestamptz,
   constraint receiver_pairings_hash_length check (
     octet_length(credential_hash) = 32 and octet_length(requester_hash) = 32
   ),
   constraint receiver_pairings_decision_shape check (
     (status = 'pending' and owner_id is null and project_id is null
-      and installation_id is null and approved_at is null)
+      and installation_id is null and approved_at is null and cancelled_at is null)
     or
     (status = 'approved' and owner_id is not null and project_id is not null
-      and installation_id is not null and approved_at is not null)
+      and installation_id is not null and approved_at is not null
+      and cancelled_at is null)
+    or
+    (status = 'cancelled' and owner_id is null and project_id is null
+      and installation_id is null and approved_at is null
+      and cancelled_at is not null)
   )
 );
 
@@ -157,7 +165,13 @@ begin
   perform pg_advisory_xact_lock(hashtextextended(encode(candidate_hash, 'hex'), 0));
   select * into existing from public.receiver_pairings
     where credential_hash = candidate_hash for update;
-  if found and (existing.status = 'approved' or existing.expires_at > now()) then
+  if found and existing.status = 'cancelled' then
+    raise exception 'cancelled credential cannot be reused' using errcode = '23505';
+  end if;
+  if found and (
+    existing.status = 'approved'
+    or (existing.status = 'pending' and existing.expires_at > now())
+  ) then
     return query select existing.id, existing.expires_at;
     return;
   end if;
@@ -170,7 +184,8 @@ begin
     update public.receiver_pairings set
       id = gen_random_uuid(), requester_hash = request_hash, status = 'pending',
       owner_id = null, project_id = null, installation_id = null,
-      created_at = now(), expires_at = now() + interval '10 minutes', approved_at = null
+      created_at = now(), expires_at = now() + interval '10 minutes',
+      approved_at = null, cancelled_at = null
     where credential_hash = candidate_hash returning * into created;
   else
     insert into public.receiver_pairings (credential_hash, requester_hash)
@@ -205,6 +220,7 @@ begin
   select * into pairing from public.receiver_pairings
     where id = requested_pairing_id for update;
   if pairing.id is null
+    or pairing.status = 'cancelled'
     or (pairing.status = 'pending' and pairing.expires_at <= now()) then
     raise exception 'pairing is unavailable or expired' using errcode = 'P0002';
   end if;
@@ -267,6 +283,7 @@ begin
   select * into pairing from public.receiver_pairings
     where id = requested_pairing_id and credential_hash = candidate_hash;
   if pairing.id is null
+    or pairing.status = 'cancelled'
     or (pairing.status = 'pending' and pairing.expires_at <= now()) then
     raise exception 'pairing is unavailable or expired' using errcode = 'P0002';
   end if;
@@ -503,15 +520,37 @@ security definer
 set search_path = ''
 set row_security = off
 as $$
+declare pairing public.receiver_pairings%rowtype;
 declare disconnected_installation_id uuid;
 begin
-  update public.receiver_installations set enabled = false,
-    revoked_at = coalesce(revoked_at, now())
-  where credential_hash = candidate_hash
-  returning id into disconnected_installation_id;
-  if disconnected_installation_id is null then
+  select candidate_pairing.* into pairing
+  from public.receiver_pairings as candidate_pairing
+  where candidate_pairing.credential_hash = candidate_hash
+  for update;
+
+  select installation.id into disconnected_installation_id
+  from public.receiver_installations as installation
+  where installation.credential_hash = candidate_hash
+  for update;
+
+  if pairing.id is null and disconnected_installation_id is null then
     return false;
   end if;
+
+  if pairing.id is not null and pairing.status <> 'cancelled' then
+    update public.receiver_pairings set
+      status = 'cancelled', owner_id = null, project_id = null,
+      installation_id = null, approved_at = null, cancelled_at = now()
+    where id = pairing.id;
+  end if;
+
+  if disconnected_installation_id is null then
+    return true;
+  end if;
+
+  update public.receiver_installations set enabled = false,
+    revoked_at = coalesce(revoked_at, now())
+  where id = disconnected_installation_id;
   update public.message_jobs set
     status = 'needs_attention',
     safe_error_code = 'receiver_disconnected',
