@@ -216,7 +216,7 @@ export function createDatabase(config) {
       );
       const agentSessionId = sessionResult.rows[0].id;
       const existingResult = await client.query(
-        `select node_id, revision, content_hash, created_at
+        `select id, node_id, revision, content_hash, created_at
          from public.memory_revisions
          where capture_id = $1`,
         [input.captureId],
@@ -228,6 +228,7 @@ export function createDatabase(config) {
             saved: true,
             idempotent: true,
             nodeId: existing.node_id,
+            revisionId: existing.id,
             sessionId: input.sessionId,
             revision: existing.revision,
             contentHash: existing.content_hash,
@@ -348,6 +349,7 @@ export function createDatabase(config) {
         saved: true,
         idempotent: false,
         nodeId: node.id,
+        revisionId: revisionResult.rows[0].id,
         sessionId: input.sessionId,
         revision,
         contentHash: hash,

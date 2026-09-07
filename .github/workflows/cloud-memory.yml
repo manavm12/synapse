@@ -44,7 +44,7 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=high
       - name: Test with Postgres
-        run: npm test
+        run: npm test -- --test-concurrency=1
       - name: Validate plugin
         run: npm run validate:plugin
       - name: Build production image

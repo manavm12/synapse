@@ -185,6 +185,7 @@ test("migration enforces user isolation and durable capture semantics", {
   );
   assert.equal(first.idempotent, false);
   assert.equal(first.revision, 1);
+  assert.match(first.revisionId, /^[0-9a-f-]{36}$/);
   const replay = await database.saveSessionMemory(
     identity,
     input,
@@ -192,6 +193,7 @@ test("migration enforces user isolation and durable capture semantics", {
   );
   assert.equal(replay.idempotent, true);
   assert.equal(replay.nodeId, first.nodeId);
+  assert.equal(replay.revisionId, first.revisionId);
 
   await assert.rejects(
     database.saveSessionMemory(
