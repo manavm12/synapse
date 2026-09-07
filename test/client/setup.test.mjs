@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -10,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   formatDoctorReport,
@@ -18,7 +20,11 @@ import {
   setupStatePath,
 } from "../../src/client/doctor.mjs";
 import { connectProject } from "../../src/client/project-registry.mjs";
-import { formatSetupResult, runSetup } from "../../src/client/setup.mjs";
+import {
+  formatSetupResult,
+  runSetup,
+  runSetupCommand,
+} from "../../src/client/setup.mjs";
 
 const repositoryRoot = resolve(".");
 const mcpUrl = "https://synapse-production-ff6c.up.railway.app/mcp";
@@ -95,6 +101,124 @@ function createCodexRunner() {
   };
   return { calls, runCommand };
 }
+
+test("real login streams its URL before exit without recording credentials", {
+  timeout: 10_000,
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-login-stream-"));
+  const synapseHome = join(directory, "synapse");
+  const env = {
+    HOME: directory,
+    CODEX_HOME: join(directory, "codex-home"),
+    SYNAPSE_HOME: synapseHome,
+    PATH: directory,
+    SETUP_TEST_REPOSITORY: repositoryRoot,
+  };
+  const fixture = await readFile(
+    join(repositoryRoot, "fixtures/setup/fake-codex.mjs"),
+    "utf8",
+  );
+  await writeFile(
+    join(directory, "codex"),
+    `#!${process.execPath}\n${fixture}`,
+    {
+      mode: 0o700,
+    },
+  );
+  const setupUrl = pathToFileURL(join(repositoryRoot, "src/client/setup.mjs"));
+  const program = `
+    import { runSetup } from ${JSON.stringify(setupUrl.href)};
+    const result = await runSetup({ alias: "demo" }, {
+      resolveRoot: async () => ${JSON.stringify(join(directory, "project"))},
+    });
+    process.stdout.write(JSON.stringify(result));
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "--eval", program],
+    {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  t.after(async () => {
+    child.kill();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const completed = new Promise((resolveChild) => {
+    child.once("close", (code, signal) => resolveChild({ code, signal }));
+  });
+  let stdout = "";
+  let stderr = "";
+  await new Promise((resolveOutput, rejectOutput) => {
+    const visible = () => {
+      if (
+        stdout.includes("Waiting for browser authorization") &&
+        stderr.includes("https://example.invalid/authorize?state=fixture-state")
+      )
+        resolveOutput();
+    };
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      visible();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      visible();
+    });
+    child.once("error", rejectOutput);
+    child.once("close", () =>
+      rejectOutput(new Error("Login exited before showing its URL")),
+    );
+  });
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null);
+  assert.doesNotMatch(stdout, /Login completed/);
+  await assert.rejects(() => stat(setupStatePath(env)), /ENOENT/);
+  await assert.rejects(() => stat(join(synapseHome, "host.sqlite")), /ENOENT/);
+
+  child.stdin.end("synthetic-oauth-credential\n");
+  assert.deepEqual(await completed, { code: 0, signal: null });
+  assert.match(stdout, /Login completed/);
+  assert.doesNotMatch(stdout + stderr, /synthetic-oauth-credential/);
+  const receipt = await readFile(setupStatePath(env), "utf8");
+  assert.doesNotMatch(receipt, /synthetic-oauth-credential|fixture-state/);
+  assert.deepEqual(Object.keys(JSON.parse(receipt).oauth).sort(), [
+    "completedAt",
+    "resource",
+    "server",
+  ]);
+});
+
+test("interactive runner propagates exit, signal, and startup failures without command data", async () => {
+  for (const [program, expected] of [
+    ["process.exit(7)", /exited with code 7/],
+    ['process.kill(process.pid, "SIGTERM")', /stopped by SIGTERM/],
+  ]) {
+    await assert.rejects(
+      () =>
+        runSetupCommand(
+          process.execPath,
+          ["--eval", program, "synthetic-secret"],
+          { stdio: "inherit" },
+        ),
+      (error) => {
+        assert.match(error.message, expected);
+        assert.doesNotMatch(String(error), /synthetic-secret/);
+        assert.equal(error.stdout, undefined);
+        assert.equal(error.stderr, undefined);
+        return true;
+      },
+    );
+  }
+  await assert.rejects(
+    () =>
+      runSetupCommand("/nonexistent/synthetic-secret", [], {
+        stdio: "inherit",
+      }),
+    /^Error: Interactive command could not be started$/,
+  );
+});
 
 test("setup completes missing stages and a rerun preserves completed state", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "synapse-setup-test-"));

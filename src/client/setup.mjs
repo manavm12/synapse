@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,38 @@ import {
 
 const execFileAsync = promisify(execFile);
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+export function runSetupCommand(command, arguments_, options = {}) {
+  if (options.stdio !== "inherit") {
+    return execFileAsync(command, arguments_, options);
+  }
+
+  // execFile always pipes output. Login must show its URL while awaiting the
+  // browser callback and must not buffer authorization output in result/errors.
+  return new Promise((resolveCommand, rejectCommand) => {
+    const child = spawn(command, arguments_, {
+      ...options,
+      shell: false,
+      stdio: "inherit",
+    });
+    child.once("error", () => {
+      rejectCommand(new Error("Interactive command could not be started"));
+    });
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        resolveCommand({});
+      } else {
+        rejectCommand(
+          new Error(
+            signal
+              ? `Interactive command stopped by ${signal}`
+              : `Interactive command exited with code ${code}`,
+          ),
+        );
+      }
+    });
+  });
+}
 
 async function runJson(runCommand, arguments_) {
   const { stdout } = await runCommand("codex", arguments_, {
@@ -78,7 +110,7 @@ export async function runSetup(
   {
     env = process.env,
     repositoryRoot = moduleRoot,
-    runCommand = execFileAsync,
+    runCommand = runSetupCommand,
     resolveRoot = resolveProjectRoot,
     connect = connectProject,
     now = () => Date.now(),
