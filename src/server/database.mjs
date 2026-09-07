@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import pg from "pg";
 
 import { databaseConnectionOptions } from "../database-ssl.mjs";
+import { createMemoryLedgerAdapter } from "./memory-organizer/storage.mjs";
+import { createMemoryRetrievalService } from "./memory-retrieval/service.mjs";
+import { createMemorySourceReader } from "./memory-retrieval/source-reader.mjs";
 import { createMessagingDatabase } from "./messaging/database.mjs";
 
 const MEMORY_PROCESSOR_VERSION = 1;
@@ -356,8 +359,13 @@ export function createDatabase(config) {
   }
 
   const messaging = createMessagingDatabase(pool, withUser);
+  const memoryRetrieval = createMemoryRetrievalService({
+    adapter: createMemoryLedgerAdapter({ pool }),
+    sourceReader: createMemorySourceReader({ pool }),
+  });
 
   return {
+    memoryRetrieval,
     resolveIdentity,
     getAccount,
     registerAccount,

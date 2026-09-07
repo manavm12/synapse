@@ -17,6 +17,7 @@ async function start() {
   const runtime = await createApplication({
     config,
     database,
+    memoryRetrieval: database.memoryRetrieval,
     verifier,
     sessionVerifier,
     logger,
