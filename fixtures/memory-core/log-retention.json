@@ -1,0 +1,132 @@
+{
+  "identity": {
+    "ownerId": "11111111-1111-4111-8111-111111111111",
+    "projectId": "22222222-2222-4222-8222-222222222222"
+  },
+  "steps": [
+    {
+      "envelope": {
+        "version": 1,
+        "ownerId": "11111111-1111-4111-8111-111111111111",
+        "projectId": "22222222-2222-4222-8222-222222222222",
+        "revisionId": "33333333-3333-4333-8333-333333333331",
+        "nodeId": "44444444-4444-4444-8444-444444444444",
+        "sessionId": "session-retention",
+        "revision": 1,
+        "captureId": "55555555-5555-4555-8555-555555555551",
+        "title": "Log retention decision",
+        "summary": "Initial production retention and runbook reference.",
+        "markdown": "# Decisions\nProduction retains logs for 7 days.\n\n# References\nRunbook: docs/logging.md",
+        "capturedAt": "2026-08-01T10:00:00.000Z"
+      },
+      "extraction": {
+        "claims": [
+          {
+            "ref": "c1",
+            "subject": "Log storage",
+            "aspect": "Retention",
+            "scope": "production",
+            "title": "Production retention",
+            "assertion": "Production retains logs for 7 days.",
+            "kind": "decision",
+            "status": "active",
+            "topic": "Operations",
+            "subtopic": "Logging",
+            "evidence": ["seg:3c8033422d4f0c964fc5"]
+          },
+          {
+            "ref": "c2",
+            "subject": "Log storage",
+            "aspect": "Runbook",
+            "scope": "unqualified",
+            "title": "Logging runbook",
+            "assertion": "The logging runbook is docs/logging.md.",
+            "kind": "reference",
+            "status": "active",
+            "topic": "Operations",
+            "subtopic": "Logging",
+            "evidence": ["seg:668147970f734570d757"]
+          }
+        ],
+        "coverage": [
+          {
+            "segmentId": "seg:3c8033422d4f0c964fc5",
+            "disposition": "claims",
+            "reason": "Supports retention decision"
+          },
+          {
+            "segmentId": "seg:668147970f734570d757",
+            "disposition": "claims",
+            "reason": "Supports durable runbook reference"
+          }
+        ]
+      },
+      "reconciliation": {
+        "actions": [
+          {
+            "ref": "c1",
+            "action": "add",
+            "targets": [],
+            "reason": "New scoped decision"
+          },
+          {
+            "ref": "c2",
+            "action": "add",
+            "targets": [],
+            "reason": "New durable reference"
+          }
+        ]
+      }
+    },
+    {
+      "envelope": {
+        "version": 1,
+        "ownerId": "11111111-1111-4111-8111-111111111111",
+        "projectId": "22222222-2222-4222-8222-222222222222",
+        "revisionId": "33333333-3333-4333-8333-333333333332",
+        "nodeId": "44444444-4444-4444-8444-444444444444",
+        "sessionId": "session-retention-change",
+        "revision": 1,
+        "captureId": "55555555-5555-4555-8555-555555555552",
+        "title": "Retention change",
+        "summary": "Approved production retention change.",
+        "markdown": "# Decisions\nProduction now retains logs for 30 days, replacing the 7-day period.",
+        "capturedAt": "2026-08-02T10:00:00.000Z"
+      },
+      "extraction": {
+        "claims": [
+          {
+            "ref": "c1",
+            "subject": "Log storage",
+            "aspect": "Retention",
+            "scope": "production",
+            "title": "Production retention",
+            "assertion": "Production retains logs for 30 days.",
+            "kind": "change",
+            "status": "active",
+            "topic": "Operations",
+            "subtopic": "Logging",
+            "evidence": ["seg:7f9c4b0a62bf50c79b60"]
+          }
+        ],
+        "coverage": [
+          {
+            "segmentId": "seg:7f9c4b0a62bf50c79b60",
+            "disposition": "claims",
+            "reason": "Supports explicit replacement"
+          }
+        ]
+      },
+      "reconciliation": {
+        "actions": [
+          {
+            "ref": "c1",
+            "action": "replaces",
+            "targets": ["claim:380c08dc44d0eca6bb421368"],
+            "reason": "The source explicitly replaces the prior production period"
+          }
+        ]
+      }
+    }
+  ]
+}
