@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import pg from "pg";
 
-import { databaseSsl } from "../src/database-ssl.mjs";
+import {
+  databaseConnectionOptions,
+  databaseSsl,
+} from "../src/database-ssl.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDirectory = resolve(repositoryRoot, "supabase", "migrations");
@@ -16,7 +19,9 @@ export async function runMigrations({
   output = process.stdout,
 }) {
   if (!connectionString) throw new Error("DATABASE_ADMIN_URL is required");
-  const pool = new pg.Pool({ connectionString, ssl, max: 1 });
+  const pool = new pg.Pool(
+    databaseConnectionOptions({ connectionString, ssl, max: 1 }),
+  );
   const client = await pool.connect();
   const applied = [];
   try {

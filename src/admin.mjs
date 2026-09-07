@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import pg from "pg";
 
 import { PROJECT_ALIAS_PATTERN } from "./client/project-registry.mjs";
-import { databaseSsl } from "./database-ssl.mjs";
+import { databaseConnectionOptions, databaseSsl } from "./database-ssl.mjs";
 
 const USERNAME_PATTERN = /^[a-z][a-z0-9_-]{2,31}$/;
 
@@ -49,11 +49,13 @@ function normalizeProjectAlias(value) {
 }
 
 function adminPool(env) {
-  return new pg.Pool({
-    connectionString: requiredEnv(env, "DATABASE_ADMIN_URL"),
-    max: 1,
-    ssl: databaseSsl(env),
-  });
+  return new pg.Pool(
+    databaseConnectionOptions({
+      connectionString: requiredEnv(env, "DATABASE_ADMIN_URL"),
+      max: 1,
+      ssl: databaseSsl(env),
+    }),
+  );
 }
 
 function supabaseAdmin(env) {

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import pg from "pg";
 
+import { databaseConnectionOptions } from "../database-ssl.mjs";
+
 export class MemoryConflictError extends Error {
   constructor(message = "capture_id was already used with different content") {
     super(message);
@@ -40,13 +42,15 @@ function contentHash(input) {
 }
 
 export function createDatabase(config) {
-  const pool = new pg.Pool({
-    connectionString: config.databaseUrl,
-    ssl: config.databaseSsl,
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
-  });
+  const pool = new pg.Pool(
+    databaseConnectionOptions({
+      connectionString: config.databaseUrl,
+      ssl: config.databaseSsl,
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    }),
+  );
 
   async function withUser(userId, operation) {
     const client = await pool.connect();
