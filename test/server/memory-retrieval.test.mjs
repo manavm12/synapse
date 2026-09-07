@@ -169,6 +169,21 @@ function buildFixture(identity = { ownerId: OWNER, projectId: PROJECT }) {
     ],
     [{ action: "add" }, { action: "add" }],
   );
+  const standaloneHistory = append(
+    ["Legacy archives use cold storage."],
+    [
+      {
+        subject: "Archive storage",
+        aspect: "Storage class",
+        title: "Legacy archive",
+        kind: "fact",
+        status: "historical",
+        topic: "Operations",
+        subtopic: "Archives",
+      },
+    ],
+    [{ action: "add" }],
+  );
 
   const projection = deriveTopicProjection(ledger);
   const authoritative = new Map(
@@ -222,6 +237,7 @@ function buildFixture(identity = { ownerId: OWNER, projectId: PROJECT }) {
     replacement,
     service: createMemoryRetrievalService({ adapter, sourceReader }),
     sourceReader,
+    standaloneHistory,
   };
 }
 
@@ -298,6 +314,35 @@ test("lexical search separates current, history, and both sides of conflicts", a
   );
   assert.ok(conflicted.results.every((entry) => entry.conflicted));
   assert.ok(conflicted.results.every((entry) => entry.conflicts.length === 1));
+});
+
+test("topic filters retain standalone historical claims without projection notes", async () => {
+  const fixture = buildFixture();
+  const operations = fixture.projection.topics.find(
+    (topic) => topic.title === "Operations",
+  );
+  const security = fixture.projection.topics.find(
+    (topic) => topic.title === "Security",
+  );
+  const expectedId = fixture.standaloneHistory[0].id;
+  for (const topicId of [undefined, "root", operations.id]) {
+    const result = await fixture.service.search(userIdentity(), {
+      query: "legacy archives",
+      status: "historical",
+      ...(topicId ? { topic_id: topicId } : {}),
+    });
+    assert.deepEqual(
+      result.results.map((entry) => entry.claim_id),
+      [expectedId],
+    );
+    assert.equal(result.results[0].note_id, null);
+  }
+  const unrelated = await fixture.service.search(userIdentity(), {
+    query: "legacy archives",
+    status: "historical",
+    topic_id: security.id,
+  });
+  assert.deepEqual(unrelated.results, []);
 });
 
 test("claim and note reads paginate authoritative evidence and preserve history", async () => {

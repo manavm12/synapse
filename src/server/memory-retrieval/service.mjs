@@ -247,6 +247,21 @@ function topicDescendants(projection, topicId) {
   return allowed;
 }
 
+function claimMatchesTopicLabels(claim, topicId, projection) {
+  if (topicId === "root") return true;
+  const topic = projection.topics.find((entry) => entry.id === topicId);
+  if (!topic) return false;
+  if (topic.parentId === "root") {
+    return normalized(claim.topic) === normalized(topic.title);
+  }
+  const parent = projection.topics.find((entry) => entry.id === topic.parentId);
+  return (
+    parent &&
+    normalized(claim.topic) === normalized(parent.title) &&
+    normalized(claim.subtopic) === normalized(topic.title)
+  );
+}
+
 function evidenceCitation(evidence, sources) {
   const source = sources.get(evidence.documentId);
   if (!source) throw new Error("Memory evidence cites an unknown revision");
@@ -501,18 +516,21 @@ export function createMemoryRetrievalService({ adapter, sourceReader = null }) {
     const { claims, notesByClaim } = claimView(ledger, projection);
     const claimsById = new Map(claims.map((claim) => [claim.id, claim]));
     const { relations, conflicted } = relationIndex(ledger);
-    let allowedNotes = null;
+    let topicFilter = null;
     if (input.topic_id !== undefined) {
       const topicId = boundedText(input.topic_id, 128, "topic_id");
       if (!projection.topics.some((topic) => topic.id === topicId)) {
         throw new MemoryNotFoundError("Memory topic was not found");
       }
       const descendants = topicDescendants(projection, topicId);
-      allowedNotes = new Set(
-        projection.items
-          .filter((item) => descendants.has(item.primary))
-          .map((item) => item.id),
-      );
+      topicFilter = {
+        topicId,
+        allowedNotes: new Set(
+          projection.items
+            .filter((item) => descendants.has(item.primary))
+            .map((item) => item.id),
+        ),
+      };
     }
     const sources = new Map(
       ledger.sources.map((source) => [source.revisionId, source]),
@@ -523,8 +541,16 @@ export function createMemoryRetrievalService({ adapter, sourceReader = null }) {
         if (status === "current" && !isCurrent) return false;
         if (status === "historical" && isCurrent) return false;
         if (status === "conflicted" && !conflicted.has(claim.id)) return false;
-        if (allowedNotes && !allowedNotes.has(notesByClaim.get(claim.id))) {
-          return false;
+        if (topicFilter) {
+          const projected = topicFilter.allowedNotes.has(
+            notesByClaim.get(claim.id),
+          );
+          if (
+            !projected &&
+            !claimMatchesTopicLabels(claim, topicFilter.topicId, projection)
+          ) {
+            return false;
+          }
         }
         return true;
       })

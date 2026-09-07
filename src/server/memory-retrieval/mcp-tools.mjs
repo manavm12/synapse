@@ -69,62 +69,59 @@ export const searchMemoryInputSchema = z
   })
   .strict();
 
-export const readMemoryInputSchema = z.discriminatedUnion("target_type", [
-  z
-    .object({
-      target_type: z
-        .literal("note")
-        .describe("Read one projected memory note."),
-      target_id: targetIdSchema,
-      cursor: cursorSchema,
-      evidence_limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(8)
-        .describe("Maximum verified evidence snippets; defaults to 4.")
-        .optional(),
-    })
-    .strict(),
-  z
-    .object({
-      target_type: z
-        .literal("claim")
-        .describe("Read one immutable memory claim."),
-      target_id: targetIdSchema,
-      cursor: cursorSchema,
-      evidence_limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(8)
-        .describe("Maximum verified evidence snippets; defaults to 4.")
-        .optional(),
-    })
-    .strict(),
-  z
-    .object({
-      target_type: z
-        .literal("source")
-        .describe("Explicitly read one immutable raw source revision."),
-      target_id: z
-        .uuid()
-        .describe(
-          "Exact immutable source revision UUID from an evidence citation.",
-        ),
-      cursor: cursorSchema,
-      max_chars: z
-        .number()
-        .int()
-        .min(1)
-        .max(4_000)
-        .describe(
-          "Maximum contiguous raw Markdown characters; defaults to 2000.",
-        )
-        .optional(),
-    })
-    .strict(),
-]);
+export const readMemoryInputSchema = z
+  .object({
+    target_type: z
+      .enum(["note", "claim", "source"])
+      .describe(
+        "Read one projected note, immutable claim, or raw source revision.",
+      ),
+    target_id: targetIdSchema.describe(
+      "Exact note/claim ID, or immutable revision UUID for a source read.",
+    ),
+    cursor: cursorSchema,
+    evidence_limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(8)
+      .describe(
+        "Maximum verified evidence snippets for note/claim; defaults to 4.",
+      )
+      .optional(),
+    max_chars: z
+      .number()
+      .int()
+      .min(1)
+      .max(4_000)
+      .describe("Maximum raw Markdown characters for source; defaults to 2000.")
+      .optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.target_type === "source") {
+      if (!z.uuid().safeParse(value.target_id).success) {
+        context.addIssue({
+          code: "custom",
+          path: ["target_id"],
+          message: "source target_id must be an immutable revision UUID",
+        });
+      }
+      if (value.evidence_limit !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidence_limit"],
+          message: "evidence_limit is only valid for note or claim reads",
+        });
+      }
+    } else if (value.max_chars !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["max_chars"],
+        message: "max_chars is only valid for source reads",
+      });
+    }
+  });
 
 const baseOutputSchema = z.object({
   catalog_status: z.enum(["ready", "empty"]),

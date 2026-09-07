@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { ListToolsResultSchema } from "@modelcontextprotocol/core";
 import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
 
 import { createApplication } from "../../src/server/app.mjs";
@@ -458,12 +459,74 @@ test("MCP publishes and authenticates bounded memory retrieval tools", async (t)
     },
     async read(receivedIdentity, input) {
       calls.push({ tool: "read_memory", receivedIdentity, input });
+      if (input.target_type === "source") {
+        return {
+          catalog_status: "ready",
+          generation: 3,
+          target_type: "source",
+          source: {
+            revision_id: input.target_id,
+            node_id: "33333333-3333-4333-8333-333333333333",
+            session_id: "session-1",
+            revision: 1,
+            title: "Source",
+            summary: "Summary",
+            captured_at: "2026-09-01T00:00:00.000Z",
+            content_hash: "a".repeat(64),
+            capture_content_hash: "b".repeat(64),
+            processed: true,
+            start: 0,
+            end: 5,
+            text: "Exact",
+          },
+          next_cursor: null,
+        };
+      }
+      if (input.target_type === "claim") {
+        return {
+          catalog_status: "ready",
+          generation: 3,
+          target_type: "claim",
+          note: null,
+          claim: {
+            claim_id: input.target_id,
+            canonical_claim_id: input.target_id,
+            title: "Claim",
+            assertion: "Exact assertion.",
+            assertion_truncated: false,
+            subject: "Subject",
+            aspect: "Aspect",
+            scope: "production",
+            kind: "fact",
+            status: "active",
+            current: true,
+            conflicted: false,
+            topic: "Operations",
+            subtopic: "Logging",
+            observed_at: "2026-09-01T00:00:00.000Z",
+            recorded_at: "2026-09-01T00:00:01.000Z",
+            source_revision_id: "44444444-4444-4444-8444-444444444444",
+            relations: [],
+          },
+          evidence: [],
+          next_cursor: null,
+        };
+      }
       return {
-        catalog_status: "empty",
-        generation: 0,
-        message: "No processed memory is available.",
-        target_type: input.target_type,
-        note: null,
+        catalog_status: "ready",
+        generation: 3,
+        target_type: "note",
+        note: {
+          note_id: input.target_id,
+          title: "Note",
+          body: "Current claim — Exact assertion.",
+          body_truncated: false,
+          kind: "fact",
+          status: "active",
+          conflicted: false,
+          observed_at: "2026-09-01T00:00:00.000Z",
+          claim_ids: ["claim:test"],
+        },
         claim: null,
         evidence: [],
         next_cursor: null,
@@ -490,6 +553,10 @@ test("MCP publishes and authenticates bounded memory retrieval tools", async (t)
       "list_inbox",
     ],
   );
+  assert.equal(
+    ListToolsResultSchema.safeParse(listed.body.result).success,
+    true,
+  );
   const retrievalTools = listed.body.result.tools.slice(2, 5);
   assert.ok(
     retrievalTools.every(
@@ -515,6 +582,51 @@ test("MCP publishes and authenticates bounded memory retrieval tools", async (t)
     status: "historical",
   });
 
+  const readCases = [
+    { target_type: "note", target_id: "item:test", evidence_limit: 2 },
+    { target_type: "claim", target_id: "claim:test" },
+    {
+      target_type: "source",
+      target_id: "44444444-4444-4444-8444-444444444444",
+      max_chars: 5,
+    },
+  ];
+  for (const [index, arguments_] of readCases.entries()) {
+    const read = await mcp(baseUrl, {
+      jsonrpc: "2.0",
+      id: 30 + index,
+      method: "tools/call",
+      params: { name: "read_memory", arguments: arguments_ },
+    });
+    assert.equal(read.body.result.isError, undefined);
+    assert.equal(
+      read.body.result.structuredContent.target_type,
+      arguments_.target_type,
+    );
+    assert.equal(calls.at(-1).receivedIdentity, identity);
+  }
+
+  const callCount = calls.length;
+  for (const arguments_ of [
+    { target_type: "source", target_id: "not-a-uuid" },
+    {
+      target_type: "source",
+      target_id: "44444444-4444-4444-8444-444444444444",
+      evidence_limit: 2,
+    },
+    { target_type: "note", target_id: "item:test", max_chars: 20 },
+    { target_type: "unknown", target_id: "item:test" },
+  ]) {
+    const invalid = await mcp(baseUrl, {
+      jsonrpc: "2.0",
+      id: 40,
+      method: "tools/call",
+      params: { name: "read_memory", arguments: arguments_ },
+    });
+    assert.equal(invalid.body.result.isError, true);
+  }
+  assert.equal(calls.length, callCount);
+
   const rejected = await mcp(baseUrl, {
     jsonrpc: "2.0",
     id: 22,
@@ -525,7 +637,7 @@ test("MCP publishes and authenticates bounded memory retrieval tools", async (t)
     },
   });
   assert.equal(rejected.body.result.isError, true);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, callCount);
 });
 
 test("messaging MCP sends by username and exposes participant status", async (t) => {
