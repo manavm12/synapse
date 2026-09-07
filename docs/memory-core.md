@@ -44,7 +44,11 @@ const nextLedger = applyMemoryChangeSet(ledger, changeSet);
 `applyMemoryChangeSet` is the replay seam. It requires the exact next ledger version,
 checks tenant/project and revision consistency, appends without editing prior
 entries, validates the resulting graph, and independently regenerates the supplied
-projection. A persistence adapter should translate the four append collections and
+projection. It also re-runs the carried extraction/reconciliation proposals against
+the source to reject edited evidence or missing coverage. Prior ledger evidence
+is trusted input; a persistence adapter must validate it against durable revisions.
+Question resolution requires matching subject, aspect and scope and at most one
+accepted answer (later changes supersede that answer). A persistence adapter should translate the four append collections and
 the projection to normalized Postgres mutations, then commit them together with
 job completion under Task B's validated lease fence. It must enforce the expected
 ledger version in that transaction. This library neither opens a transaction nor

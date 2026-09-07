@@ -246,16 +246,24 @@ export function applyTransaction(
       const clarifiesScope =
         (action.action === "replaces" && target.scope === "unqualified") ||
         (action.action === "replaced_by" && claim.scope === "unqualified");
-      if (
-        target.scope !== claim.scope &&
-        action.action !== "resolves" &&
-        !clarifiesScope
-      )
+      if (target.scope !== claim.scope && !clarifiesScope)
         throw new Error(
           `Cannot ${action.action} across scopes: ${target.scope} / ${claim.scope}`,
         );
       if (action.action === "resolves" && target.kind !== "open_question")
         throw new Error("Only an open question may be resolved");
+      if (action.action === "resolves") {
+        if (target.subject !== claim.subject || target.aspect !== claim.aspect)
+          throw new Error(
+            "Resolution must match the question subject and aspect",
+          );
+        if (
+          liveStates.get(targetId) === "resolved" ||
+          retiredHere.has(targetId)
+        )
+          throw new Error("A question cannot have multiple accepted answers");
+        retiredHere.add(targetId);
+      }
       const historicalRecap =
         claim.status === "historical" &&
         (finishedTargets.has(targetId) ||
@@ -377,6 +385,7 @@ export function validateLedger(ledger) {
   }
   const seen = new Set();
   const successors = new Map();
+  const answers = new Set();
   for (const relation of ledger.relations) {
     if (
       !ids.has(relation.from) ||
@@ -394,6 +403,11 @@ export function validateLedger(ledger) {
     if (!sourceIds.has(relation.sourceId))
       throw new Error("Relation references an unknown source");
     seen.add(relation.id);
+    if (relation.type === "resolves") {
+      if (answers.has(relation.to))
+        throw new Error("A question cannot have multiple accepted answers");
+      answers.add(relation.to);
+    }
     if (["supersedes", "equivalent"].includes(relation.type)) {
       const from = relation.type === "supersedes" ? relation.to : relation.from;
       const to = relation.type === "supersedes" ? relation.from : relation.to;

@@ -224,3 +224,72 @@ test("topic projection is bounded, deterministic, scoped, and leaves the ledger 
   assert.deepEqual(deriveTopicProjection(ledger), projection);
   assert.equal(JSON.stringify(ledger), before);
 });
+
+test("replay rejects forged evidence even with a regenerated projection and missing coverage", () => {
+  const initial = emptyLedger(fixture.identity);
+  const change = prepare(initial, fixture.steps[0]);
+  const forged = structuredClone(change);
+  forged.append.claims[0].evidence[0].quote = "X".repeat(
+    forged.append.claims[0].evidence[0].quote.length,
+  );
+  const forgedLedger = {
+    ...initial,
+    ...structuredClone(forged.append),
+    version: 1,
+  };
+  forged.projection = deriveTopicProjection(forgedLedger);
+  assert.throws(
+    () => applyMemoryChangeSet(initial, forged),
+    /source-backed proposal replay/,
+  );
+  const missing = structuredClone(change);
+  missing.append.coverage = [];
+  assert.throws(
+    () => applyMemoryChangeSet(initial, missing),
+    /source-backed proposal replay/,
+  );
+});
+
+test("resolution preserves question identity, scope and one accepted answer", () => {
+  const question = structuredClone(fixture.steps[0]);
+  question.extraction.claims[0].kind = "open_question";
+  question.extraction.claims[0].assertion =
+    "How long should production retain logs?";
+  const initial = emptyLedger(fixture.identity);
+  const ledger = applyMemoryChangeSet(initial, prepare(initial, question));
+  const answer = structuredClone(fixture.steps[1]);
+  answer.reconciliation.actions[0].action = "resolves";
+  for (const field of ["scope", "subject", "aspect"]) {
+    const mismatched = structuredClone(answer);
+    mismatched.extraction.claims[0][field] = "different";
+    assert.throws(
+      () => prepare(ledger, mismatched),
+      /scopes|subject and aspect/,
+    );
+  }
+  const twoAnswers = structuredClone(answer);
+  twoAnswers.extraction.claims.push({
+    ...structuredClone(twoAnswers.extraction.claims[0]),
+    ref: "c2",
+  });
+  twoAnswers.reconciliation.actions.push({
+    ...twoAnswers.reconciliation.actions[0],
+    ref: "c2",
+  });
+  assert.throws(() => prepare(ledger, twoAnswers), /multiple accepted answers/);
+  const answered = applyMemoryChangeSet(ledger, prepare(ledger, answer));
+  assert.equal(
+    currentClaims(answered).find((claim) => claim.kind === "open_question")
+      .state,
+    "resolved",
+  );
+  const again = structuredClone(answer);
+  again.envelope.revisionId = "33333333-3333-4333-8333-333333333333";
+  again.envelope.sessionId = "second-answer";
+  const segmentId = segmentsFor(
+    normalizeSourceEnvelope(again.envelope, fixture.identity),
+  )[0].id;
+  again.extraction.claims[0].evidence = [segmentId];
+  again.extraction.coverage[0].segmentId = segmentId;
+  assert.throws(() => prepare(answered, again), /multiple accepted answers/);
+});

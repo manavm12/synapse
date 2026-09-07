@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { CORE_VERSION } from "./contracts.mjs";
 import { applyTransaction, validateLedger } from "./ledger.mjs";
 import { deriveTopicProjection } from "./projection.mjs";
@@ -44,6 +45,7 @@ export function prepareMemoryChangeSet({
     revisionId: source.revisionId,
     expectedLedgerVersion: ledger.version,
     nextLedgerVersion: nextLedger.version,
+    proposal: structuredClone({ extraction, reconciliation, recordedAt }),
     source,
     append: {
       sources: additions(ledger, nextLedger, "sources"),
@@ -105,6 +107,20 @@ export function applyMemoryChangeSet(ledger, changeSet) {
       )
     )
       throw new Error(`Change set ${key} contains a different source revision`);
+  if (!changeSet.proposal)
+    throw new Error("Change set proposal is required for replay");
+  const expected = prepareMemoryChangeSet({
+    ledger,
+    envelope: normalizedSource,
+    expectedIdentity: { ownerId: ledger.ownerId, projectId: ledger.projectId },
+    extraction: changeSet.proposal.extraction,
+    reconciliation: changeSet.proposal.reconciliation,
+    recordedAt: changeSet.proposal.recordedAt,
+  });
+  if (!isDeepStrictEqual(changeSet.append, expected.append))
+    throw new Error(
+      "Change set entries do not match source-backed proposal replay",
+    );
   const next = structuredClone(ledger);
   next.sources.push(...structuredClone(changeSet.append.sources));
   next.claims.push(...structuredClone(changeSet.append.claims));
