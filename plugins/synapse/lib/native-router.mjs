@@ -3,8 +3,86 @@ import {
   acceptProvisioning,
   acknowledgeMessage,
   getReservedDelivery,
+  markNativeMutationIssued,
+  markNativeMutationUncertain,
   retryRoutingMessage,
 } from "./inbox.mjs";
+import { ReceiverClient } from "./receiver-client.mjs";
+import { validateReceiverIdentity } from "./receiver-contract.mjs";
+import {
+  getReceiverConnection,
+  receiverRegistryPath,
+} from "./receiver-registry.mjs";
+import { MacOsKeychainStore } from "./receiver-secrets.mjs";
+
+function sameReceiverIdentity(expected, actual) {
+  return (
+    expected?.installationId === actual?.installationId &&
+    expected?.userId === actual?.userId &&
+    expected?.projectId === actual?.projectId &&
+    expected?.projectAlias === actual?.projectAlias
+  );
+}
+
+function allowInsecure(env) {
+  return env.SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP === "1";
+}
+
+function connectionAuthorizes(connection, expected, now) {
+  return (
+    connection?.status === "connected" &&
+    sameReceiverIdentity(expected, connection.identity) &&
+    Date.parse(connection.identity.expiresAt) > now
+  );
+}
+
+export async function authorizeCloudDelivery(
+  delivery,
+  {
+    env = process.env,
+    registryPath = receiverRegistryPath(env),
+    secretStore = null,
+    createReceiverClient = (options) => new ReceiverClient(options),
+    now = Date.now,
+  } = {},
+) {
+  if (delivery.source !== "cloud") return null;
+  const expected = delivery.receiverAuthorization;
+  const connection = getReceiverConnection(delivery.projectRoot, {
+    path: registryPath,
+  });
+  if (!expected || !connectionAuthorizes(connection, expected, now())) {
+    throw new Error("Cloud receiver authorization is no longer current");
+  }
+  const credentials = secretStore ?? new MacOsKeychainStore();
+  const credential = await credentials.get(connection.credentialAccount);
+  const client = createReceiverClient({
+    serverUrl: connection.serverUrl,
+    credential,
+    allowInsecureHttp: allowInsecure(env),
+    timeoutMs: 2_500,
+  });
+  const response = await client.getIdentity();
+  const fresh = validateReceiverIdentity(response.identity);
+  if (
+    !sameReceiverIdentity(expected, fresh) ||
+    !(Date.parse(fresh.expiresAt) > now())
+  ) {
+    throw new Error("Cloud receiver authorization is no longer current");
+  }
+  const current = getReceiverConnection(delivery.projectRoot, {
+    path: registryPath,
+  });
+  if (
+    !connectionAuthorizes(current, expected, now()) ||
+    current.connectionId !== connection.connectionId ||
+    current.credentialAccount !== connection.credentialAccount ||
+    current.serverUrl !== connection.serverUrl
+  ) {
+    throw new Error("Cloud receiver authorization is no longer current");
+  }
+  return fresh;
+}
 
 export function selectProject(projects, projectRoot) {
   const project = projects.find((candidate) => candidate.path === projectRoot);
@@ -38,9 +116,13 @@ export async function routeDelivery(
     createClient = () => new AppToolsClient(),
     accept = acceptProvisioning,
     acknowledge = acknowledgeMessage,
+    markIssued = markNativeMutationIssued,
+    authorizeCloud = authorizeCloudDelivery,
+    cloudAuthorizationOptions,
   } = {},
 ) {
   const client = createClient();
+  let mutationIssued = false;
   try {
     await client.start();
     const listed = appToolJson(
@@ -64,6 +146,15 @@ export async function routeDelivery(
     }
 
     if (delivery.channel.threadId) {
+      if (delivery.source === "cloud") {
+        await authorizeCloud(delivery, cloudAuthorizationOptions);
+        markIssued({
+          jobId: delivery.jobId,
+          deliveryId: delivery.deliveryId,
+          receiverIdentity: delivery.receiverAuthorization,
+        });
+        mutationIssued = true;
+      }
       await client.callTool(
         "send_message_to_thread",
         {
@@ -82,6 +173,15 @@ export async function routeDelivery(
       });
     }
 
+    if (delivery.source === "cloud") {
+      await authorizeCloud(delivery, cloudAuthorizationOptions);
+      markIssued({
+        jobId: delivery.jobId,
+        deliveryId: delivery.deliveryId,
+        receiverIdentity: delivery.receiverAuthorization,
+      });
+      mutationIssued = true;
+    }
     const created = appToolJson(
       await client.callTool(
         "create_thread",
@@ -113,25 +213,33 @@ export async function routeDelivery(
       projectId: project.projectId,
       hostId,
     });
+  } catch (error) {
+    if (mutationIssued) error.nativeMutationIssued = true;
+    throw error;
   } finally {
     await client.close();
   }
 }
 
 export async function runReservedDelivery(
-  { jobId, deliveryId, ownerThreadId, turnId },
+  { jobId, deliveryId, ownerThreadId, turnId, receiverIdentity = null },
   {
     load = getReservedDelivery,
     route = routeDelivery,
     retry = retryRoutingMessage,
+    uncertain = markNativeMutationUncertain,
   } = {},
 ) {
-  const delivery = load({ jobId, deliveryId });
+  const delivery = load({ jobId, deliveryId, receiverIdentity });
   if (!delivery) return null;
   try {
     return await route(delivery, { ownerThreadId, turnId });
   } catch (error) {
-    retry({ jobId, deliveryId, error: error.message });
+    if (delivery.source === "cloud" && error.nativeMutationIssued === true) {
+      uncertain({ jobId, deliveryId, error: error.message });
+    } else {
+      retry({ jobId, deliveryId, error: error.message });
+    }
     throw error;
   }
 }

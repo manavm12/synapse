@@ -15,6 +15,15 @@ function booleanEnv(value, defaultValue = false) {
   throw new Error("Boolean environment values must be true or false");
 }
 
+function boundedIntegerEnv(value, { defaultValue, minimum, maximum, name }) {
+  if (value === undefined || value === "") return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return parsed;
+}
+
 function serviceUrl(value, { production, exactPath }) {
   const url = new URL(value);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
@@ -77,6 +86,12 @@ export function loadConfig(env = process.env) {
     cookieSecret,
     allowDevTokens: booleanEnv(env.ALLOW_DEV_TOKENS),
     publicSignup: booleanEnv(env.PUBLIC_SIGNUP_ENABLED),
+    trustedProxyHops: boundedIntegerEnv(env.TRUST_PROXY_HOPS, {
+      defaultValue: 0,
+      minimum: 0,
+      maximum: 10,
+      name: "TRUST_PROXY_HOPS",
+    }),
     requiredScopes: REQUIRED_SCOPES,
     allowedHosts: [
       resourceUrl.hostname,

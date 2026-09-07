@@ -2,6 +2,14 @@ import { createHash } from "node:crypto";
 
 import pg from "pg";
 
+import { databaseConnectionOptions } from "../database-ssl.mjs";
+import { createMemoryLedgerAdapter } from "./memory-organizer/storage.mjs";
+import { createMemoryRetrievalService } from "./memory-retrieval/service.mjs";
+import { createMemorySourceReader } from "./memory-retrieval/source-reader.mjs";
+import { createMessagingDatabase } from "./messaging/database.mjs";
+
+const MEMORY_PROCESSOR_VERSION = 1;
+
 export class MemoryConflictError extends Error {
   constructor(message = "capture_id was already used with different content") {
     super(message);
@@ -40,13 +48,15 @@ function contentHash(input) {
 }
 
 export function createDatabase(config) {
-  const pool = new pg.Pool({
-    connectionString: config.databaseUrl,
-    ssl: config.databaseSsl,
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
-  });
+  const pool = new pg.Pool(
+    databaseConnectionOptions({
+      connectionString: config.databaseUrl,
+      ssl: config.databaseSsl,
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    }),
+  );
 
   async function withUser(userId, operation) {
     const client = await pool.connect();
@@ -206,7 +216,7 @@ export function createDatabase(config) {
       );
       const agentSessionId = sessionResult.rows[0].id;
       const existingResult = await client.query(
-        `select node_id, revision, content_hash, created_at
+        `select id, node_id, revision, content_hash, created_at
          from public.memory_revisions
          where capture_id = $1`,
         [input.captureId],
@@ -218,6 +228,7 @@ export function createDatabase(config) {
             saved: true,
             idempotent: true,
             nodeId: existing.node_id,
+            revisionId: existing.id,
             sessionId: input.sessionId,
             revision: existing.revision,
             contentHash: existing.content_hash,
@@ -288,7 +299,7 @@ export function createDatabase(config) {
            capture_id, capture_reason, revision, title, summary,
            markdown, content_hash
          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         returning created_at`,
+         returning id, created_at`,
         [
           identity.userId,
           project.id,
@@ -302,6 +313,10 @@ export function createDatabase(config) {
           input.markdown,
           hash,
         ],
+      );
+      await client.query(
+        `select synapse_private.enqueue_memory_processing($1, $2)`,
+        [revisionResult.rows[0].id, MEMORY_PROCESSOR_VERSION],
       );
       await client.query(
         `update public.memory_nodes
@@ -334,6 +349,7 @@ export function createDatabase(config) {
         saved: true,
         idempotent: false,
         nodeId: node.id,
+        revisionId: revisionResult.rows[0].id,
         sessionId: input.sessionId,
         revision,
         contentHash: hash,
@@ -344,12 +360,20 @@ export function createDatabase(config) {
     return result;
   }
 
+  const messaging = createMessagingDatabase(pool, withUser);
+  const memoryRetrieval = createMemoryRetrievalService({
+    adapter: createMemoryLedgerAdapter({ pool }),
+    sourceReader: createMemorySourceReader({ pool }),
+  });
+
   return {
+    memoryRetrieval,
     resolveIdentity,
     getAccount,
     registerAccount,
     exchangeDevelopmentToken,
     saveSessionMemory,
+    ...messaging,
     async healthCheck() {
       await pool.query("select 1");
     },

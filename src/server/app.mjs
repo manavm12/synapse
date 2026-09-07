@@ -9,6 +9,7 @@ import {
 
 import { installConsentRoutes } from "./consent.mjs";
 import { createMcpRuntime } from "./mcp.mjs";
+import { installReceiverRoutes } from "./messaging/receiver.mjs";
 import { installOnboardingRoutes } from "./onboarding.mjs";
 
 function supabaseBrowserPath() {
@@ -33,6 +34,7 @@ export async function createApplication({
   verifier,
   sessionVerifier,
   logger,
+  memoryRetrieval,
   fetchImplementation = fetch,
 }) {
   const app = createMcpExpressApp({
@@ -41,7 +43,14 @@ export async function createApplication({
     allowedOrigins: config.allowedHosts,
     jsonLimit: "80kb",
   });
-  const runtime = await createMcpRuntime({ database, logger });
+  if (config.trustedProxyHops > 0) {
+    app.set("trust proxy", config.trustedProxyHops);
+  }
+  const runtime = await createMcpRuntime({
+    database,
+    logger,
+    memoryRetrieval,
+  });
 
   app.use((req, res, next) => {
     req.requestId = randomUUID();
@@ -114,6 +123,11 @@ export async function createApplication({
     supabaseBrowserPath: supabaseBrowserPath(),
   });
   installOnboardingRoutes(app, config, {
+    database,
+    sessionVerifier,
+    logger,
+  });
+  installReceiverRoutes(app, config, {
     database,
     sessionVerifier,
     logger,

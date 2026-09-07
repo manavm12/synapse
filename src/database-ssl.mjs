@@ -15,3 +15,29 @@ export function databaseSsl(env = process.env) {
     ...(ca ? { ca } : {}),
   };
 }
+
+// node-postgres reparses connectionString after applying the supplied ssl
+// object. URL SSL options can otherwise silently override verified TLS.
+export function databaseConnectionOptions({
+  connectionString,
+  ssl,
+  ...options
+}) {
+  let url;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    throw new Error("Database connection must be a PostgreSQL URL");
+  }
+  if (!["postgres:", "postgresql:"].includes(url.protocol)) {
+    throw new Error("Database connection must be a PostgreSQL URL");
+  }
+  for (const key of url.searchParams.keys()) {
+    if (/^ssl/i.test(key) || key.toLowerCase() === "uselibpqcompat") {
+      throw new Error(
+        "Remove SSL options from the database URL; configure DATABASE_SSL and DATABASE_CA_CERT instead",
+      );
+    }
+  }
+  return { ...options, connectionString, ssl };
+}

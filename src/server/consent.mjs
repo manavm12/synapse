@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const COOKIE_NAME = "synapse_authorization";
 const AUTHORIZATION_ID = /^[A-Za-z0-9._~-]{1,512}$/;
+const RECEIVER_PAIRING_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function encode(value) {
   return Buffer.from(value).toString("base64url");
@@ -191,7 +193,19 @@ export function installConsentRoutes(app, config, { supabaseBrowserPath }) {
     render(res, { authorizationId, config, mode: "callback" });
   });
 
-  app.get("/auth/activate", (_req, res) => {
-    render(res, { authorizationId: "", config, mode: "activate" });
+  app.get("/auth/activate", (req, res) => {
+    const pairingId =
+      typeof req.query.receiver_pairing === "string"
+        ? req.query.receiver_pairing
+        : null;
+    if (pairingId && !RECEIVER_PAIRING_ID.test(pairingId)) {
+      res.status(400).send("Invalid receiver pairing");
+      return;
+    }
+    render(res, {
+      authorizationId: pairingId ?? "",
+      config,
+      mode: pairingId ? "receiver_callback" : "activate",
+    });
   });
 }
