@@ -503,10 +503,22 @@ security definer
 set search_path = ''
 set row_security = off
 as $$
+declare disconnected_installation_id uuid;
 begin
   update public.receiver_installations set enabled = false,
-    revoked_at = coalesce(revoked_at, now()) where credential_hash = candidate_hash;
-  return found;
+    revoked_at = coalesce(revoked_at, now())
+  where credential_hash = candidate_hash
+  returning id into disconnected_installation_id;
+  if disconnected_installation_id is null then
+    return false;
+  end if;
+  update public.message_jobs set
+    status = 'needs_attention',
+    safe_error_code = 'receiver_disconnected',
+    needs_attention_at = coalesce(needs_attention_at, now())
+  where assigned_installation_id = disconnected_installation_id
+    and status <> 'delivered';
+  return true;
 end
 $$;
 

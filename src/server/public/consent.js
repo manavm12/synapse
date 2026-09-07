@@ -90,6 +90,16 @@ async function start() {
     return;
   }
 
+  if (root.dataset.mode === "receiver_callback") {
+    if (!sessionData.session) {
+      throw new Error("The sign-in link is invalid or expired");
+    }
+    location.replace(
+      `/receiver/pairings/${encodeURIComponent(authorizationId)}`,
+    );
+    return;
+  }
+
   if (root.dataset.mode === "callback") {
     if (!sessionData.session) {
       throw new Error("The sign-in link is invalid or expired");

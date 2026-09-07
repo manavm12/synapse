@@ -43,6 +43,9 @@ export async function createApplication({
     allowedOrigins: config.allowedHosts,
     jsonLimit: "80kb",
   });
+  if (config.trustedProxyHops > 0) {
+    app.set("trust proxy", config.trustedProxyHops);
+  }
   const runtime = await createMcpRuntime({
     database,
     logger,

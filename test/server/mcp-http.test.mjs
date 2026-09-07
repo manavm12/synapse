@@ -154,8 +154,8 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
     async recordReceiverEvents(_credential, events) {
       return events.map((event) => event.eventId);
     },
-    async disconnectReceiver() {
-      return true;
+    async disconnectReceiver(credential) {
+      return credential === receiverCredential;
     },
   };
   const config = createConfig();
@@ -268,6 +268,19 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
   const activation = await fetch(`${baseUrl}/auth/activate?code=invite-code`);
   assert.equal(activation.status, 200);
   assert.match(await activation.text(), /data-mode="activate"/);
+  const receiverCallback = await fetch(
+    `${baseUrl}/auth/activate?receiver_pairing=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb`,
+  );
+  assert.equal(receiverCallback.status, 200);
+  assert.match(await receiverCallback.text(), /data-mode="receiver_callback"/);
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}/auth/activate?receiver_pairing=https%3A%2F%2Fevil.example`,
+      )
+    ).status,
+    400,
+  );
   for (const asset of [
     "/assets/supabase.js",
     "/assets/consent.js",
@@ -692,6 +705,11 @@ test("receiver pairing and scoped transport routes preserve the v1 wire shape", 
     headers: { authorization: `Bearer ${otherCredential}` },
   });
   assert.equal(denied.status, 401);
+  const deniedDisconnect = await fetch(`${baseUrl}/receiver/disconnect`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${otherCredential}` },
+  });
+  assert.equal(deniedDisconnect.status, 401);
 
   const disconnected = await fetch(`${baseUrl}/receiver/disconnect`, {
     method: "POST",

@@ -983,8 +983,107 @@ test("migration enforces user isolation and durable capture semantics", {
     (error) => error.code === "not_found",
   );
 
+  const senderCount = Number(
+    (
+      await admin.query(
+        "select count(*) from public.message_jobs where sender_id = $1 and queued_at > now() - interval '1 hour'",
+        [userOne],
+      )
+    ).rows[0].count,
+  );
+  await admin.query(
+    `insert into public.app_config (key, value) values
+       ('message_sender_hourly_limit', $1),
+       ('message_recipient_pending_limit', '1000')
+     on conflict (key) do update set value = excluded.value`,
+    [String(senderCount + 1)],
+  );
+  const senderQuotaRace = await Promise.allSettled([
+    database.sendMessage(identity, {
+      toUsername: "user_two",
+      message: "Sender quota race one.",
+      requestId: "00000000-0000-4000-8000-000000000305",
+    }),
+    database.sendMessage(identity, {
+      toUsername: "user_two",
+      message: "Sender quota race two.",
+      requestId: "00000000-0000-4000-8000-000000000306",
+    }),
+  ]);
+  assert.deepEqual(senderQuotaRace.map((result) => result.status).sort(), [
+    "fulfilled",
+    "rejected",
+  ]);
+  assert.equal(
+    senderQuotaRace.find((result) => result.status === "rejected").reason.code,
+    "rate_limited",
+  );
+
+  const pendingCount = Number(
+    (
+      await admin.query(
+        `select count(*) from public.message_jobs
+         where recipient_id = $1
+           and status in ('queued', 'in_receiver_inbox', 'provisioning', 'needs_attention')`,
+        [userTwo],
+      )
+    ).rows[0].count,
+  );
+  await admin.query(
+    `insert into public.app_config (key, value) values
+       ('message_sender_hourly_limit', '1000'),
+       ('message_recipient_pending_limit', $1)
+     on conflict (key) do update set value = excluded.value`,
+    [String(pendingCount + 1)],
+  );
+  const recipientQuotaRace = await Promise.allSettled([
+    database.sendMessage(identity, {
+      toUsername: "user_two",
+      message: "Recipient quota race one.",
+      requestId: "00000000-0000-4000-8000-000000000307",
+    }),
+    database.sendMessage(identityThree, {
+      toUsername: "user_two",
+      message: "Recipient quota race two.",
+      requestId: "00000000-0000-4000-8000-000000000308",
+    }),
+  ]);
+  assert.deepEqual(recipientQuotaRace.map((result) => result.status).sort(), [
+    "fulfilled",
+    "rejected",
+  ]);
+  assert.equal(
+    recipientQuotaRace.find((result) => result.status === "rejected").reason
+      .code,
+    "rate_limited",
+  );
+
+  await admin.query(
+    "update public.receiver_installations set expires_at = now() - interval '1 second' where id = $1",
+    [approved.installationId],
+  );
+  assert.equal(await database.getReceiverIdentity(credential), null);
   assert.equal(await database.disconnectReceiver(credential), true);
   assert.equal(await database.getReceiverIdentity(credential), null);
+  const stranded = await admin.query(
+    "select status::text, safe_error_code from public.message_jobs where id = $1",
+    [laterInbound.messageId],
+  );
+  assert.deepEqual(stranded.rows[0], {
+    status: "needs_attention",
+    safe_error_code: "receiver_disconnected",
+  });
+  const replacementReceiver = await database.approveReceiverPairing(
+    userTwo,
+    secondPairing.pairingId,
+  );
+  assert.notEqual(replacementReceiver.installationId, approved.installationId);
+  assert.equal(
+    (await database.claimReceiverMessages(secondCredential, 10)).messages.some(
+      (message) => message.messageId === laterInbound.messageId,
+    ),
+    false,
+  );
   await admin.query(
     "update public.profiles set status = 'disabled' where id = $1",
     [userThree],

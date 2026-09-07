@@ -169,6 +169,15 @@ begin
     raise exception 'recipient is unavailable' using errcode = 'P0002';
   end if;
 
+  -- Serialize both quota scopes in UUID order. This prevents concurrent sends
+  -- from overrunning either distributed counter and avoids A->B/B->A deadlocks.
+  perform pg_advisory_xact_lock(hashtextextended(
+    'message-quota:' || least(actor_id, target_id)::text, 0
+  ));
+  perform pg_advisory_xact_lock(hashtextextended(
+    'message-quota:' || greatest(actor_id, target_id)::text, 0
+  ));
+
   select coalesce((select value::integer from public.app_config where key = 'message_sender_hourly_limit'), 100),
          coalesce((select value::integer from public.app_config where key = 'message_recipient_pending_limit'), 1000)
   into hourly_limit, pending_limit;

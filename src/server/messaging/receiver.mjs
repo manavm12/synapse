@@ -361,9 +361,19 @@ export function installReceiverRoutes(
     }
   });
 
-  app.post("/receiver/disconnect", receiver, async (req, res) => {
+  app.post("/receiver/disconnect", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const credential = bearerCredential(req);
+    if (!credential) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
     try {
-      await database.disconnectReceiver(req.receiverCredential);
+      const disconnected = await database.disconnectReceiver(credential);
+      if (!disconnected) {
+        res.status(401).json({ error: "unauthorized" });
+        return;
+      }
       res.json({ disconnected: true });
     } catch (error) {
       respondError(res, error);

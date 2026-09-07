@@ -49,7 +49,12 @@ document
       const email = new FormData(event.currentTarget).get("email");
       const { error } = await client.auth.signInWithOtp({
         email,
-        options: { shouldCreateUser: false, emailRedirectTo: location.href },
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo:
+            `${location.origin}/auth/activate?receiver_pairing=` +
+            encodeURIComponent(root.dataset.pairingId),
+        },
       });
       if (error) throw error;
       login.hidden = true;
