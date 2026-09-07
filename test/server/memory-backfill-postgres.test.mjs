@@ -96,7 +96,7 @@ test("Postgres backfill previews and enqueues only missing scoped revisions with
   t.after(async () => {
     try {
       await database?.end();
-      if (created) await admin.query(`drop database "${name}" with (force)`);
+      if (created) await admin.query(`drop database "${name}"`);
     } finally {
       await admin.end();
     }

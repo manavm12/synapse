@@ -33,6 +33,67 @@ const fixture = JSON.parse(
 );
 const testNow = new Date("2026-09-07T01:00:00.000Z");
 
+async function dropFixtureDatabase(admin, name) {
+  // Pool.end() can resolve before its sockets close. Let PostgreSQL wait for
+  // graceful disconnects instead of force-killing still-closing idle clients.
+  await admin.query(`drop database "${name}"`);
+}
+
+test("fixture teardown waits for pool sockets that are still closing", {
+  skip: !adminUrl,
+  timeout: 15_000,
+}, async (t) => {
+  const admin = new pg.Pool({ connectionString: adminUrl, ssl });
+  const name = `synapse_close_test_${randomUUID().replaceAll("-", "")}`;
+  const url = new URL(adminUrl);
+  url.pathname = `/${name}`;
+  const database = new pg.Pool({ connectionString: url.href, ssl });
+  const errors = [];
+  database.on("error", (error) => errors.push(error.code));
+  let created = false;
+  let finishClose;
+  let closed;
+  t.after(async () => {
+    finishClose?.();
+    if (!database.ending) await database.end();
+    await closed;
+    try {
+      if (created) await dropFixtureDatabase(admin, name);
+    } finally {
+      await admin.end();
+    }
+  });
+  await admin.query(`create database "${name}" template template0`);
+  created = true;
+  const client = await database.connect();
+  const originalEnd = client.connection.end.bind(client.connection);
+  closed = new Promise((resolve) => client.once("end", resolve));
+  // Hold the graceful-close packet to deterministically expose the interval
+  // after Pool.end() resolves but before PostgreSQL sees the client leave.
+  client.connection.end = () => {};
+  finishClose = () => {
+    client.connection.end = originalEnd;
+    originalEnd();
+    finishClose = undefined;
+  };
+  client.release();
+  await database.end();
+  assert.equal(
+    (
+      await admin.query(
+        "select count(*)::integer as count from pg_stat_activity where datname=$1",
+        [name],
+      )
+    ).rows[0].count,
+    1,
+  );
+  setTimeout(() => finishClose?.(), 100);
+  await dropFixtureDatabase(admin, name);
+  created = false;
+  await closed;
+  assert.deepEqual(errors, []);
+});
+
 test("Postgres organizer atomically preserves tenant-scoped claims, evidence and generations", {
   skip: !adminUrl,
 }, async (t) => {
@@ -47,7 +108,7 @@ test("Postgres organizer atomically preserves tenant-scoped claims, evidence and
   t.after(async () => {
     await workerConnections.end();
     await database.end();
-    await admin.query(`drop database "${name}" with (force)`);
+    await dropFixtureDatabase(admin, name);
     await admin.end();
   });
   await database.query(

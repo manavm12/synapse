@@ -52,7 +52,7 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     await application?.server.close();
     await database?.close();
     await seed.end();
-    await admin.query(`drop database "${name}" with (force)`);
+    await admin.query(`drop database "${name}"`);
     await admin.end();
     await rm(directory, { recursive: true, force: true });
   });

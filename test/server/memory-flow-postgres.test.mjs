@@ -138,7 +138,8 @@ test("Postgres memory capture composes with the queue, organizer and authenticat
       await fixtureDatabase?.end();
     } finally {
       try {
-        if (created) await admin.query(`drop database "${name}" with (force)`);
+        // Pool.end() precedes socket close; do not force-kill graceful exits.
+        if (created) await admin.query(`drop database "${name}"`);
       } finally {
         await admin.end();
       }
