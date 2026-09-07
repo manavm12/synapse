@@ -48,7 +48,7 @@ function createConfig() {
   };
 }
 
-async function fixture(t, { publicSignup = true } = {}) {
+async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
   const saves = [];
   const accounts = new Map();
   const database = {
@@ -110,6 +110,7 @@ async function fixture(t, { publicSignup = true } = {}) {
     verifier,
     sessionVerifier,
     logger,
+    memoryRetrieval,
     fetchImplementation: async () =>
       new Response(JSON.stringify({ keys: [{ kid: "test" }] })),
   });
@@ -323,6 +324,104 @@ test("MCP publishes exactly identity and memory-save tools with OAuth schemes", 
       { type: "oauth2", scopes: ["openid", "email", "profile"] },
     ]);
   }
+});
+
+test("MCP publishes and authenticates bounded memory retrieval tools", async (t) => {
+  const calls = [];
+  const memoryRetrieval = {
+    async topics(receivedIdentity, input) {
+      calls.push({ tool: "memory_topics", receivedIdentity, input });
+      return {
+        catalog_status: "ready",
+        generation: 3,
+        topic: {
+          id: "root",
+          title: "Project memory",
+          summary: "Evidence-backed claim views",
+          parent_id: null,
+        },
+        entries: [],
+        next_cursor: null,
+      };
+    },
+    async search(receivedIdentity, input) {
+      calls.push({ tool: "search_memory", receivedIdentity, input });
+      return {
+        catalog_status: "ready",
+        generation: 3,
+        query: input.query,
+        status: input.status ?? "current",
+        results: [],
+        next_cursor: null,
+      };
+    },
+    async read(receivedIdentity, input) {
+      calls.push({ tool: "read_memory", receivedIdentity, input });
+      return {
+        catalog_status: "empty",
+        generation: 0,
+        message: "No processed memory is available.",
+        target_type: input.target_type,
+        note: null,
+        claim: null,
+        evidence: [],
+        next_cursor: null,
+      };
+    },
+  };
+  const { baseUrl } = await fixture(t, { memoryRetrieval });
+  const listed = await mcp(baseUrl, {
+    jsonrpc: "2.0",
+    id: 20,
+    method: "tools/list",
+    params: {},
+  });
+  assert.deepEqual(
+    listed.body.result.tools.map((tool) => tool.name),
+    [
+      "get_identity",
+      "save_session_memory",
+      "memory_topics",
+      "search_memory",
+      "read_memory",
+    ],
+  );
+  const retrievalTools = listed.body.result.tools.slice(2);
+  assert.ok(
+    retrievalTools.every(
+      (tool) => !/owner_id|project_id/.test(JSON.stringify(tool.inputSchema)),
+    ),
+  );
+  assert.match(retrievalTools[1].description, /deterministic lexical/);
+
+  const searched = await mcp(baseUrl, {
+    jsonrpc: "2.0",
+    id: 21,
+    method: "tools/call",
+    params: {
+      name: "search_memory",
+      arguments: { query: "retention", status: "historical" },
+    },
+  });
+  assert.equal(searched.body.result.structuredContent.status, "historical");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].receivedIdentity, identity);
+  assert.deepEqual(calls[0].input, {
+    query: "retention",
+    status: "historical",
+  });
+
+  const rejected = await mcp(baseUrl, {
+    jsonrpc: "2.0",
+    id: 22,
+    method: "tools/call",
+    params: {
+      name: "search_memory",
+      arguments: { query: "retention", owner_id: identity.userId },
+    },
+  });
+  assert.equal(rejected.body.result.isError, true);
+  assert.equal(calls.length, 1);
 });
 
 test("get_identity exposes the user principal and save preserves attribution", async (t) => {

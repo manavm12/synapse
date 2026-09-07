@@ -33,6 +33,7 @@ export async function createApplication({
   verifier,
   sessionVerifier,
   logger,
+  memoryRetrieval,
   fetchImplementation = fetch,
 }) {
   const app = createMcpExpressApp({
@@ -41,7 +42,11 @@ export async function createApplication({
     allowedOrigins: config.allowedHosts,
     jsonLimit: "80kb",
   });
-  const runtime = await createMcpRuntime({ database, logger });
+  const runtime = await createMcpRuntime({
+    database,
+    logger,
+    memoryRetrieval,
+  });
 
   app.use((req, res, next) => {
     req.requestId = randomUUID();
