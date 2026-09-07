@@ -12,13 +12,17 @@ import {
   revokeDevelopmentToken,
   rotateRuntimeRole,
 } from "../admin.mjs";
+import { formatDoctorReport, runDoctor } from "./doctor.mjs";
 import { connectProject, resolveProjectRoot } from "./project-registry.mjs";
+import { formatSetupResult, runSetup } from "./setup.mjs";
 
 export { resolveProjectRoot };
 
 function usage() {
   return [
     "Usage:",
+    "  npm run synapse -- setup [project-path] --alias <cloud-project-alias> [--login]",
+    "  npm run synapse -- doctor [project-path] [--alias <cloud-project-alias>] [--json]",
     '  npm run synapse -- send <channel-id> --project <name-or-absolute-path> "<task>"',
     "  npm run synapse -- status <job-id>",
     "  npm run synapse -- recover <job-id> --owner-stopped",
@@ -77,6 +81,28 @@ export function parseArguments(input) {
     const [, jobId, ...extra] = arguments_;
     if (!jobId || extra.length > 0) throw new Error(usage());
     return { command: "status", jobId };
+  }
+  if (arguments_[0] === "setup" || arguments_[0] === "doctor") {
+    const command = arguments_.shift();
+    const forceLogin = command === "setup" && arguments_.includes("--login");
+    const json = command === "doctor" && arguments_.includes("--json");
+    if (forceLogin) arguments_.splice(arguments_.indexOf("--login"), 1);
+    if (json) arguments_.splice(arguments_.indexOf("--json"), 1);
+    const aliasIndex = arguments_.indexOf("--alias");
+    const alias = aliasIndex === -1 ? undefined : arguments_[aliasIndex + 1];
+    if (aliasIndex !== -1) {
+      if (!alias || alias.startsWith("--")) throw new Error(usage());
+      arguments_.splice(aliasIndex, 2);
+    }
+    if ((command === "setup" && !alias) || arguments_.length > 1) {
+      throw new Error(usage());
+    }
+    return {
+      command,
+      project: arguments_[0] ?? ".",
+      ...(alias ? { alias } : {}),
+      ...(command === "setup" ? { forceLogin } : { json }),
+    };
   }
   if (arguments_[0] === "project" && arguments_[1] === "connect") {
     const aliasIndex = arguments_.indexOf("--alias");
@@ -163,7 +189,10 @@ export async function sendMessage(
   });
 }
 
-export async function main(arguments_ = process.argv.slice(2)) {
+export async function main(
+  arguments_ = process.argv.slice(2),
+  { setup = runSetup, doctor = runDoctor } = {},
+) {
   const parsed = parseArguments(arguments_);
   if (parsed.command === "help") {
     process.stdout.write(`${usage()}\n`);
@@ -184,6 +213,20 @@ export async function main(arguments_ = process.argv.slice(2)) {
     if (!message) throw new Error(`Unknown job: ${parsed.jobId}`);
     process.stdout.write(`${JSON.stringify(message, null, 2)}\n`);
     return;
+  }
+  if (parsed.command === "setup") {
+    const result = await setup(parsed);
+    process.stdout.write(formatSetupResult(result));
+    return { ok: true };
+  }
+  if (parsed.command === "doctor") {
+    const result = await doctor(parsed);
+    process.stdout.write(
+      parsed.json
+        ? `${JSON.stringify(result, null, 2)}\n`
+        : formatDoctorReport(result),
+    );
+    return result;
   }
   if (parsed.command === "project-connect") {
     const project = await connectProject(parsed);
@@ -236,8 +279,12 @@ export async function main(arguments_ = process.argv.slice(2)) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
-    process.stderr.write(`Synapse failed: ${error.message}\n`);
-    process.exitCode = 1;
-  });
+  main()
+    .then((result) => {
+      if (result?.ok === false) process.exitCode = 1;
+    })
+    .catch((error) => {
+      process.stderr.write(`Synapse failed: ${error.message}\n`);
+      process.exitCode = 1;
+    });
 }

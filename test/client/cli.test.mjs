@@ -52,6 +52,59 @@ test("status accepts exactly one job ID", () => {
   assert.throws(() => parseArguments(["status"]), /Usage:/);
 });
 
+test("setup and doctor arguments remain separate from existing commands", () => {
+  assert.deepEqual(
+    parseArguments(["setup", "/project", "--alias", "Demo", "--login"]),
+    {
+      command: "setup",
+      project: "/project",
+      alias: "Demo",
+      forceLogin: true,
+    },
+  );
+  assert.deepEqual(parseArguments(["doctor", "--json"]), {
+    command: "doctor",
+    project: ".",
+    json: true,
+  });
+  assert.throws(() => parseArguments(["setup", "/project"]), /Usage:/);
+  assert.throws(() => parseArguments(["doctor", "a", "b"]), /Usage:/);
+});
+
+test("setup and doctor dispatch through injectable implementations", async (t) => {
+  const writes = [];
+  t.mock.method(process.stdout, "write", (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  const setupResult = {
+    root: "/project",
+    alias: "demo",
+    steps: ["marketplace", "plugin", "oauth", "project"].map((id) => ({
+      id,
+      changed: false,
+    })),
+  };
+  assert.deepEqual(
+    await main(["setup", "/project", "--alias", "demo"], {
+      setup: async () => setupResult,
+    }),
+    { ok: true },
+  );
+  const doctorResult = {
+    ok: false,
+    checks: [{ id: "plugin", status: "fail", summary: "missing" }],
+  };
+  assert.equal(
+    await main(["doctor", "/project", "--json"], {
+      doctor: async () => doctorResult,
+    }),
+    doctorResult,
+  );
+  assert.match(writes.join(""), /OAuth login: already complete/);
+  assert.match(writes.join(""), /"ok": false/);
+});
+
 test("help exits successfully through the CLI entrypoint", async (t) => {
   const writes = [];
   t.mock.method(process.stdout, "write", (chunk) => {
