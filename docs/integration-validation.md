@@ -7,6 +7,11 @@ This report is not a production deployment or a live-model/native-task claim.
 Task IDs and integrated correction commits are in
 [implementation coordination](implementation-coordination.md).
 
+Subsequent **non-mocked** checks are recorded separately in
+[live validation](live-validation-2026-09-07.md): actual cloud OAuth/capture,
+Keychain lifecycle, native task creation and same-task follow-up passed. These
+do not constitute a combined hosted end-to-end pass.
+
 ## Implemented flows
 
 - Setup and OAuth login assistance, self-service account/username registration,
@@ -63,11 +68,13 @@ crash-resumable disconnect, and local identity/account changes during dispatch.
    total; **US$0 was spent**. All calls must share the reviewed evaluation-budget
    guard with verified exact-model pricing. The guard is not an account-wide
    billing limit. The prior graph experiment's 28/34 result is not a new pass.
-2. Verify the receiver in a supported installed desktop hook context. A read-only
-   tool-catalog probe through the configured desktop runtime returned
-   `Codex app-tools pipe closed`. The cause is not established; mocked native
-   dispatch does not prove installed-runtime compatibility. Do not bypass the
-   desktop's access checks or silently replay an uncertain native mutation.
+2. Verify the receiver in a supported installed desktop hook context. Follow-up
+   investigation established that the shell-based pipe probe is rejected for
+   missing code-signing identity. The actual integration client works in the
+   supported signed execution context, and real native creation/follow-up now
+   pass. Automatic installed-hook reconciliation and the cloud receiver path
+   remain unverified. Do not bypass desktop access checks or silently replay an
+   uncertain native mutation.
 3. Verify real email/OAuth onboarding with a controlled test account after
    configuring SMTP, redirect URLs, and signup policy. Browser checks here sent
    no email and granted no real account access.
