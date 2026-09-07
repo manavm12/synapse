@@ -42,6 +42,11 @@ when every claim in the Markdown became true.
 
 - A durable project lease permits one active job per project, even across worker
   processes. Its fence increases every time the project is reacquired.
+- Claim selection excludes active project leases before its candidate limit, so
+  a busy project's pending sessions do not hide another project's ready work.
+- Every queue transaction locks one project lease before its job row. Candidate
+  scans take no row locks; claim and recovery recheck eligibility under the
+  project lock. Recovery skips projects currently being renewed or completed.
 - A later revision for the same session node is blocked until all earlier
   revisions for that processor version have succeeded. An explicitly failed
   earlier revision intentionally blocks later ones for investigation or replay.

@@ -47,6 +47,28 @@ function jobFromRow(row) {
   };
 }
 
+const claimableJobsSql = `
+  select job.id, job.project_id
+  from synapse_private.memory_processing_jobs as job
+  join public.memory_revisions as revision on
+    revision.id = job.revision_id
+    and revision.owner_id = job.owner_id
+    and revision.project_id = job.project_id
+  where job.status = 'pending'
+    and job.processor_version = $1
+    and job.available_at <= $2
+    and job.attempt_count < job.max_attempts
+    and not exists (
+      select 1
+      from synapse_private.memory_processing_jobs as earlier_job
+      join public.memory_revisions as earlier_revision on
+        earlier_revision.id = earlier_job.revision_id
+      where earlier_job.processor_version = job.processor_version
+        and earlier_revision.node_id = revision.node_id
+        and earlier_revision.revision < revision.revision
+        and earlier_job.status <> 'succeeded'
+    )`;
+
 export function createMemoryProcessingStorage({
   databaseUrl,
   databaseSsl,
@@ -89,17 +111,40 @@ export function createMemoryProcessingStorage({
   }
 
   async function recoverExpired(now) {
-    return transaction(async (client) => {
-      const expired = await client.query(
-        `select id, project_id, attempt_count, max_attempts,
-                lease_token, lease_fence
+    const candidates = await transaction((client) =>
+      client.query(
+        `select id, project_id
          from synapse_private.memory_processing_jobs
          where status = 'processing' and lease_expires_at <= $1
-         order by lease_expires_at, created_at
-         for update skip locked`,
+         order by lease_expires_at, created_at`,
         [now],
-      );
-      for (const row of expired.rows) {
+      ),
+    );
+    let recovered = 0;
+    for (const candidate of candidates.rows) {
+      recovered += await transaction(async (client) => {
+        // Every queue transaction locks one project first, then its job.
+        // Skip a project being renewed or completed, and recheck expiration
+        // after locking: the candidate scan is only a scheduling hint.
+        const project = await client.query(
+          `select project_id
+           from synapse_private.memory_processing_project_leases
+           where project_id = $1
+           for update skip locked`,
+          [candidate.project_id],
+        );
+        if (project.rowCount !== 1) return 0;
+        const expired = await client.query(
+          `select id, project_id, attempt_count, max_attempts,
+                  lease_token, lease_fence
+           from synapse_private.memory_processing_jobs
+           where id = $1 and project_id = $2
+             and status = 'processing' and lease_expires_at <= $3
+           for update`,
+          [candidate.id, candidate.project_id, now],
+        );
+        if (expired.rowCount !== 1) return 0;
+        const row = expired.rows[0];
         const failed = Number(row.attempt_count) >= Number(row.max_attempts);
         const availableAt = new Date(
           now.getTime() + retryDelay(Number(row.attempt_count)),
@@ -118,9 +163,10 @@ export function createMemoryProcessingStorage({
           leaseFence: row.lease_fence,
           leaseToken: row.lease_token,
         });
-      }
-      return expired.rowCount;
-    });
+        return 1;
+      });
+    }
+    return recovered;
   }
 
   async function claimNext({
@@ -139,35 +185,25 @@ export function createMemoryProcessingStorage({
     requirePositiveInteger(processorVersion, "processorVersion");
     requirePositiveInteger(leaseDurationMs, "leaseDurationMs");
     await recoverExpired(now);
-    return transaction(async (client) => {
-      const candidates = await client.query(
-        `select job.id, job.project_id
-         from synapse_private.memory_processing_jobs as job
-         join public.memory_revisions as revision on
-           revision.id = job.revision_id
-           and revision.owner_id = job.owner_id
-           and revision.project_id = job.project_id
-         where job.status = 'pending'
-           and job.processor_version = $1
-           and job.available_at <= $2
-           and job.attempt_count < job.max_attempts
+    const candidates = await transaction((client) =>
+      client.query(
+        `${claimableJobsSql}
            and not exists (
              select 1
-             from synapse_private.memory_processing_jobs as earlier_job
-             join public.memory_revisions as earlier_revision on
-               earlier_revision.id = earlier_job.revision_id
-             where earlier_job.processor_version = job.processor_version
-               and earlier_revision.node_id = revision.node_id
-               and earlier_revision.revision < revision.revision
-               and earlier_job.status <> 'succeeded'
+             from synapse_private.memory_processing_project_leases as lease
+             where lease.project_id = job.project_id
+               and lease.lease_token is not null
+               and lease.lease_expires_at > $2
            )
          order by job.available_at, revision.created_at, revision.revision
-         limit 50
-         for update of job skip locked`,
+         limit 50`,
         [processorVersion, now],
-      );
-      const expiresAt = new Date(now.getTime() + leaseDurationMs);
-      for (const candidate of candidates.rows) {
+      ),
+    );
+    const expiresAt = new Date(now.getTime() + leaseDurationMs);
+    for (const candidate of candidates.rows) {
+      const job = await transaction(async (client) => {
+        // Do not retain locks across candidates from different projects.
         const lease = await client.query(
           `insert into synapse_private.memory_processing_project_leases (
              project_id, fence, lease_token, leased_by, lease_expires_at
@@ -182,7 +218,21 @@ export function createMemoryProcessingStorage({
            returning fence, lease_token`,
           [candidate.project_id, workerId, expiresAt, now],
         );
-        if (lease.rowCount !== 1) continue;
+        if (lease.rowCount !== 1) return null;
+        const ready = await client.query(
+          `${claimableJobsSql}
+           and job.id = $3
+           for update of job`,
+          [processorVersion, now, candidate.id],
+        );
+        if (ready.rowCount !== 1) {
+          await releaseProjectLease(client, {
+            projectId: candidate.project_id,
+            leaseFence: lease.rows[0].fence,
+            leaseToken: lease.rows[0].lease_token,
+          });
+          return null;
+        }
         const claimed = await client.query(
           `update synapse_private.memory_processing_jobs
            set status = 'processing', attempt_count = attempt_count + 1,
@@ -224,9 +274,10 @@ export function createMemoryProcessingStorage({
           throw new Error("queued revision relationships are inconsistent");
         }
         return jobFromRow({ ...claimed.rows[0], ...source.rows[0] });
-      }
-      return null;
-    });
+      });
+      if (job) return job;
+    }
+    return null;
   }
 
   async function renewLease(
@@ -262,20 +313,24 @@ export function createMemoryProcessingStorage({
     if (typeof commit !== "function")
       throw new TypeError("commit must be a function");
     return transaction(async (client) => {
+      const lease = await client.query(
+        `select 1
+         from synapse_private.memory_processing_project_leases
+         where project_id = $1 and fence = $2 and lease_token = $3
+           and lease_expires_at > $4
+         for update`,
+        [job.projectId, job.leaseFence, job.leaseToken, now],
+      );
       const locked = await client.query(
         `select 1
-         from synapse_private.memory_processing_jobs as job
-         join synapse_private.memory_processing_project_leases as lease
-           on lease.project_id = job.project_id
-           and lease.fence = job.lease_fence
-           and lease.lease_token = job.lease_token
-         where job.id = $1 and job.status = 'processing'
-           and job.lease_fence = $2 and job.lease_token = $3
-           and job.lease_expires_at > $4 and lease.lease_expires_at > $4
-         for update of job, lease`,
-        [job.id, job.leaseFence, job.leaseToken, now],
+         from synapse_private.memory_processing_jobs
+         where id = $1 and project_id = $5 and status = 'processing'
+           and lease_fence = $2 and lease_token = $3
+           and lease_expires_at > $4
+         for update`,
+        [job.id, job.leaseFence, job.leaseToken, now, job.projectId],
       );
-      if (locked.rowCount !== 1) {
+      if (lease.rowCount !== 1 || locked.rowCount !== 1) {
         const existing = await client.query(
           `select status::text
            from synapse_private.memory_processing_jobs
@@ -303,6 +358,15 @@ export function createMemoryProcessingStorage({
 
   async function fail(job, error, { now = new Date() } = {}) {
     return transaction(async (client) => {
+      const lease = await client.query(
+        `select 1
+         from synapse_private.memory_processing_project_leases
+         where project_id = $1 and fence = $2 and lease_token = $3
+           and lease_expires_at > $4
+         for update`,
+        [job.projectId, job.leaseFence, job.leaseToken, now],
+      );
+      if (lease.rowCount !== 1) throw new MemoryProcessingLeaseLostError();
       const locked = await client.query(
         `select attempt_count, max_attempts
          from synapse_private.memory_processing_jobs

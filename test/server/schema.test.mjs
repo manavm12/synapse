@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
+import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import pg from "pg";
@@ -445,4 +447,226 @@ test("migration enforces user isolation and durable capture semantics", {
     attempt_count: 2,
     last_error: "final failure",
   });
+
+  // Opt-in Postgres fixture code is exercised by test:sql. Keep skipped test
+  // bodies out of unit-test coverage; production storage remains measurable.
+  /* node:coverage disable */
+  async function capture(owner, sessionId, processorVersion = 1) {
+    const captureId = randomUUID();
+    await database.saveSessionMemory(
+      owner,
+      { ...input, captureId, sessionId },
+      randomUUID(),
+    );
+    if (processorVersion !== 1) {
+      await admin.query(
+        `update synapse_private.memory_processing_jobs set processor_version = $2
+         where revision_id = (
+           select id from public.memory_revisions where capture_id = $1
+         )`,
+        [captureId, processorVersion],
+      );
+    }
+  }
+
+  // Gates wrap real worker connections, pausing after their first locking
+  // statement. Both database time inputs and the interleaving are controlled.
+  function gatedStorage(subtest) {
+    const started = Promise.withResolvers();
+    const locked = Promise.withResolvers();
+    const resume = Promise.withResolvers();
+    let first = true;
+    const workerPool = new pg.Pool({
+      connectionString: workerUrl,
+      ssl: databaseSsl,
+      options: "-c statement_timeout=5000",
+    });
+    subtest.after(async () => {
+      resume.resolve();
+      await workerPool.end();
+    });
+    const worker = createMemoryProcessingStorage({
+      retryDelay: () => 0,
+      pool: {
+        async connect() {
+          const client = await workerPool.connect();
+          return {
+            release: () => client.release(),
+            async query(sql, values) {
+              const pause = first && /for update|^\s*update\s/i.test(sql);
+              if (pause) {
+                first = false;
+                started.resolve(client.processID);
+              }
+              const result = await client.query(sql, values);
+              if (pause) {
+                locked.resolve(result);
+                await resume.promise;
+              }
+              return result;
+            },
+          };
+        },
+      },
+    });
+    return { worker, started, locked, resume };
+  }
+
+  for (const [processorVersion, winner] of [
+    [101, "renewal"],
+    [102, "recovery"],
+  ]) {
+    await t.test(
+      `${winner} wins the renewal/recovery race without deadlock`,
+      {
+        timeout: 15_000,
+      },
+      async (subtest) => {
+        const ownerId = randomUUID();
+        await admin.query(
+          "insert into auth.users (id, email) values ($1, $2)",
+          [ownerId, `${ownerId}@example.com`],
+        );
+        await database.registerAccount(ownerId, {
+          username: `race_${winner}`,
+          projectAlias: "shared",
+        });
+        const owner = await database.resolveIdentity(ownerId, {
+          authMethod: "oauth",
+          oauthClientId: "concurrency-test",
+        });
+        await capture(owner, `lease-race-${winner}`, processorVersion);
+        const job = await storage.claimNext({
+          workerId: "renewing-worker",
+          processorVersion,
+          leaseDurationMs: 100,
+          now: processingTime,
+        });
+        const renewingAt = new Date(processingTime.getTime() + 50);
+        const expiredAt = new Date(processingTime.getTime() + 101);
+        const renewal = gatedStorage(subtest);
+        const recovery = gatedStorage(subtest);
+        const renew = () =>
+          renewal.worker.renewLease(job, {
+            leaseDurationMs: 5_000,
+            now: renewingAt,
+          });
+        let outcomes;
+        if (winner === "renewal") {
+          const renewing = renew();
+          await renewal.locked.promise;
+          const recovering = recovery.worker.recoverExpired(expiredAt);
+          outcomes = Promise.allSettled([renewing, recovering]);
+          await recovery.locked.promise;
+          renewal.resume.resolve();
+          recovery.resume.resolve();
+        } else {
+          const recovering = recovery.worker.recoverExpired(expiredAt);
+          await recovery.locked.promise;
+          const renewing = renew();
+          outcomes = Promise.allSettled([renewing, recovering]);
+          const renewingPid = await renewal.started.promise;
+          renewal.resume.resolve();
+          // Release recovery only after Postgres confirms renewal is waiting on
+          // its lock. No sleep-based assumption decides which transaction wins.
+          let blocked = false;
+          const deadline = Date.now() + 3_000;
+          while (!blocked && Date.now() < deadline) {
+            const result = await admin.query(
+              "select cardinality(pg_blocking_pids($1)) > 0 as blocked",
+              [renewingPid],
+            );
+            blocked = result.rows[0].blocked;
+            if (!blocked) await setTimeout(10);
+          }
+          recovery.resume.resolve();
+          assert.equal(blocked, true);
+        }
+        const [renewed, recovered] = await outcomes;
+        for (const outcome of [renewed, recovered]) {
+          assert.notEqual(
+            outcome.reason?.code,
+            "40P01",
+            outcome.reason?.message,
+          );
+        }
+        assert.equal(recovered.status, "fulfilled", recovered.reason?.message);
+        assert.equal(recovered.value, winner === "renewal" ? 0 : 1);
+        if (winner === "renewal") {
+          assert.equal(renewed.status, "fulfilled", renewed.reason?.message);
+          assert.equal(await storage.recoverExpired(expiredAt), 0);
+          const live = await admin.query(
+            `select status::text, attempt_count, lease_token, lease_expires_at
+           from synapse_private.memory_processing_jobs where id = $1`,
+            [job.id],
+          );
+          assert.deepEqual(live.rows[0], {
+            status: "processing",
+            attempt_count: 1,
+            lease_token: job.leaseToken,
+            lease_expires_at: new Date(renewingAt.getTime() + 5_000),
+          });
+          await storage.complete(job, async () => {}, { now: expiredAt });
+        } else {
+          assert.equal(renewed.status, "rejected");
+          assert.ok(renewed.reason instanceof MemoryProcessingLeaseLostError);
+          const retry = await storage.claimNext({
+            workerId: "recovered-worker",
+            processorVersion,
+            now: expiredAt,
+          });
+          assert.equal(retry.id, job.id);
+          assert.equal(retry.attemptCount, 2);
+          assert.ok(BigInt(retry.leaseFence) > BigInt(job.leaseFence));
+          await storage.complete(retry, async () => {}, { now: expiredAt });
+        }
+      },
+    );
+  }
+
+  await t.test(
+    "51 sessions in an active project do not hide another tenant",
+    async () => {
+      for (let session = 0; session < 51; session += 1) {
+        await capture(identity, `crowded-project-${session}`);
+      }
+      // Force an unambiguous queue order independently of timestamp precision.
+      await admin.query(
+        `update synapse_private.memory_processing_jobs set available_at = $2
+       where owner_id = $1 and status = 'pending'`,
+        [userOne, new Date(processingTime.getTime() - 1_000)],
+      );
+      const busy = await storage.claimNext({
+        workerId: "busy-project-worker",
+        now: processingTime,
+      });
+      assert.equal(busy.ownerId, userOne);
+      await capture(identityTwo, "ready-other-tenant");
+      await admin.query(
+        `update synapse_private.memory_processing_jobs set available_at = $2
+       where owner_id = $1 and status = 'pending'`,
+        [userTwo, processingTime],
+      );
+      const other = await storage.claimNext({
+        workerId: "other-project-worker",
+        now: processingTime,
+      });
+      assert.ok(
+        other,
+        "another tenant's ready job must survive the candidate limit",
+      );
+      assert.equal(other.ownerId, userTwo);
+      assert.equal(other.source.sessionId, "ready-other-tenant");
+      const pending = await admin.query(
+        `select count(*)::integer as count
+       from synapse_private.memory_processing_jobs
+       where owner_id = $1 and status = 'pending'`,
+        [userOne],
+      );
+      assert.equal(pending.rows[0].count, 50);
+      await storage.complete(busy, async () => {}, { now: processingTime });
+      await storage.complete(other, async () => {}, { now: processingTime });
+    },
+  );
+  /* node:coverage enable */
 });
