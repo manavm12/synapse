@@ -14,6 +14,12 @@ import {
 } from "../admin.mjs";
 import { formatDoctorReport, runDoctor } from "./doctor.mjs";
 import { connectProject, resolveProjectRoot } from "./project-registry.mjs";
+import {
+  disconnectReceiver,
+  finishReceiverConnection,
+  receiverStatus,
+  startReceiverConnection,
+} from "./receiver/enrollment.mjs";
 import { formatSetupResult, runSetup } from "./setup.mjs";
 
 export { resolveProjectRoot };
@@ -27,6 +33,10 @@ function usage() {
     "  npm run synapse -- status <job-id>",
     "  npm run synapse -- recover <job-id> --owner-stopped",
     "  npm run synapse -- project connect [path] --alias <cloud-project-alias>",
+    "  npm run synapse -- receiver connect [path] --server-url <https://host> [--no-open]",
+    "  npm run synapse -- receiver finish [path]",
+    "  npm run synapse -- receiver status [path]",
+    "  npm run synapse -- receiver disconnect [path]",
     "  npm run synapse -- admin invite --email <email> --username <name> --project <alias>",
     "  npm run synapse -- admin token create --username <name> [--expires-in-days <days>]",
     "  npm run synapse -- admin token revoke --token-id <uuid>",
@@ -113,6 +123,34 @@ export function parseArguments(input) {
     if (arguments_.length > 3) throw new Error(usage());
     return { command: "project-connect", alias, project };
   }
+  if (arguments_[0] === "receiver") {
+    const action = arguments_[1];
+    if (action === "connect") {
+      const serverIndex = arguments_.indexOf("--server-url");
+      const serverUrl = serverIndex === -1 ? null : arguments_[serverIndex + 1];
+      if (!serverUrl || serverUrl.startsWith("--")) throw new Error(usage());
+      arguments_.splice(serverIndex, 2);
+      const openBrowser = !arguments_.includes("--no-open");
+      if (!openBrowser) arguments_.splice(arguments_.indexOf("--no-open"), 1);
+      if (arguments_.length > 3) throw new Error(usage());
+      return {
+        command: "receiver-connect",
+        project: arguments_[2] ?? ".",
+        serverUrl,
+        openBrowser,
+      };
+    }
+    if (
+      ["finish", "status", "disconnect"].includes(action) &&
+      arguments_.length <= 3
+    ) {
+      return {
+        command: `receiver-${action}`,
+        project: arguments_[2] ?? ".",
+      };
+    }
+    throw new Error(usage());
+  }
   if (arguments_[0] === "admin") {
     if (arguments_[1] === "invite") {
       const options = parseOptions(arguments_, 2, {
@@ -191,7 +229,14 @@ export async function sendMessage(
 
 export async function main(
   arguments_ = process.argv.slice(2),
-  { setup = runSetup, doctor = runDoctor } = {},
+  {
+    setup = runSetup,
+    doctor = runDoctor,
+    receiverStart = startReceiverConnection,
+    receiverFinish = finishReceiverConnection,
+    getReceiverStatus = receiverStatus,
+    receiverDisconnect = disconnectReceiver,
+  } = {},
 ) {
   const parsed = parseArguments(arguments_);
   if (parsed.command === "help") {
@@ -232,6 +277,47 @@ export async function main(
     const project = await connectProject(parsed);
     process.stdout.write(
       `Connected ${project.alias} to ${project.root}${project.created ? "" : " (already connected)"}\n`,
+    );
+    return;
+  }
+  if (parsed.command === "receiver-connect") {
+    const connection = await receiverStart(parsed, {
+      openBrowser: parsed.openBrowser,
+    });
+    process.stdout.write(
+      `Receiver pairing ${connection.pairingId} is pending. Approve it at ${connection.verificationUrl}, then run receiver finish.\n`,
+    );
+    return;
+  }
+  if (parsed.command === "receiver-finish") {
+    const connection = await receiverFinish(parsed);
+    process.stdout.write(
+      connection.status === "connected"
+        ? `Receiver connected as @${connection.identity.username} to ${connection.identity.projectAlias}; credential expires ${connection.identity.expiresAt}.\n`
+        : "Receiver approval is still pending.\n",
+    );
+    return;
+  }
+  if (parsed.command === "receiver-status") {
+    const connection = await getReceiverStatus(parsed);
+    const status = !connection
+      ? { status: "not_connected" }
+      : {
+          status: connection.status,
+          projectRoot: connection.projectRoot,
+          projectAlias: connection.projectAlias,
+          serverUrl: connection.serverUrl,
+          pairingId: connection.pairingId,
+          pairingExpiresAt: connection.pairingExpiresAt,
+          identity: connection.identity,
+        };
+    process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+    return;
+  }
+  if (parsed.command === "receiver-disconnect") {
+    await receiverDisconnect(parsed);
+    process.stdout.write(
+      "Receiver disconnected. Already-dispatched tasks were not canceled.\n",
     );
     return;
   }

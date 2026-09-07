@@ -3,6 +3,8 @@ import {
   acceptProvisioning,
   acknowledgeMessage,
   getReservedDelivery,
+  markNativeMutationIssued,
+  markNativeMutationUncertain,
   retryRoutingMessage,
 } from "./inbox.mjs";
 
@@ -38,9 +40,11 @@ export async function routeDelivery(
     createClient = () => new AppToolsClient(),
     accept = acceptProvisioning,
     acknowledge = acknowledgeMessage,
+    markIssued = markNativeMutationIssued,
   } = {},
 ) {
   const client = createClient();
+  let mutationIssued = false;
   try {
     await client.start();
     const listed = appToolJson(
@@ -64,6 +68,13 @@ export async function routeDelivery(
     }
 
     if (delivery.channel.threadId) {
+      if (delivery.source === "cloud") {
+        markIssued({
+          jobId: delivery.jobId,
+          deliveryId: delivery.deliveryId,
+        });
+        mutationIssued = true;
+      }
       await client.callTool(
         "send_message_to_thread",
         {
@@ -82,6 +93,13 @@ export async function routeDelivery(
       });
     }
 
+    if (delivery.source === "cloud") {
+      markIssued({
+        jobId: delivery.jobId,
+        deliveryId: delivery.deliveryId,
+      });
+      mutationIssued = true;
+    }
     const created = appToolJson(
       await client.callTool(
         "create_thread",
@@ -113,6 +131,9 @@ export async function routeDelivery(
       projectId: project.projectId,
       hostId,
     });
+  } catch (error) {
+    if (mutationIssued) error.nativeMutationIssued = true;
+    throw error;
   } finally {
     await client.close();
   }
@@ -124,6 +145,7 @@ export async function runReservedDelivery(
     load = getReservedDelivery,
     route = routeDelivery,
     retry = retryRoutingMessage,
+    uncertain = markNativeMutationUncertain,
   } = {},
 ) {
   const delivery = load({ jobId, deliveryId });
@@ -131,7 +153,11 @@ export async function runReservedDelivery(
   try {
     return await route(delivery, { ownerThreadId, turnId });
   } catch (error) {
-    retry({ jobId, deliveryId, error: error.message });
+    if (delivery.source === "cloud" && error.nativeMutationIssued === true) {
+      uncertain({ jobId, deliveryId, error: error.message });
+    } else {
+      retry({ jobId, deliveryId, error: error.message });
+    }
     throw error;
   }
 }

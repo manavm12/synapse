@@ -105,6 +105,34 @@ test("setup and doctor dispatch through injectable implementations", async (t) =
   assert.match(writes.join(""), /"ok": false/);
 });
 
+test("receiver enrollment is an explicit CLI action separate from setup", () => {
+  assert.deepEqual(
+    parseArguments([
+      "receiver",
+      "connect",
+      ".",
+      "--server-url",
+      "https://synapse.example",
+      "--no-open",
+    ]),
+    {
+      command: "receiver-connect",
+      project: ".",
+      serverUrl: "https://synapse.example",
+      openBrowser: false,
+    },
+  );
+  assert.deepEqual(parseArguments(["receiver", "finish", "."]), {
+    command: "receiver-finish",
+    project: ".",
+  });
+  assert.deepEqual(parseArguments(["receiver", "status"]), {
+    command: "receiver-status",
+    project: ".",
+  });
+  assert.throws(() => parseArguments(["receiver", "connect", "."]), /Usage:/);
+});
+
 test("help exits successfully through the CLI entrypoint", async (t) => {
   const writes = [];
   t.mock.method(process.stdout, "write", (chunk) => {
@@ -113,6 +141,38 @@ test("help exits successfully through the CLI entrypoint", async (t) => {
   });
   await main(["--help"]);
   assert.match(writes.join(""), /^Usage:/);
+});
+
+test("receiver status output omits credential material", async (t) => {
+  const writes = [];
+  t.mock.method(process.stdout, "write", (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  await main(["receiver", "status", "."], {
+    getReceiverStatus: async () => ({
+      status: "connected",
+      projectRoot: "/project",
+      projectAlias: "demo",
+      serverUrl: "https://synapse.example",
+      pairingId: "pairing-1",
+      pairingExpiresAt: "2026-09-07T01:00:00.000Z",
+      credentialAccount: "receiver:secret-account",
+      credentialHash: "sensitive-hash",
+      identity: {
+        installationId: "installation-1",
+        userId: "user-1",
+        username: "bob",
+        projectId: "project-1",
+        projectAlias: "demo",
+        expiresAt: "2027-01-01T00:00:00.000Z",
+        enabled: true,
+      },
+    }),
+  });
+  const output = writes.join("");
+  assert.doesNotMatch(output, /secret-account|sensitive-hash/);
+  assert.match(output, /"status": "connected"/);
 });
 
 test("operator commands reject unknown options", () => {

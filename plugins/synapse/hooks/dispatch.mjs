@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import { reserveNextMessage } from "../lib/inbox.mjs";
 import { runReservedDelivery } from "../lib/native-router.mjs";
+import { syncReceiver } from "../lib/receiver-sync.mjs";
 
 const MAX_HOOK_INPUT_BYTES = 1024 * 1024;
 const SAFE_SESSION_ID = /^[a-zA-Z0-9._:-]{1,128}$/;
@@ -58,10 +59,21 @@ try {
 }
 if (gitDirectory !== commonDirectory) process.exit(0);
 
-const delivery = reserveNextMessage({
-  projectRoot,
-  ownerSessionId: input.session_id,
-});
+let receiverAuthorized = false;
+try {
+  const receiver = await syncReceiver({ projectRoot });
+  receiverAuthorized = receiver.authorized;
+} catch {
+  // Receiver transport is best-effort and must never delay or block the owner prompt.
+}
+
+const delivery = reserveNextMessage(
+  {
+    projectRoot,
+    ownerSessionId: input.session_id,
+  },
+  { allowCloud: receiverAuthorized },
+);
 if (!delivery) process.exit(0);
 
 try {
