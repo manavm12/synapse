@@ -128,6 +128,15 @@ assert(
 );
 await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
 assert(
+  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
+    (hook) =>
+      hook.command === `node \${PLUGIN_ROOT}/hooks/prompt-memory.mjs` &&
+      hook.async !== true,
+  ),
+  "UserPromptSubmit must inject due memory saves privately",
+);
+await access(resolve(pluginRoot, "hooks/prompt-memory.mjs"));
+assert(
   hooks?.SessionStart?.some(
     (entry) =>
       entry.matcher === "^startup$" &&

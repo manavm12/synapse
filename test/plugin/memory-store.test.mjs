@@ -9,6 +9,7 @@ import {
   createCompactionCheckpoint,
   createMemoryPaths,
   findRegisteredProject,
+  getPendingMemoryPrompt,
 } from "../../plugins/synapse/server/memory-store.mjs";
 import {
   createMemoryFixture,
@@ -16,11 +17,11 @@ import {
   registerProject,
 } from "./_helpers.mjs";
 
-test("production checkpoints default to fifteen turns", () => {
-  assert.equal(CHECKPOINT_INTERVAL, 15);
+test("production checkpoints default to ten turns", () => {
+  assert.equal(CHECKPOINT_INTERVAL, 10);
 });
 
-test("capture is due on the configured distinct turn and continuation clears it", async (t) => {
+test("capture is due on the configured distinct turn and private prompt clears it", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
 
@@ -46,26 +47,21 @@ test("capture is due on the configured distinct turn and continuation clears it"
   );
   assert.equal(due.due, true);
   assert.equal(due.captureId, "11111111-1111-4111-8111-111111111111");
-  assert.equal(due.decision, "block");
-  assert.match(due.reason, /project_alias=fixture/);
-  assert.match(due.reason, /capture_reason=turn_checkpoint/);
-  assert.doesNotMatch(due.reason, new RegExp(fixture.projectRoot));
+  assert.equal("decision" in due, false);
+  assert.equal(due.reason, "turn_checkpoint");
 
-  const continuation = checkpointMemory(
+  const pending = getPendingMemoryPrompt(
     {
       sessionId: "session-1",
-      turnId: "continuation",
       cwd: fixture.projectRoot,
-      stopHookActive: true,
     },
     { env: fixture.env },
   );
-  assert.deepEqual(continuation, {
-    registered: true,
-    due: false,
-    continuation: true,
-    completedCaptureId: "11111111-1111-4111-8111-111111111111",
-  });
+  assert.equal(pending.due, true);
+  assert.equal(pending.captureId, "11111111-1111-4111-8111-111111111111");
+  assert.match(pending.prompt, /project_alias=fixture/);
+  assert.match(pending.prompt, /capture_reason=turn_checkpoint/);
+  assert.doesNotMatch(pending.prompt, new RegExp(fixture.projectRoot));
   const session = readCheckpointSession(
     join(fixture.synapseHome, "checkpoints.sqlite"),
     "session-1",
@@ -73,7 +69,7 @@ test("capture is due on the configured distinct turn and continuation clears it"
   assert.equal(session.due_capture_id, null);
 });
 
-test("cleared continuations do not count toward the next interval", async (t) => {
+test("consumed private prompts do not count toward the next interval", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
   for (let turn = 1; turn <= 3; turn += 1) {
@@ -86,12 +82,10 @@ test("cleared continuations do not count toward the next interval", async (t) =>
       { env: fixture.env },
     );
   }
-  checkpointMemory(
+  getPendingMemoryPrompt(
     {
       sessionId: "session-next",
-      turnId: "continuation",
       cwd: fixture.projectRoot,
-      stopHookActive: true,
     },
     { env: fixture.env },
   );

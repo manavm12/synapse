@@ -64,8 +64,10 @@ are absent from both services, and the inference key exists only in the worker.
 ## Write lifecycle
 
 1. The local Stop hook counts distinct turn IDs in a private SQLite scheduler.
-2. At 15 turns it emits a blocking continuation with a fresh UUID. A compaction
-   hook emits one immediately.
+2. At ten turns it records a pending checkpoint with a fresh UUID. On the
+   next user prompt, a private hook context requests the save without adding a
+   synthetic message to conversation history. A compaction hook injects one
+   immediately.
 3. Codex calls `save_session_memory`; MCP validation rejects malformed or
    oversized content before a database transaction.
 4. The server validates the OAuth JWT against Supabase JWKS, including exact
@@ -78,8 +80,8 @@ are absent from both services, and the inference key exists only in the worker.
    appends an immutable revision, updates the current node, and appends an
    audit event and processor-version-1 job atomically. It can return the exact
    immutable `revision_id` alongside the compatible capture result.
-7. The hook's continuation clears local due state whether the remote call
-   succeeds or fails. There is deliberately no offline content queue.
+7. Consuming the private hook context clears local due state whether the remote
+   call succeeds or fails. There is deliberately no offline content queue.
 
 Organization does not delay capture. The worker claims a project-serialized
 job, validates the source envelope against immutable revisions, and invokes

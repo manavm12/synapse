@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const CHECKPOINT_INTERVAL = 15;
+export const CHECKPOINT_INTERVAL = 10;
 export const REQUIRED_MEMORY_SECTIONS = Object.freeze([
   "Summary",
   "What changed",
@@ -186,16 +186,17 @@ function ensureSession(database, { sessionId, project, timestamp }) {
 function capturePrompt({ sessionId, projectAlias, captureId, reason }) {
   return [
     `Synapse cloud memory capture is due for session ${sessionId} (${reason}).`,
-    "Before finishing, call synapse-memory.save_session_memory exactly once with",
+    "Before continuing, call synapse-memory.save_session_memory exactly once with",
     `capture_id=${captureId}, session_id=${sessionId}, project_alias=${projectAlias}, and capture_reason=${reason}.`,
     "Write a concise durable session summary, not a transcript.",
     `The markdown must contain these headings: ${REQUIRED_MEMORY_SECTIONS.join(", ")}.`,
+    "Do not mention the checkpoint in the user-facing response.",
     "If authentication, networking, or saving fails, continue and finish the original task; do not retry or write a local memory copy.",
   ].join(" ");
 }
 
 export function checkpointMemory(
-  { sessionId, turnId, cwd, stopHookActive = false },
+  { sessionId, turnId, cwd },
   {
     env = process.env,
     now = () => Date.now(),
@@ -221,34 +222,6 @@ export function checkpointMemory(
       let session = database
         .prepare("SELECT * FROM checkpoint_sessions WHERE session_id = ?")
         .get(safeSessionId);
-
-      // The continuation exists only to perform the remote save. It must not
-      // become the first turn in the next interval. Clearing here deliberately
-      // implements fail-open behavior regardless of the remote call's result.
-      if (stopHookActive) {
-        if (session.due_capture_id) {
-          database
-            .prepare(`
-            UPDATE checkpoint_turns SET capture_id = ?
-            WHERE session_id = ? AND capture_id IS NULL
-          `)
-            .run(session.due_capture_id, safeSessionId);
-          database
-            .prepare(`
-            UPDATE checkpoint_sessions
-            SET due_capture_id = NULL, due_reason = NULL, due_turn_id = NULL,
-                updated_at = ?
-            WHERE session_id = ?
-          `)
-            .run(timestamp, safeSessionId);
-        }
-        return {
-          registered: true,
-          due: false,
-          continuation: true,
-          completedCaptureId: session.due_capture_id ?? null,
-        };
-      }
 
       const inserted = database
         .prepare(`
@@ -281,7 +254,7 @@ export function checkpointMemory(
       }
 
       const due = Boolean(session.due_capture_id);
-      const result = {
+      return {
         registered: true,
         due,
         duplicate: inserted.changes === 0,
@@ -290,16 +263,68 @@ export function checkpointMemory(
         captureId: session.due_capture_id ?? null,
         reason: session.due_reason ?? null,
       };
-      if (due) {
-        result.decision = "block";
-        result.reason = capturePrompt({
+    });
+  } finally {
+    database.close();
+  }
+}
+
+export function getPendingMemoryPrompt(
+  { sessionId, cwd },
+  { env = process.env, now = () => Date.now() } = {},
+) {
+  const safeSessionId = requireSessionId(sessionId);
+  const paths = createMemoryPaths(env);
+  const project = findRegisteredProject(cwd, paths);
+  if (!project || !existsSync(paths.checkpointDatabase)) {
+    return { registered: Boolean(project), due: false };
+  }
+
+  const timestamp = new Date(now()).toISOString();
+  const database = openCheckpointDatabase(paths.checkpointDatabase);
+  try {
+    return inTransaction(database, () => {
+      const session = database
+        .prepare("SELECT * FROM checkpoint_sessions WHERE session_id = ?")
+        .get(safeSessionId);
+      if (!session?.due_capture_id) {
+        return { registered: true, due: false };
+      }
+      if (canonicalPath(session.project_root) !== project.root) {
+        throw new Error(
+          `Session ${safeSessionId} is already bound to another project`,
+        );
+      }
+
+      // Consuming the private prompt acknowledges the local checkpoint even if
+      // the remote save later fails. Memory capture is deliberately fail-open.
+      database
+        .prepare(`
+          UPDATE checkpoint_turns SET capture_id = ?
+          WHERE session_id = ? AND capture_id IS NULL
+        `)
+        .run(session.due_capture_id, safeSessionId);
+      database
+        .prepare(`
+          UPDATE checkpoint_sessions
+          SET due_capture_id = NULL, due_reason = NULL, due_turn_id = NULL,
+              updated_at = ?
+          WHERE session_id = ?
+        `)
+        .run(timestamp, safeSessionId);
+
+      return {
+        registered: true,
+        due: true,
+        captureId: session.due_capture_id,
+        reason: session.due_reason,
+        prompt: capturePrompt({
           sessionId: safeSessionId,
           projectAlias: project.alias,
           captureId: session.due_capture_id,
-          reason: "turn_checkpoint",
-        });
-      }
-      return result;
+          reason: session.due_reason,
+        }),
+      };
     });
   } finally {
     database.close();
