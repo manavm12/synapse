@@ -7,6 +7,7 @@ import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
 import { createApplication } from "../../src/server/app.mjs";
 import {
   AccountDisabledError,
+  AuthorizationStateCooldownError,
   UsernameTakenError,
 } from "../../src/server/database.mjs";
 
@@ -66,6 +67,8 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
   const sentMessages = [];
   let receiverPairingApproved = false;
   const accounts = new Map();
+  const authorizationStates = new Map();
+  const activeAuthorizationStates = new Set();
   const database = {
     async healthCheck() {},
     async saveSessionMemory(receivedIdentity, input, requestId) {
@@ -92,6 +95,23 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       };
       accounts.set(userId, registered);
       return registered;
+    },
+    async createAuthorizationState(authorizationId, stateHash) {
+      if (activeAuthorizationStates.has(authorizationId)) {
+        throw new AuthorizationStateCooldownError();
+      }
+      activeAuthorizationStates.add(authorizationId);
+      authorizationStates.set(stateHash.toString("hex"), authorizationId);
+      return { expiresAt: new Date(Date.now() + 10 * 60_000) };
+    },
+    async consumeAuthorizationState(stateHash) {
+      const key = stateHash.toString("hex");
+      const authorizationId = authorizationStates.get(key) ?? null;
+      authorizationStates.delete(key);
+      return authorizationId;
+    },
+    async resolveAuthorizationState(stateHash) {
+      return authorizationStates.get(stateHash.toString("hex")) ?? null;
     },
     async sendMessage(receivedIdentity, input) {
       sentMessages.push({ receivedIdentity, input });
@@ -256,11 +276,46 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
   assert.match(consentHtml, /data-mode="consent"/);
   assert.match(consentHtml, /data-public-signup="true"/);
   const cookie = consent.headers.get("set-cookie").split(";", 1)[0];
-  const callback = await fetch(`${baseUrl}/auth/callback`, {
+  const missingHeader = await fetch(`${baseUrl}/auth/state`, {
+    method: "POST",
     headers: { cookie },
   });
+  assert.equal(missingHeader.status, 403);
+  const stateResponse = await fetch(`${baseUrl}/auth/state`, {
+    method: "POST",
+    headers: { cookie, "x-synapse-auth-request": "1" },
+  });
+  assert.equal(stateResponse.status, 201);
+  const state = await stateResponse.json();
+  assert.equal(state.cooldown_seconds, 60);
+  assert.match(state.redirect_to, /\/auth\/callback\?state=[A-Za-z0-9_-]{43}$/);
+  const duplicateState = await fetch(`${baseUrl}/auth/state`, {
+    method: "POST",
+    headers: { cookie, "x-synapse-auth-request": "1" },
+  });
+  assert.equal(duplicateState.status, 429);
+  assert.equal(duplicateState.headers.get("retry-after"), "60");
+  const callbackPath =
+    new URL(state.redirect_to).pathname + new URL(state.redirect_to).search;
+  const callback = await fetch(baseUrl + callbackPath);
   assert.equal(callback.status, 200);
   assert.match(await callback.text(), /data-mode="callback"/);
+  const callbackCookie = callback.headers.get("set-cookie").split(";", 1)[0];
+  assert.match(callbackCookie, /synapse_authorization=/);
+  assert.equal((await fetch(baseUrl + callbackPath)).status, 200);
+  const consumeState = await fetch(`${baseUrl}/auth/state/consume`, {
+    method: "POST",
+    headers: {
+      cookie: callbackCookie,
+      "content-type": "application/json",
+      "x-synapse-auth-request": "1",
+    },
+    body: JSON.stringify({
+      state: new URL(state.redirect_to).searchParams.get("state"),
+    }),
+  });
+  assert.equal(consumeState.status, 204);
+  assert.equal((await fetch(baseUrl + callbackPath)).status, 400);
   assert.equal(
     (await fetch(`${baseUrl}/authorize?authorization_id=bad%20request`)).status,
     400,
@@ -285,6 +340,7 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
   for (const asset of [
     "/assets/supabase.js",
     "/assets/consent.js",
+    "/assets/email-submission.js",
     "/assets/consent.css",
   ]) {
     const assetResponse = await fetch(baseUrl + asset);
@@ -294,6 +350,19 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
       `${asset}: ${await assetResponse.text()}`,
     );
   }
+  const consentScript = await (
+    await fetch(`${baseUrl}/assets/consent.js`)
+  ).text();
+  assert.match(consentScript, /flowType: "implicit"/);
+  assert.match(consentScript, /x-synapse-auth-request/);
+  const emailSubmissionScript = await (
+    await fetch(`${baseUrl}/assets/email-submission.js`)
+  ).text();
+  assert.match(
+    emailSubmissionScript,
+    /if \(pending \|\| now\(\) < cooldownUntil\)/,
+  );
+  assert.match(emailSubmissionScript, /error\?\.status === 429/);
   const unauthorized = await mcp(
     baseUrl,
     { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },

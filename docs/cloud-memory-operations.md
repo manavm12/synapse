@@ -54,6 +54,7 @@ matching application code. In addition to the foundation/onboarding migrations:
 | `202609070002_memory_processing_queue.sql` | Revision jobs, project leases, fencing, and the worker role. |
 | `202609070003_receiver_connections.sql` | Pairing, scoped installations, claim/import receipts and revocation. |
 | `202609070004_memory_ledger.sql` | Tenant-scoped claims, evidence, relations, coverage and projections. |
+| `202609080001_authorization_states.sql` | One-time hashed OAuth email-link state, expiry, replay protection, and issuance cooldown. |
 
 Migrations are an operator action, not an HTTP/worker startup step. The
 foundation creates forced RLS policies, append-only revisions, the custom
@@ -159,7 +160,13 @@ In Supabase Dashboard:
    resource URL while leaving non-OAuth sessions alone.
 5. For an alpha that permits self-service account creation, enable email signup.
    Supabase's built-in sender delivers only to project-team addresses; configure
-   custom SMTP before allowing arbitrary public email addresses.
+   custom SMTP before allowing arbitrary public email addresses. For Resend,
+   verify a dedicated sending subdomain, use `smtp.resend.com`, username
+   `resend`, port 465 or 587, and an API key as the password. Use a sender on the
+   verified subdomain, disable click/open tracking for authentication mail, and
+   leave inbound receiving disabled unless another feature needs it. Start with
+   an email limit supported by the provider (30 per hour is suitable for a small
+   alpha) and keep the resend interval at least 60 seconds.
 
 Write the deployed URL to the hook's authoritative config and to the plugin:
 
@@ -198,9 +205,12 @@ current token validity: start a fresh Codex task, call `get_identity`, and verif
 the expected username, project alias, and `authentication_method: oauth`.
 Use setup's `--login` flag to deliberately repeat OAuth after an account change.
 
-The consent UI uses an HttpOnly signed cookie to preserve the authorization
-request across the email magic-link flow. It never accepts a callback target
-from a query parameter; only Supabase's validated `redirect_url` is used. The
+Before requesting an email, the consent UI exchanges its HttpOnly signed cookie
+for a random one-time callback state. Only the state's SHA-256 hash and its
+authorization ID are stored server-side. The state expires after ten minutes,
+is consumed atomically, and a new request after the 60-second cooldown
+supersedes the previous unconsumed link. This lets a user open the link in a
+different browser without accepting a callback target from that browser. The
 browser session token is accepted by account and receiver-approval endpoints;
 MCP tokens continue to require the exact resource audience, OAuth client ID, and
 scopes. Receiver credentials cannot use either account management or MCP tools.

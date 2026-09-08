@@ -1,3 +1,5 @@
+import { installEmailSubmission } from "./email-submission.js";
+
 const root = document.querySelector("#app");
 const status = document.querySelector("#status");
 const login = document.querySelector("#login");
@@ -10,7 +12,7 @@ const client = globalThis.supabase.createClient(
   root.dataset.supabaseKey,
   {
     auth: {
-      flowType: "pkce",
+      flowType: "implicit",
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
@@ -104,6 +106,18 @@ async function start() {
     if (!sessionData.session) {
       throw new Error("The sign-in link is invalid or expired");
     }
+    const state = new URLSearchParams(location.search).get("state");
+    const consumeResponse = await fetch("/auth/state/consume", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-synapse-auth-request": "1",
+      },
+      body: JSON.stringify({ state }),
+    });
+    if (!consumeResponse.ok) {
+      throw new Error("The sign-in link is invalid, expired, or already used");
+    }
     location.replace("/authorize");
     return;
   }
@@ -131,26 +145,35 @@ async function start() {
   await showConsent();
 }
 
-document
-  .querySelector("#login-form")
-  .addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      const email = new FormData(event.currentTarget).get("email");
-      const { error } = await client.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: publicSignup,
-          emailRedirectTo: `${location.origin}/auth/callback`,
-        },
-      });
-      if (error) throw error;
-      login.hidden = true;
-      status.textContent = "Check your email for a one-time sign-in link.";
-    } catch (error) {
-      showError(error);
+installEmailSubmission({
+  form: document.querySelector("#login-form"),
+  panel: login,
+  status,
+  showError,
+  async submit(email) {
+    const stateResponse = await fetch("/auth/state", {
+      method: "POST",
+      headers: { "x-synapse-auth-request": "1" },
+    });
+    const state = await stateResponse.json().catch(() => ({}));
+    if (!stateResponse.ok) {
+      const error = new Error("Could not prepare a secure sign-in link.");
+      error.status = stateResponse.status;
+      error.code = state.error;
+      error.retryAfterSeconds = state.retry_after_seconds;
+      throw error;
     }
-  });
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: publicSignup,
+        emailRedirectTo: state.redirect_to,
+      },
+    });
+    if (error) throw error;
+    return { cooldownSeconds: state.cooldown_seconds };
+  },
+});
 
 document
   .querySelector("#setup-form")

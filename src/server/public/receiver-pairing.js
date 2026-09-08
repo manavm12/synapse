@@ -1,3 +1,5 @@
+import { installEmailSubmission } from "./email-submission.js";
+
 const root = document.querySelector("#app");
 const status = document.querySelector("#status");
 const login = document.querySelector("#login");
@@ -7,7 +9,7 @@ const client = globalThis.supabase.createClient(
   root.dataset.supabaseKey,
   {
     auth: {
-      flowType: "pkce",
+      flowType: "implicit",
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
@@ -41,28 +43,25 @@ async function start() {
   status.textContent = "Review what enabling this receiver allows.";
 }
 
-document
-  .querySelector("#login-form")
-  .addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      const email = new FormData(event.currentTarget).get("email");
-      const { error } = await client.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: false,
-          emailRedirectTo:
-            `${location.origin}/auth/activate?receiver_pairing=` +
-            encodeURIComponent(root.dataset.pairingId),
-        },
-      });
-      if (error) throw error;
-      login.hidden = true;
-      status.textContent = "Check your email for a one-time sign-in link.";
-    } catch (error) {
-      fail(error);
-    }
-  });
+installEmailSubmission({
+  form: document.querySelector("#login-form"),
+  panel: login,
+  status,
+  showError: fail,
+  async submit(email) {
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo:
+          `${location.origin}/auth/activate?receiver_pairing=` +
+          encodeURIComponent(root.dataset.pairingId),
+      },
+    });
+    if (error) throw error;
+    return { cooldownSeconds: 60 };
+  },
+});
 
 document.querySelector("#approve").addEventListener("click", async (event) => {
   const button = event.currentTarget;

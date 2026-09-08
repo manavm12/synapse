@@ -14,6 +14,9 @@ binding.
 - OAuth uses an email magic link. Supabase's built-in email sender reaches only
   project-team addresses. Arbitrary alpha users require custom SMTP to be
   configured by the operator; setup does not change hosted settings.
+- Email requests are single-flight in the browser and limited to one link per
+  authorization request every 60 seconds. Links carry one-time server-side state
+  so they can be opened in a different browser and cannot be replayed.
 - Setup covers the existing cloud-memory login and local project alias. It does
   not enroll a messaging receiver or create receiver credentials.
 

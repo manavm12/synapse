@@ -1,7 +1,15 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
+
+import { AuthorizationStateCooldownError } from "./database.mjs";
 
 const COOKIE_NAME = "synapse_authorization";
 const AUTHORIZATION_ID = /^[A-Za-z0-9._~-]{1,512}$/;
+const AUTHORIZATION_STATE = /^[A-Za-z0-9_-]{43}$/;
 const RECEIVER_PAIRING_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -15,6 +23,10 @@ function sign(value, secret) {
 
 function signedValue(value, secret) {
   return `${encode(value)}.${sign(value, secret)}`;
+}
+
+function stateHash(value) {
+  return createHash("sha256").update(value).digest();
 }
 
 function verifySignedValue(value, secret) {
@@ -110,7 +122,7 @@ function renderPage({ authorizationId, config, mode }) {
     "</section>",
     "</main>",
     '<script src="/assets/supabase.js"></script>',
-    '<script src="/assets/consent.js" defer></script>',
+    '<script type="module" src="/assets/consent.js"></script>',
     "</body>",
     "</html>",
   ].join("");
@@ -123,7 +135,23 @@ function authorizationFromRequest(req, secret) {
   );
 }
 
-export function installConsentRoutes(app, config, { supabaseBrowserPath }) {
+function setAuthorizationCookie(res, authorizationId, config) {
+  const secure = config.production ? "; Secure" : "";
+  res.append(
+    "Set-Cookie",
+    COOKIE_NAME +
+      "=" +
+      encodeURIComponent(signedValue(authorizationId, config.cookieSecret)) +
+      "; Max-Age=600; Path=/; HttpOnly; SameSite=Lax" +
+      secure,
+  );
+}
+
+export function installConsentRoutes(
+  app,
+  config,
+  { database, supabaseBrowserPath },
+) {
   const csp = [
     "default-src 'none'",
     "script-src 'self'",
@@ -149,6 +177,13 @@ export function installConsentRoutes(app, config, { supabaseBrowserPath }) {
       dotfiles: "allow",
     });
   });
+  app.get("/assets/email-submission.js", (_req, res) => {
+    res.set("Cache-Control", "public, max-age=3600");
+    res.sendFile(
+      new URL("./public/email-submission.js", import.meta.url).pathname,
+      { dotfiles: "allow" },
+    );
+  });
   app.get("/assets/consent.css", (_req, res) => {
     res.sendFile(new URL("./public/consent.css", import.meta.url).pathname, {
       dotfiles: "allow",
@@ -167,15 +202,7 @@ export function installConsentRoutes(app, config, { supabaseBrowserPath }) {
         return;
       }
       authorizationId = queryId;
-      const secure = config.production ? "; Secure" : "";
-      res.append(
-        "Set-Cookie",
-        COOKIE_NAME +
-          "=" +
-          encodeURIComponent(signedValue(queryId, config.cookieSecret)) +
-          "; Max-Age=600; Path=/; HttpOnly; SameSite=Lax" +
-          secure,
-      );
+      setAuthorizationCookie(res, queryId, config);
     }
     if (!authorizationId) {
       res.status(400).send("Missing or expired authorization request");
@@ -184,13 +211,92 @@ export function installConsentRoutes(app, config, { supabaseBrowserPath }) {
     render(res, { authorizationId, config, mode: "consent" });
   });
 
-  app.get("/auth/callback", (req, res) => {
+  app.post("/auth/state", async (req, res) => {
+    res.set("Cache-Control", "no-store");
     const authorizationId = authorizationFromRequest(req, config.cookieSecret);
     if (!authorizationId) {
-      res.status(400).send("Missing or expired authorization request");
+      res.status(400).json({ error: "missing_authorization" });
       return;
     }
+    if (req.get("x-synapse-auth-request") !== "1") {
+      res.status(403).json({ error: "invalid_request" });
+      return;
+    }
+    try {
+      const state = randomBytes(32).toString("base64url");
+      const created = await database.createAuthorizationState(
+        authorizationId,
+        stateHash(state),
+      );
+      const callback = new URL("/auth/callback", config.resourceUrl);
+      callback.searchParams.set("state", state);
+      res.status(201).json({
+        redirect_to: callback.href,
+        expires_at: new Date(created.expiresAt).toISOString(),
+        cooldown_seconds: 60,
+      });
+    } catch (error) {
+      if (error instanceof AuthorizationStateCooldownError) {
+        res.set("Retry-After", "60");
+        res.status(429).json({
+          error: "email_cooldown",
+          retry_after_seconds: 60,
+        });
+        return;
+      }
+      res.status(503).json({ error: "authorization_unavailable" });
+    }
+  });
+
+  app.get("/auth/callback", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const state = typeof req.query.state === "string" ? req.query.state : null;
+    if (!state || !AUTHORIZATION_STATE.test(state)) {
+      res.status(400).send("This sign-in link is invalid or expired");
+      return;
+    }
+    let authorizationId;
+    try {
+      authorizationId = await database.resolveAuthorizationState(
+        stateHash(state),
+      );
+    } catch {
+      res.status(503).send("Sign-in is temporarily unavailable");
+      return;
+    }
+    if (!authorizationId || !AUTHORIZATION_ID.test(authorizationId)) {
+      res.status(400).send("This sign-in link is invalid or expired");
+      return;
+    }
+    setAuthorizationCookie(res, authorizationId, config);
     render(res, { authorizationId, config, mode: "callback" });
+  });
+
+  app.post("/auth/state/consume", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const authorizationId = authorizationFromRequest(req, config.cookieSecret);
+    const state = typeof req.body?.state === "string" ? req.body.state : null;
+    if (
+      !authorizationId ||
+      !state ||
+      !AUTHORIZATION_STATE.test(state) ||
+      req.get("x-synapse-auth-request") !== "1"
+    ) {
+      res.status(400).json({ error: "invalid_state" });
+      return;
+    }
+    try {
+      const consumedAuthorizationId = await database.consumeAuthorizationState(
+        stateHash(state),
+      );
+      if (consumedAuthorizationId !== authorizationId) {
+        res.status(400).json({ error: "invalid_state" });
+        return;
+      }
+      res.status(204).end();
+    } catch {
+      res.status(503).json({ error: "authorization_unavailable" });
+    }
   });
 
   app.get("/auth/activate", (req, res) => {
