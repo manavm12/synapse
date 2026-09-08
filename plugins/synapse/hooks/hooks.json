@@ -35,6 +35,12 @@
             "timeout": 30,
             "async": true,
             "statusMessage": "Routing Synapse task"
+          },
+          {
+            "type": "command",
+            "command": "node ${PLUGIN_ROOT}/hooks/prompt-memory.mjs",
+            "timeout": 10,
+            "statusMessage": "Saving Synapse memory"
           }
         ]
       }

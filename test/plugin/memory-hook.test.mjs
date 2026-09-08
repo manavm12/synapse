@@ -27,13 +27,12 @@ function runHook(path, { env, input }) {
   });
 }
 
-test("Stop command schedules a remote save and then clears fail-open state", async (t) => {
+test("Stop schedules at the configured interval and the next prompt injects the save privately", async (t) => {
   const fixture = await createMemoryFixture();
   t.after(() => rm(fixture.directory, { recursive: true, force: true }));
   const hook = "plugins/synapse/hooks/checkpoint-memory.mjs";
-  let response;
   for (let turn = 1; turn <= 3; turn += 1) {
-    response = await runHook(hook, {
+    const response = await runHook(hook, {
       env: fixture.env,
       input: {
         session_id: "hook-session",
@@ -42,24 +41,33 @@ test("Stop command schedules a remote save and then clears fail-open state", asy
         stop_hook_active: false,
       },
     });
+    assert.equal(response.stdout, "");
   }
-  const output = JSON.parse(response.stdout);
-  assert.equal(output.decision, "block");
-  assert.match(output.reason, /save_session_memory/);
-  assert.match(
-    output.reason,
-    /capture_id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
-  );
-  const continuation = await runHook(hook, {
+  const prompt = await runHook("plugins/synapse/hooks/prompt-memory.mjs", {
     env: fixture.env,
     input: {
       session_id: "hook-session",
-      turn_id: "continuation",
       cwd: fixture.projectRoot,
-      stop_hook_active: true,
+      hook_event_name: "UserPromptSubmit",
     },
   });
-  assert.equal(continuation.stdout, "");
+  const output = JSON.parse(prompt.stdout).hookSpecificOutput;
+  assert.equal(output.hookEventName, "UserPromptSubmit");
+  assert.match(output.additionalContext, /save_session_memory/);
+  assert.match(
+    output.additionalContext,
+    /capture_id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
+  );
+  assert.match(output.additionalContext, /Do not mention the checkpoint/);
+  const consumed = await runHook("plugins/synapse/hooks/prompt-memory.mjs", {
+    env: fixture.env,
+    input: {
+      session_id: "hook-session",
+      cwd: fixture.projectRoot,
+      hook_event_name: "UserPromptSubmit",
+    },
+  });
+  assert.equal(consumed.stdout, "");
 });
 
 test("compact SessionStart injects an immediate cloud-memory instruction", async (t) => {
@@ -108,4 +116,8 @@ test("hook configuration uses local commands for scheduling only", async () => {
   assert.equal(stop.type, "command");
   assert.match(stop.command, /checkpoint-memory\.mjs$/);
   assert.equal(JSON.stringify(stop).includes("mcp_tool"), false);
+  const prompt = hooks.UserPromptSubmit[0].hooks[1];
+  assert.equal(prompt.type, "command");
+  assert.match(prompt.command, /prompt-memory\.mjs$/);
+  assert.notEqual(prompt.async, true);
 });

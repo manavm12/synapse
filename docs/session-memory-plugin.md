@@ -13,9 +13,11 @@ Railway service is the only application process allowed to write memory.
 - A session has one mutable current node plus append-only revisions.
 - A globally unique `capture_id` makes an identical retry idempotent. Reusing
   the ID with different content fails and creates an audit event.
-- Checkpoints occur after 15 distinct completed turns and immediately after
-  compaction. If the remote call fails, the hook fails open and does not queue
-  memory or block later work.
+- Checkpoints occur after ten distinct completed turns and immediately after
+  compaction. The Stop hook records cadence silently; on the next user prompt,
+  a private hook context asks Codex to save memory without adding a synthetic
+  message to conversation history. If the remote call fails, the hook fails
+  open and does not queue memory or block later work.
 - The MCP surface is intentionally two tools: `get_identity` and
   `save_session_memory`. Retrieval, embeddings, messaging, and import are not
   part of this foundation.
@@ -65,9 +67,10 @@ new hash before testing a fresh task.
 1. Run `get_identity`; confirm it returns `principal_type: user`, the expected
    username/project, an OAuth client ID, and `authentication_method: oauth`.
 2. Start a task inside a registered main checkout or any linked worktree.
-3. Complete 15 distinct ordinary turns. The Stop hook should create one
-   automatic continuation asking the agent to call `save_session_memory` with
-   a generated capture ID.
+3. Complete ten distinct ordinary turns. The Stop hook should finish
+   silently. Submit the next prompt; private hook context should ask the agent
+   to call `save_session_memory` with a generated capture ID without adding a
+   synthetic message to conversation history.
 4. Confirm the tool succeeds and that no Markdown memory exists beneath
    `~/.synapse`. Only `checkpoints.sqlite` may exist, containing scheduler IDs.
 5. Retry the identical tool arguments and confirm `idempotent: true`, the same

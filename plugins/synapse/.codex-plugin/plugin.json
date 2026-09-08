@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "0.3.0+codex.20260907085123",
+  "version": "0.3.0+codex.20260908075822",
   "description": "Route Synapse tasks and capture authenticated cloud session memory.",
   "author": {
     "name": "Synapse"
