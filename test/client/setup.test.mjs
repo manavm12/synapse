@@ -130,6 +130,11 @@ test("real login streams its URL before exit without recording credentials", {
     import { runSetup } from ${JSON.stringify(setupUrl.href)};
     const result = await runSetup({ alias: "demo" }, {
       resolveRoot: async () => ${JSON.stringify(join(directory, "project"))},
+      connect: async () => ({ created: true }),
+      enroll: async () => ({
+        changed: true,
+        connection: { status: "connected" },
+      }),
     });
     process.stdout.write(JSON.stringify(result));
   `;
@@ -233,6 +238,8 @@ test("setup completes missing stages and a rerun preserves completed state", asy
   const runner = createCodexRunner();
   const connections = [];
   let connected = false;
+  let receiverConnected = false;
+  const enrollments = [];
   const dependencies = {
     env,
     repositoryRoot,
@@ -243,6 +250,18 @@ test("setup completes missing stages and a rerun preserves completed state", asy
       const created = !connected;
       connected = true;
       return { ...input, root: projectRoot, created };
+    },
+    enroll: async (input, options) => {
+      enrollments.push({ input, options });
+      const changed = !receiverConnected;
+      receiverConnected = true;
+      return {
+        changed,
+        connection: {
+          status: "connected",
+          identity: { username: "demo-user", projectAlias: "demo" },
+        },
+      };
     },
     now: () => Date.parse("2026-09-07T12:00:00.000Z"),
   };
@@ -258,11 +277,17 @@ test("setup completes missing stages and a rerun preserves completed state", asy
       ["plugin", true],
       ["oauth", true],
       ["project", true],
+      ["receiver", true],
     ],
   );
   assert.equal(first.alias, "demo");
   assert.match(formatSetupResult(first), /Synapse setup is ready/);
   assert.equal(connections[0].options.env, env);
+  assert.equal(
+    enrollments[0].input.serverUrl,
+    "https://synapse-production-ff6c.up.railway.app",
+  );
+  assert.equal(enrollments[0].options.env, env);
   const state = JSON.parse(await readFile(setupStatePath(env), "utf8"));
   assert.deepEqual(state, {
     version: 1,
@@ -286,6 +311,7 @@ test("setup completes missing stages and a rerun preserves completed state", asy
       ["plugin", false],
       ["oauth", false],
       ["project", false],
+      ["receiver", false],
     ],
   );
   assert.equal(
@@ -376,6 +402,10 @@ test("doctor reads installation, OAuth receipt, and project binding without writ
       runCommand: runner.runCommand,
       resolveRoot: async () => projectRoot,
       connect: async () => ({ created: false }),
+      enroll: async () => ({
+        changed: false,
+        connection: { status: "connected" },
+      }),
     },
   );
   const databasePath = join(directory, "state", "host.sqlite");

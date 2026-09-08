@@ -214,23 +214,23 @@ npm run synapse -- admin invite \
   --project synapse
 ```
 
-## 5. Enable a local receiver
+## 5. Verify the local receiver
 
-Normal setup does not enable incoming tasks. On macOS, enroll the primary
-checkout separately; the receiver credential is generated locally and stored in
-Keychain, with only its hash sent during pairing:
+Normal setup enrolls the receiver after explicit browser approval. On macOS,
+the receiver credential is generated locally and stored in Keychain, with only
+its hash sent during pairing. Verify the completed binding:
+
+```sh
+npm run synapse -- receiver status /absolute/path/to/checkout
+```
+
+The browser consent allows tasks from any active signed-in Synapse user, not
+just contacts. If enrollment was interrupted, rerun normal setup. The
+lower-level commands remain available for recovery:
 
 ```sh
 npm run synapse -- receiver connect /absolute/path/to/checkout --server-url https://<railway-domain>
-```
-
-Sign in to the browser page and explicitly choose **Enable incoming tasks**.
-This allows tasks from any active signed-in Synapse user, not just contacts.
-Return to the terminal to finish the local/cloud identity binding:
-
-```sh
 npm run synapse -- receiver finish /absolute/path/to/checkout
-npm run synapse -- receiver status /absolute/path/to/checkout
 ```
 
 `receiver status` reports local state, not a live authorization check. The

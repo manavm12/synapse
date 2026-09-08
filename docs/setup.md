@@ -14,8 +14,8 @@ binding.
 - OAuth uses an email magic link. Supabase's built-in email sender reaches only
   project-team addresses. Arbitrary alpha users require custom SMTP to be
   configured by the operator; setup does not change hosted settings.
-- Setup covers the existing cloud-memory login and local project alias. It does
-  not enroll a messaging receiver or create receiver credentials.
+- Setup includes the messaging receiver. Its credential is generated locally,
+  stored in macOS Keychain, and never printed or placed in the browser URL.
 
 Install dependencies in the Synapse checkout, then connect a primary Git
 checkout to the alias selected during hosted account creation:
@@ -32,11 +32,17 @@ Setup performs these stages in order:
 3. Install `synapse@synapse` if it is missing.
 4. Run `codex mcp login synapse-memory` if no successful login receipt exists.
 5. Add the local alias binding if it is missing.
+6. Open the receiver consent page and finish enrollment automatically after the
+   user approves **Enable incoming tasks**.
 
 If setup stops, fix the reported problem and run the same command again. To
 repeat OAuth deliberately after logout, revocation, or an account change, add
 `--login`. The receipt in `~/.synapse/setup-state.json` contains the MCP resource
 and completion time, never an OAuth token.
+
+Receiver approval is the only additional interaction. Setup waits for up to five
+minutes and can be rerun safely if the terminal closes or approval takes longer.
+The lower-level receiver commands remain available for diagnostics and recovery.
 
 ## Read-only doctor
 

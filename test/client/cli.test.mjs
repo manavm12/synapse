@@ -80,10 +80,12 @@ test("setup and doctor dispatch through injectable implementations", async (t) =
   const setupResult = {
     root: "/project",
     alias: "demo",
-    steps: ["marketplace", "plugin", "oauth", "project"].map((id) => ({
-      id,
-      changed: false,
-    })),
+    steps: ["marketplace", "plugin", "oauth", "project", "receiver"].map(
+      (id) => ({
+        id,
+        changed: false,
+      }),
+    ),
   };
   assert.deepEqual(
     await main(["setup", "/project", "--alias", "demo"], {
@@ -105,7 +107,7 @@ test("setup and doctor dispatch through injectable implementations", async (t) =
   assert.match(writes.join(""), /"ok": false/);
 });
 
-test("receiver enrollment is an explicit CLI action separate from setup", () => {
+test("lower-level receiver enrollment commands remain available for recovery", () => {
   assert.deepEqual(
     parseArguments([
       "receiver",

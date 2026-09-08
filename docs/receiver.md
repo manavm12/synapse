@@ -1,17 +1,16 @@
 # Local receiver
 
-The Synapse receiver is a separate, explicit opt-in after normal Synapse setup
-and OAuth login. Setup does not enable incoming tasks. Once the receiver is
-approved, any active signed-in Synapse user can send a task to the connected
-cloud project.
+The Synapse receiver is packaged into normal Synapse setup. Setup opens an
+explicit browser consent page and waits for approval; once approved, any active
+signed-in Synapse user can send a task to the connected cloud project.
 
 ## Connect
 
-From the project's primary checkout, start enrollment against the Synapse HTTPS
-service:
+The normal command installs the plugin, signs in, binds the project, and enrolls
+the receiver in one resumable flow:
 
 ```sh
-npm run synapse -- receiver connect . --server-url https://synapse.example
+npm run synapse -- setup . --alias <project-alias>
 ```
 
 Synapse creates the receiver credential locally, stores it in macOS Keychain,
@@ -19,7 +18,8 @@ and sends only its SHA-256 hash to the server. The credential is never printed,
 placed in a browser URL, or passed as a process argument. The browser page asks
 the signed-in owner to approve the project and the automatic-receiving policy.
 
-After approval, finish the resumable enrollment:
+Setup finishes enrollment automatically after approval. The lower-level commands
+remain available for recovery and diagnostics:
 
 ```sh
 npm run synapse -- receiver finish .

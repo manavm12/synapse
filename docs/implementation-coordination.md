@@ -89,8 +89,9 @@ limits in planning documents.
    arbitrary external email signup requires custom SMTP.
 2. User runs setup with the cloud project alias, then verifies `get_identity` in
    a fresh task. A doctor login receipt does not establish live token validity.
-3. Receiver enrollment is `receiver connect` → browser **Enable incoming tasks**
-   → `receiver finish`. The explicit policy accepts any active signed-in sender.
+3. Normal setup enrolls the receiver after browser **Enable incoming tasks**
+   approval. The explicit policy accepts any active signed-in sender; low-level
+   receiver commands remain available for recovery.
 4. A receiver's owner-prompt hook syncs and routes confirmed cloud jobs; there is
    no continuously polling receiver daemon. Transport `delivered` is native
    acceptance, not completed work.

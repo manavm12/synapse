@@ -22,6 +22,8 @@ import { MacOsKeychainStore } from "../../../plugins/synapse/lib/receiver-secret
 import { resolveProjectRoot } from "../project-registry.mjs";
 
 const execFileAsync = promisify(execFile);
+const DEFAULT_ENROLLMENT_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_POLL_INTERVAL_MS = 1_000;
 
 function allowInsecure(env) {
   return env.SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP === "1";
@@ -215,6 +217,49 @@ export async function finishReceiverConnection(
     { connectionId: connection.connectionId, identity },
     { path: registryPath },
   );
+}
+
+export async function enrollReceiver(
+  input,
+  {
+    start = startReceiverConnection,
+    finish = finishReceiverConnection,
+    wait = (milliseconds) =>
+      new Promise((resolveWait) => setTimeout(resolveWait, milliseconds)),
+    now = Date.now,
+    timeoutMs = DEFAULT_ENROLLMENT_TIMEOUT_MS,
+    pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+    ...dependencies
+  } = {},
+) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("Receiver enrollment timeout must be a positive integer");
+  }
+  if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs <= 0) {
+    throw new Error("Receiver polling interval must be a positive integer");
+  }
+
+  const initial = await start(input, dependencies);
+  if (initial.status === "connected") {
+    return { connection: initial, changed: false };
+  }
+
+  const deadline = now() + timeoutMs;
+  while (true) {
+    const connection = await finish(
+      { project: input.project, cwd: input.cwd },
+      dependencies,
+    );
+    if (connection.status === "connected") {
+      return { connection, changed: true };
+    }
+    if (now() >= deadline) {
+      throw new Error(
+        `Receiver approval timed out. Approve it at ${initial.verificationUrl}, then rerun the same setup command.`,
+      );
+    }
+    await wait(pollIntervalMs);
+  }
 }
 
 export async function receiverStatus(

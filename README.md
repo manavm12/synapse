@@ -44,18 +44,11 @@ external email addresses can join. Start a fresh Codex task and call
 `doctor` checks local configuration and a non-secret login receipt, not current
 OAuth token validity.
 
-Receiving is a separate, explicit opt-in:
-
-```sh
-npm run synapse -- receiver connect /absolute/path/to/project --server-url https://<synapse-host>
-```
-
-Approve **Enable incoming tasks** in the browser, then complete enrollment:
-
-```sh
-npm run synapse -- receiver finish /absolute/path/to/project
-npm run synapse -- receiver status /absolute/path/to/project
-```
+Receiving still requires explicit approval, now built into normal setup. The
+setup command opens **Enable incoming tasks** in the browser and
+finishes receiver enrollment automatically after approval. `receiver status`
+remains available for diagnostics, while the lower-level `receiver connect` and
+`receiver finish` commands are retained only for recovery.
 
 Any active signed-in Synapse user can then send to this username. Status reports
 the local binding; an owner-prompt hook checks live authorization before routing.
