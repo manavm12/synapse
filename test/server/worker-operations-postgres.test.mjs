@@ -321,6 +321,68 @@ test("Postgres canary scopes claims/recovery, commits reviewed memory and report
   );
   assert.equal(JSON.parse(output).database_connected, true);
   assert.doesNotMatch(output, /Private|seven days|worker-test-only/);
+
+  // A targeted retry never advances to another session or recovers its leases.
+  const charlie = await seedOwner(3);
+  const [target, successor] = await seedSession(charlie, 2);
+  const [unrelated] = await seedSession(charlie, 1);
+  await enqueue(charlie, target);
+  await enqueue(charlie, successor);
+  await enqueue(charlie, unrelated);
+  const targeted = (revisionId) =>
+    createMemoryProcessingStorage({
+      pool: worker,
+      scope: { ...charlie, revisionId },
+    });
+  const targetStore = targeted(target);
+  const crashed = await targetStore.claimNext({
+    workerId: "crashed-target",
+    now: new Date(Date.now() - 60_000),
+    leaseDurationMs: 3000,
+  });
+  assert.equal(crashed.revisionId, target);
+  const crashedSnapshot = await snapshot(charlie);
+  assert.equal(await targeted(unrelated).recoverExpired(new Date()), 0);
+  assert.equal(await targeted(bobSources[0]).recoverExpired(new Date()), 0);
+  assert.equal(
+    await targeted(bobSources[0]).claimNext({ workerId: "foreign-target" }),
+    null,
+  );
+  assert.equal(
+    await targeted(successor).claimNext({ workerId: "blocked-successor" }),
+    null,
+  );
+  assert.deepEqual(await snapshot(charlie), crashedSnapshot);
+  assert.equal(await targetStore.recoverExpired(new Date()), 1);
+  // Wait-free fixture backoff adjustment; attempt count and error remain intact.
+  await database.query(
+    "update synapse_private.memory_processing_jobs set available_at='2020-01-01' where revision_id=$1",
+    [target],
+  );
+  assert.deepEqual(await canary({ ...charlie, revisionId: target }, 1), {
+    status: "limit_reached",
+    attempts: 1,
+    succeeded: 1,
+  });
+  const targetedResult = await snapshot(charlie);
+  assert.equal(
+    targetedResult.jobs.find((j) => j.revision_id === target).attempt_count,
+    2,
+  );
+  assert.equal(
+    targetedResult.jobs.find((j) => j.revision_id === unrelated).attempt_count,
+    0,
+  );
+  assert.equal(
+    targetedResult.jobs.find((j) => j.revision_id === successor).attempt_count,
+    0,
+  );
+  assert.equal(
+    await targetStore.claimNext({ workerId: "must-not-advance" }),
+    null,
+  );
+  assert.deepEqual(await snapshot(bob), bobBefore);
+
   await database.query(
     `revoke insert on synapse_private.memory_claims from synapse_memory_worker`,
   );

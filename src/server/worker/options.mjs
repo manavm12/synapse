@@ -8,9 +8,14 @@ export function workerScope(scope) {
     throw new WorkerConfigurationError(
       "Exact owner and project UUIDs are required",
     );
+  if (scope.revisionId !== undefined && !UUID.test(scope.revisionId))
+    throw new WorkerConfigurationError("An exact revision UUID is required");
   return Object.freeze({
     ownerId: scope.ownerId.toLowerCase(),
     projectId: scope.projectId.toLowerCase(),
+    ...(scope.revisionId === undefined
+      ? {}
+      : { revisionId: scope.revisionId.toLowerCase() }),
   });
 }
 
@@ -32,7 +37,7 @@ export function parseWorkerArguments(args, { status = false } = {}) {
   const values = {};
   const allowed = status
     ? ["--owner-id", "--project-id"]
-    : ["--owner-id", "--project-id", "--max-jobs"];
+    : ["--owner-id", "--project-id", "--max-jobs", "--revision-id"];
   for (let index = 0; index < input.length; index += 2) {
     const flag = input[index],
       value = input[index + 1];
@@ -50,6 +55,9 @@ export function parseWorkerArguments(args, { status = false } = {}) {
   const scope = workerScope({
     ownerId: values["--owner-id"],
     projectId: values["--project-id"],
+    ...(values["--revision-id"] === undefined
+      ? {}
+      : { revisionId: values["--revision-id"] }),
   });
   if (status) return { scope };
   const maxJobs = Number(values["--max-jobs"]);
@@ -60,6 +68,10 @@ export function parseWorkerArguments(args, { status = false } = {}) {
   )
     throw new WorkerConfigurationError(
       "--max-jobs must be an integer from 1 to 1000",
+    );
+  if (scope.revisionId && maxJobs !== 1)
+    throw new WorkerConfigurationError(
+      "A revision-targeted canary requires --max-jobs 1",
     );
   return { scope, maxJobs };
 }

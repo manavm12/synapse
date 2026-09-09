@@ -323,6 +323,13 @@ canary immediately; it does not poll for retries. Queue backoff/terminal-failure
 state is preserved for a later deliberate run. Internal per-stage inference
 retries still apply. A canary can recover expired leases in its own project.
 
+To retry one investigated capture, append `--revision-id <revision-uuid>` and
+use `--max-jobs 1`. This also narrows expired-job recovery and the locked claim
+recheck to that revision. It never advances to another revision, resets attempts,
+changes backoff, or bypasses an unfinished earlier revision from the same session.
+The owner/project status remains project-wide; an unavailable target can report
+`blocked` while other project work remains.
+
 The final `memory_worker_stopped` event includes the attempts and successes.
 Exit 0 with `limit_reached` means the requested attempts succeeded, not that the
 whole backlog is empty. Exit 1 indicates failure. Exit 2 means the run stopped
@@ -350,10 +357,19 @@ without opening a database or API connection.
 | --- | --- | --- |
 | `MEMORY_MAX_STAGE_CALLS` | 2 | 1–3 per stage |
 | `MEMORY_REQUEST_TIMEOUT_MS` | 60000 | 1000–180000 |
-| `MEMORY_MAX_OUTPUT_TOKENS` | 8000 | 256–16000 |
+| `MEMORY_MAX_OUTPUT_TOKENS` | 8000 | 256–32000 |
 | `MEMORY_POLL_INTERVAL_MS` | 2000 | 100–60000 |
 | `MEMORY_ERROR_DELAY_MS` | 5000 | 100–60000 |
 | `MEMORY_LEASE_DURATION_MS` | 60000 | 3000–300000 |
+
+Incomplete responses are never committed or parsed as complete JSON. Job failure
+logs distinguish `model_output_limit`, `model_content_filter`, and other incomplete
+or failed responses, with the failing stage and available token counts. Only
+allowlisted reasons and nonnegative integer counts are logged, never partial
+output, provider error text, or credentials. Token limits include reasoning as
+well as visible output; increase the bound deliberately after inspecting a
+canary, not through unbounded automatic retries. The 8000-token default is unchanged.
+See [OpenAI's reasoning token guidance](https://developers.openai.com/api/docs/guides/reasoning).
 
 New captures commit an immutable revision and one processor-version-1 job in
 one transaction. The worker processes outside the database transaction, then
