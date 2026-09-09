@@ -1,0 +1,4 @@
+interface:
+  display_name: "Set up Synapse"
+  short_description: "Enable incoming tasks without a separate runner"
+  default_prompt: "Use $setup-synapse to enable incoming tasks in my saved Codex project."

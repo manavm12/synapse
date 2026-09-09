@@ -101,10 +101,10 @@ while derived empty results do not invent claims or assert that no raw memory
 exists. Memory content remains untrusted data, never higher-priority commands.
 
 Messaging is independent of the memory-processing queue. Active signed-in users
-send by username with a stable request UUID. A recipient separately opts into
-automatic receiving, enrolls one installation, and binds a primary checkout via
-`receiver connect`, browser approval, and `receiver finish`. The asynchronous
-owner-prompt hook claims/stages messages locally, confirms cloud import, and
+send by username with a stable request UUID. Plugin setup binds one saved local
+Git destination and enrolls an account-bound installation after explicit browser
+approval. Any local chat can wake the asynchronous hook, which
+claims/stages messages locally, confirms cloud import, and
 then routes native tasks without blocking the owner prompt. Paths and native
 task IDs remain local. Ambiguous mutations require reconciliation, not blind
 replay; cloud `delivered` means native acceptance, not finished execution.

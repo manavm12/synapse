@@ -345,6 +345,36 @@ test("setup preserves an existing marketplace with another source", async () => 
   );
 });
 
+test("repository setup cannot reintroduce a colliding plugin alongside an isolated install", async () => {
+  const runner = createCodexRunner();
+  await assert.rejects(
+    runSetup(
+      { alias: "demo" },
+      {
+        resolveRoot: async () => "/project",
+        runCommand: async (command, args, options) =>
+          args.join(" ") === "plugin list --json"
+            ? json({
+                installed: [
+                  {
+                    name: "synapse",
+                    pluginId: "synapse@synapse-dev-123456789abc",
+                  },
+                ],
+              })
+            : runner.runCommand(command, args, options),
+      },
+    ),
+    /isolated Synapse development plugin/,
+  );
+  assert.equal(
+    runner.calls.some(
+      ({ arguments_: args }) => args[0] === "plugin" && args[1] === "add",
+    ),
+    false,
+  );
+});
+
 test("doctor reads installation, OAuth receipt, and project binding without writes", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "synapse-doctor-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

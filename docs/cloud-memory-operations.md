@@ -55,6 +55,7 @@ matching application code. In addition to the foundation/onboarding migrations:
 | `202609070003_receiver_connections.sql` | Pairing, scoped installations, claim/import receipts and revocation. |
 | `202609070004_memory_ledger.sql` | Tenant-scoped claims, evidence, relations, coverage and projections. |
 | `202609080001_authorization_states.sql` | One-time hashed OAuth email-link state, expiry, replay protection, and issuance cooldown. |
+| `202609090001_bound_receiver_setup.sql` | Account/project-bound plugin setup and exact-identity receiver consent. |
 
 Migrations are an operator action, not an HTTP/worker startup step. The
 foundation creates forced RLS policies, append-only revisions, the custom
@@ -182,28 +183,21 @@ Commit the resulting `plugins/synapse/.mcp.json`. Its `url` and
 
 ## 4. Register and connect an alpha user
 
-Enable `PUBLIC_SIGNUP_ENABLED=true` only when ready to accept self-service users.
-The user must already have authorized access to the private repository, Node 24,
-npm 11, and a compatible Codex desktop/CLI. From the authorized checkout, run:
-
-```sh
-npm ci --ignore-scripts
-npm run synapse -- setup /absolute/path/to/checkout --alias <project-alias>
-npm run synapse -- doctor /absolute/path/to/checkout --alias <project-alias>
-```
+Enable `PUBLIC_SIGNUP_ENABLED=true` only when ready for self-service users.
+Distribute the Synapse plugin through a recipient-accessible Codex marketplace.
+Recipients install and sign in inside Codex; no repository, npm, system Node, or
+runner installation is part of onboarding. Repository setup/doctor commands
+remain developer/recovery wrappers.
 
 During OAuth login, follow the email magic link and choose a unique Synapse
-username and one project alias matching the setup command. Without configured
-custom SMTP, use a Supabase project-team address. The hosted service
-verifies the Supabase session token and atomically creates the profile, project,
-and memory root without receiving a user ID or email from the browser.
+username and project alias. Without custom SMTP, use a Supabase project-team
+address. The hosted service derives account IDs from the verified session,
+never from browser-supplied IDs.
 
-Setup installs the marketplace/plugin, performs interactive OAuth login, and
-records the primary checkout's alias. It preserves conflicting existing bindings
-rather than overwriting them. Its login receipt is non-secret and does not prove
-current token validity: start a fresh Codex task, call `get_identity`, and verify
-the expected username, project alias, and `authentication_method: oauth`.
-Use setup's `--login` flag to deliberately repeat OAuth after an account change.
+After signing in, select **Enable incoming tasks**, choose the saved local Git
+project, and approve in the browser with the same account. The bundled skill
+calls `get_identity` and `begin_receiver_setup`, then its helper finishes and
+live-validates enrollment. A CLI login receipt alone is not proof of live access.
 
 Before requesting an email, the consent UI exchanges its HttpOnly signed cookie
 for a random one-time callback state. Only the state's SHA-256 hash and its
@@ -224,33 +218,29 @@ npm run synapse -- admin invite \
   --project synapse
 ```
 
-## 5. Enable a local receiver
+## 5. Verify the local receiver
 
-Normal setup does not enable incoming tasks. On macOS, enroll the primary
-checkout separately; the receiver credential is generated locally and stored in
-Keychain, with only its hash sent during pairing:
+Before shipping the plugin, apply `202609090001_bound_receiver_setup.sql`
+and deploy authenticated `begin_receiver_setup` support. The additive migration
+preserves connected receivers and v1 transport endpoints. Bound browser approval
+checks exact account/project IDs; aliases alone are insufficient.
 
-```sh
-npm run synapse -- receiver connect /absolute/path/to/checkout --server-url https://<railway-domain>
-```
+On a clean Mac, install only the plugin, sign in, accept Enable, select a saved
+local Git project, approve in the browser, and verify readiness. Trust Codex
+hooks separately. Send one message from another account and submit a prompt in
+an unrelated local chat: exactly one task must appear in the selected project.
+Repeat from a projectless chat and a worktree; test Later followed by manual setup.
+This live release gate is separate from mocked-native/database fixture tests.
 
-Sign in to the browser page and explicitly choose **Enable incoming tasks**.
-This allows tasks from any active signed-in Synapse user, not just contacts.
-Return to the terminal to finish the local/cloud identity binding:
-
-```sh
-npm run synapse -- receiver finish /absolute/path/to/checkout
-npm run synapse -- receiver status /absolute/path/to/checkout
-```
-
-`receiver status` reports local state, not a live authorization check. The
-asynchronous owner-prompt hook verifies live receiver authorization, stages
-messages durably, confirms import, and only then permits native routing. It is
-not an always-running receiver daemon. Local paths and native task IDs stay
-local; delivered means native acceptance, not task execution completion.
+The plugin's status action verifies live authorization. Keychain holds the raw
+receiver credential; only the hash is sent through MCP. The asynchronous hook
+uses the global destination, stages/acknowledges imports, then routes at most one
+native delivery per invocation. It never polls while Codex is idle and never
+places message content in unrelated chats. Legacy low-level CLI receiver
+commands remain available only for developer/recovery use.
 
 Unapproved pairings expire after ten minutes and can be resumed with connect.
-Installations expire after 90 days. Explicitly disconnect before reconnecting
+Installations expire after 90 days. Use the plugin's explicit reconnect action for
 an expired installation; the server accepts the matching expired credential for
 revocation only. Preserve the credential and local state if revocation fails.
 

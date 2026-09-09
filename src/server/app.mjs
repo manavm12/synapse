@@ -47,6 +47,7 @@ export async function createApplication({
     app.set("trust proxy", config.trustedProxyHops);
   }
   const runtime = await createMcpRuntime({
+    config,
     database,
     logger,
     memoryRetrieval,

@@ -8,21 +8,28 @@ import test from "node:test";
 
 import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
 import pg from "pg";
-
+import { recordPromptHook } from "../../plugins/synapse/lib/hook-health.mjs";
 import {
+  acceptProvisioning,
   acknowledgeMessage,
   getJob,
   listPendingCloudEvents,
   markNativeMutationIssued,
   reserveNextMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
+import { reconcileNativeBindings } from "../../plugins/synapse/lib/native-reconcile.mjs";
 import { routeDelivery } from "../../plugins/synapse/lib/native-router.mjs";
+import {
+  completeSetup,
+  disableSetup,
+  prepareSetup,
+} from "../../plugins/synapse/lib/plugin-setup.mjs";
 import { ReceiverClient } from "../../plugins/synapse/lib/receiver-client.mjs";
+import { getReceiverConnectionById } from "../../plugins/synapse/lib/receiver-registry.mjs";
 import { syncReceiver } from "../../plugins/synapse/lib/receiver-sync.mjs";
 import { runMigrations } from "../../scripts/migrate.mjs";
 import {
   disconnectReceiver,
-  finishReceiverConnection,
   startReceiverConnection,
 } from "../../src/client/receiver/enrollment.mjs";
 import { createApplication } from "../../src/server/app.mjs";
@@ -214,24 +221,74 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     registryPath,
     secretStore,
     resolveRoot: async () => root,
-    env: { SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP: "1" },
+    env: {
+      SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP: "1",
+      CODEX_THREAD_ID: "fixture-owner",
+    },
     openBrowser: false,
   };
-  const pending = await startReceiverConnection(
-    { serverUrl: baseUrl },
-    options,
+  const oauthIdentity = await call("bob", "get_identity", {});
+  recordPromptHook(
+    { hook_event_name: "UserPromptSubmit", session_id: "fixture-owner" },
+    { path: registryPath },
   );
-  assert.equal((await finishReceiverConnection({}, options)).status, "pending");
+  const unpublished = await prepareSetup(
+    { identity: oauthIdentity },
+    { ...options, serverUrl: baseUrl },
+  );
+  // Unknown credentials are definitively absent at the revoke-only endpoint.
+  await disableSetup({ connection_id: unpublished.connection_id }, options);
+  assert.equal(secrets.size, 0);
+  const prepared = await prepareSetup(
+    { identity: oauthIdentity },
+    { ...options, serverUrl: baseUrl },
+  );
+  const pairing = await call("bob", "begin_receiver_setup", {
+    credential_hash: prepared.credential_hash,
+  });
+  assert.equal(pairing.identity.user_id, users.get("bob"));
+  assert.equal(pairing.identity.project_id, oauthIdentity.project_id);
+  assert.equal(
+    (
+      await call("bob", "begin_receiver_setup", {
+        credential_hash: prepared.credential_hash,
+      })
+    ).pairing_id,
+    pairing.pairing_id,
+  );
+  await call(
+    "eve",
+    "begin_receiver_setup",
+    { credential_hash: prepared.credential_hash },
+    { isError: true },
+  );
+  // Bob and Eve have the same alias; only exact bound account IDs may approve.
   assert.equal(
     (
       await post(
-        `/auth/receiver-pairings/${pending.pairingId}/approve`,
+        `/auth/receiver-pairings/${pairing.pairing_id}/approve`,
+        "session:eve",
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await post(
+        `/auth/receiver-pairings/${pairing.pairing_id}/approve`,
         "session:bob",
       )
     ).status,
     200,
   );
-  const connection = await finishReceiverConnection({}, options);
+  const ready = await completeSetup(
+    { connection_id: prepared.connection_id, pairing },
+    { ...options, openUrl: async () => {} },
+  );
+  assert.equal(ready.status, "ready");
+  const connection = getReceiverConnectionById(prepared.connection_id, {
+    path: registryPath,
+  });
   assert.equal(connection.identity.userId, users.get("bob"));
   const receiver = new ReceiverClient({
     serverUrl: baseUrl,
@@ -276,7 +333,10 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
                   },
                 ],
               }
-            : { threadId: "fixture-native-child", hostId: "local" };
+            : {
+                clientThreadId: "client-new-thread:fixture-native-child",
+                hostId: "local",
+              };
         return {
           success: true,
           contentItems: [{ type: "inputText", text: JSON.stringify(value) }],
@@ -285,6 +345,7 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     }),
     markIssued: (input) => markNativeMutationIssued(input, inboxOptions),
     acknowledge: (input) => acknowledgeMessage(input, inboxOptions),
+    accept: (input) => acceptProvisioning(input, inboxOptions),
   };
   await routeDelivery(delivery, routeOptions);
   assert.deepEqual(
@@ -293,17 +354,68 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   );
   assert.equal(nativeCalls[1].args.target.environment.type, "worktree");
   assert.match(nativeCalls[1].args.prompt, /from @alice/);
+  assert.equal(getJob(sent.message_id, inboxOptions).status, "accepted");
+  // No child hook runs. A later bounded check verifies the existing native task.
+  const reconciled = await reconcileNativeBindings(
+    {
+      projectRoot: root,
+      installationId: synced.identity.installationId,
+      ownerThreadId: "fixture-owner",
+    },
+    {
+      inboxOptions,
+      resolveId: async () => "fixture-native-child",
+      verifyWorktree: async () => true,
+      createClient: () => ({
+        async callTool(name) {
+          assert.equal(name, "read_thread");
+          return {
+            success: true,
+            contentItems: [
+              {
+                type: "inputText",
+                text: JSON.stringify({
+                  thread: {
+                    id: "fixture-native-child",
+                    kind: "codex",
+                    hostId: "local",
+                    cwd: root,
+                  },
+                  turns: [
+                    {
+                      items: [
+                        {
+                          type: "functionCallOutput",
+                          namespace: "codex_app",
+                          name: "create_thread",
+                          output: {
+                            text: `<codex_delegation><source_thread_id>fixture-owner</source_thread_id><input>${nativeCalls[1].args.prompt.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</input></codex_delegation>`,
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                }),
+              },
+            ],
+          };
+        },
+        async close() {},
+      }),
+    },
+  );
+  assert.equal(reconciled.reconciled, 1);
   assert.equal(getJob(sent.message_id, inboxOptions).status, "completed");
   const events = listPendingCloudEvents(
     { installationId: synced.identity.installationId },
     inboxOptions,
   );
-  assert.equal(events.length, 1);
+  assert.equal(events.length, 2);
   assert.doesNotMatch(
     JSON.stringify(events),
     /fixture-native|fixture-owner|project_root|thread_id/,
   );
-  await syncReceiver({ projectRoot: root }, syncOptions);
+  await syncReceiver({ projectRoot: root, receiptsOnly: true }, syncOptions);
   assert.equal(
     (await call("alice", "get_message_status", { message_id: sent.message_id }))
       .status,
@@ -385,12 +497,11 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     ["list_projects", "create_thread", "list_projects", "list_projects"],
   );
 
-  // Approval may succeed remotely while local completion rejects the binding.
-  const localRegistry = new DatabaseSync(registryPath);
-  localRegistry
-    .prepare("UPDATE projects SET alias = ? WHERE root = ?")
-    .run("wrong-alias", root);
-  localRegistry.close();
+  // Finish plugin disable too: transport revocation alone intentionally retains
+  // the selected local destination until the user disables or reconnects setup.
+  await disableSetup({ connection_id: prepared.connection_id }, options);
+
+  // Legacy unbound enrollment cannot bypass the authenticated setup tool.
   const mismatched = await startReceiverConnection(
     { serverUrl: baseUrl },
     options,
@@ -402,16 +513,10 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
         "session:bob",
       )
     ).status,
-    200,
+    403,
   );
-  await assert.rejects(finishReceiverConnection({}, options), /alias/);
   await disconnectReceiver({}, options);
   assert.equal(secrets.size, 0);
-  const resetRegistry = new DatabaseSync(registryPath);
-  resetRegistry
-    .prepare("UPDATE projects SET alias = ? WHERE root = ?")
-    .run("demo", root);
-  resetRegistry.close();
 
   // Cancelling before approval must prevent a delayed browser approval as well.
   const cancelled = await startReceiverConnection(
@@ -429,20 +534,36 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     200,
   );
 
-  const replacementPending = await startReceiverConnection(
-    { serverUrl: baseUrl },
-    options,
+  const replacementPending = await prepareSetup(
+    { identity: oauthIdentity },
+    { ...options, serverUrl: baseUrl },
   );
+  const replacementPairing = await call("bob", "begin_receiver_setup", {
+    credential_hash: replacementPending.credential_hash,
+  });
   assert.equal(
     (
       await post(
-        `/auth/receiver-pairings/${replacementPending.pairingId}/approve`,
+        `/auth/receiver-pairings/${replacementPairing.pairing_id}/approve`,
         "session:bob",
       )
     ).status,
     200,
   );
-  const replacement = await finishReceiverConnection({}, options);
+  const replacementReady = await completeSetup(
+    {
+      connection_id: replacementPending.connection_id,
+      pairing: replacementPairing,
+    },
+    { ...options, openUrl: async () => {} },
+  );
+  assert.equal(replacementReady.status, "ready");
+  const replacement = getReceiverConnectionById(
+    replacementPending.connection_id,
+    {
+      path: registryPath,
+    },
+  );
   assert.notEqual(
     replacement.identity.installationId,
     connection.identity.installationId,
@@ -467,6 +588,20 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   assert.equal(replacementDelivery.channel.threadId, null);
   // Old assigned work is never silently transferred to the new installation.
   assert.equal(getJob(later.message_id, inboxOptions).status, "routing");
+  // Expired credentials cannot claim, but must still be able to revoke.
+  await seed.query(
+    "update public.receiver_installations set expires_at=now()-interval '1 second' where id=$1",
+    [replacement.identity.installationId],
+  );
+  const expired = new ReceiverClient({
+    serverUrl: baseUrl,
+    credential: secrets.get(replacement.credentialAccount),
+    allowInsecureHttp: true,
+  });
+  await assert.rejects(
+    () => expired.claim(),
+    (error) => error.status === 401,
+  );
   await disconnectReceiver({}, options);
   assert.equal(secrets.size, 0);
 });

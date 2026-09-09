@@ -1,66 +1,84 @@
-# Local receiver
+# Incoming tasks through the Synapse plugin
 
-The Synapse receiver is a separate, explicit opt-in after normal Synapse setup
-and OAuth login. Setup does not enable incoming tasks. Once the receiver is
-approved, any active signed-in Synapse user can send a task to the connected
-cloud project.
+Install Synapse, sign in, and accept **Enable incoming tasks** in Codex. The
+bundled setup skill selects a saved local Git receiving project and opens browser
+consent. Any active signed-in Synapse user can send tasks after explicit opt-in.
+There is no separately installed runner. See [Setup](setup.md).
 
-## Connect
+## Authentication and enrollment
 
-From the project's primary checkout, start enrollment against the Synapse HTTPS
-service:
+The skill calls `get_identity` through the existing OAuth connection and records
+the exact account/cloud-project IDs locally. The helper creates a receiver
+credential in macOS Keychain, returning only its SHA-256 hash.
+Authenticated `begin_receiver_setup` derives the expected identity from the
+server's OAuth context and returns a pairing ID, consent URL, expiry, and identity.
 
-```sh
-npm run synapse -- receiver connect . --server-url https://synapse.example
-```
+The helper verifies both IDs and the exact configured origin and pairing path
+before opening the URL. Browser approval must match the expected identity,
+including when another account has an identical alias. Completion checks live
+receiver authorization before activating the saved destination. Healthy existing
+enrollment is reused after live validation. Unbound legacy pending pairings are
+retired by explicit setup, never silently adopted as account-bound pairings.
 
-Synapse creates the receiver credential locally, stores it in macOS Keychain,
-and sends only its SHA-256 hash to the server. The credential is never printed,
-placed in a browser URL, or passed as a process argument. The browser page asks
-the signed-in owner to approve the project and the automatic-receiving policy.
-
-After approval, finish the resumable enrollment:
-
-```sh
-npm run synapse -- receiver finish .
-npm run synapse -- receiver status .
-```
-
-An expired unapproved pairing can be restarted with `receiver connect`; the
-existing local credential is reused and remains private. Localhost HTTP is
-disabled unless `SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP=1` is set explicitly for
-development or tests.
+Approval progress is visible. One five-minute deadline covers browser opening,
+network requests, sleeps, and Keychain operations; interruption retains resumable
+state. Status and reconnect are available through the skill. Raw receiver
+credentials and OAuth tokens never enter command arguments or conversation
+history. Local paths and native task IDs never go to the cloud.
 
 ## Delivery and recovery
 
-The asynchronous owner-prompt hook checks receiver authorization, flushes
-durable receipts, claims at most ten messages, and stages each message and its
-import acknowledgement in one SQLite transaction. A staged message cannot be
-sent to Codex until the server confirms ownership by this installation.
+Any local user prompt can wake the asynchronous hook: unrelated projects,
+projectless chats, and linked worktrees all use the selected destination.
+Per-receiver leases serialize overlapping checks. Each invocation is bounded,
+claims at most ten messages per checked receiver, and makes at most one native
+delivery attempt. Locally recorded Synapse delivery markers suppress generated
+prompts as fresh triggers. Idle Codex never polls.
 
-Native task creation and continuation are fenced on disk before the mutation.
-Immediately before issuing either mutation, routing checks the current local
-binding and fresh cloud authorization, then rechecks the local binding after
-the network response. Disconnecting or rebinding during that check denies the
-stale reservation. Revocation after the final check cannot atomically undo a
-native mutation that is already being issued.
-If Codex may have accepted a mutation but its response is lost or malformed,
-the job becomes `needs_attention`; Synapse does not automatically repeat it.
-Receipt upload failures remain in a local outbox for a later prompt. A cloud
-failure never prevents legacy local messages from routing and the background
-hook never blocks the foreground prompt.
+Cloud payloads are staged durably in SQLite before import confirmation. Only
+confirmed imports may route. Ordering, stable delivery IDs, temporary-ID
+acceptance, permanent-task reconciliation, and outbox receipts remain durable.
+Native mutations are fenced on disk before issuance and require fresh receiver
+authorization. A missing or ambiguous response becomes `needs_attention`;
+automatic replay is forbidden.
 
-Disconnecting revokes future receiver operations but cannot cancel tasks that
-Codex already accepted:
+The child startup hook is a fast binding path, not the only one. After creation
+and on subsequent owner prompts, the installed plugin can resolve an accepted
+temporary ID using Codex's local client-ID map, then independently verify the
+native `read_thread` delegation, source task, local delivery marker, host, and
+Git worktree ancestry. The local map is read-only compatibility data, never proof
+of delivery. Unknown formats, duplicate aliases, mismatches, and unavailable
+native APIs preserve the existing fence; no second task is created. New cloud
+prompts carry the local receipt before their body as well as the terminal marker,
+so the native API's 20,000-character output cap does not prevent large messages
+from being reconciled. Receipts flush during the same bounded check without
+claiming another batch or starting a polling process.
 
-```sh
-npm run synapse -- receiver disconnect .
-```
+Setup separates connected enrollment from verified prompt hooks. A recent receipt
+from the current chat and exact installed build is required for `ready`; stale
+builds and missing hooks yield `hooks_pending`. The first-use guidance points to
+the installed skill even before the current task's skill catalog has refreshed.
 
-Disconnect also cancels an unapproved pairing or an installation whose browser
-approval succeeded but whose local `finish` failed. Cancellation is repeat-safe
-and prevents delayed approval of that pairing. If the network or credential
-cleanup fails, rerun disconnect; durable local recovery state is retained.
-Cancelled credentials cannot be reused for enrollment. A fresh connect creates
-a new credential and installation-scoped conversation channels; old assigned
-jobs and native task bindings are not silently transferred.
+The selected destination and incoming content never enter unrelated triggering
+chats. Legacy local-only queue messages remain scoped to prompts in their own
+primary checkout. Ten-turn memory capture remains independent of receiving.
+
+Disable removes the local destination and revokes future receiver access; it
+cannot cancel tasks already accepted by Codex. The revoke-only endpoint accepts
+a matching expired credential, so expiration does not prevent disconnect.
+Network/Keychain cleanup failures preserve recoverable local state. Queued work,
+memory databases, credentials not explicitly revoked, and native task bindings
+are preserved across plugin reinstalls. A replacement installation does not
+silently inherit old assigned messages or channels.
+
+## Compatibility and release
+
+All runtime code ships under `plugins/synapse` and imports only bundled modules
+or Node built-ins. Setup and every hook share the Codex-supplied runtime launcher,
+which checks SQLite capability and has no system-Node fallback. Hooks require
+Codex trust; the setup skill/starter remains independently accessible.
+
+Apply `202609090001_bound_receiver_setup.sql` and deploy endpoint/tool support
+before releasing the updated plugin. Existing connected receivers and v1
+transport endpoints remain compatible. Repository receiver CLI commands remain
+developer/recovery wrappers, not a recipient prerequisite.

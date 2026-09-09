@@ -50,6 +50,7 @@ export class AppToolsClient {
     pipePath = appToolsPipePath(),
     timeoutMs = 15_000,
     connect = createConnection,
+    signal,
   } = {}) {
     this.pipePath = pipePath;
     this.timeoutMs = timeoutMs;
@@ -60,9 +61,17 @@ export class AppToolsClient {
     this.socket = null;
     this.connecting = null;
     this.tools = null;
+    this.signal = signal;
+    this.abort = () => {
+      this.connectAbort?.(signal.reason);
+      this.#rejectAll(signal.reason);
+      this.socket?.destroy();
+    };
+    signal?.addEventListener("abort", this.abort, { once: true });
   }
 
   async start() {
+    this.signal?.throwIfAborted();
     if (this.socket && !this.socket.destroyed) return;
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolvePromise, reject) => {
@@ -73,8 +82,10 @@ export class AppToolsClient {
       }, this.timeoutMs);
       const failed = (error) => {
         clearTimeout(timer);
+        socket.destroy();
         reject(error);
       };
+      this.connectAbort = failed;
       socket.once("error", failed);
       socket.once("connect", () => {
         clearTimeout(timer);
@@ -88,6 +99,7 @@ export class AppToolsClient {
         resolvePromise();
       });
     }).finally(() => {
+      this.connectAbort = null;
       this.connecting = null;
     });
     return this.connecting;
@@ -95,6 +107,7 @@ export class AppToolsClient {
 
   async request(method, params) {
     await this.start();
+    this.signal?.throwIfAborted();
     const socket = this.socket;
     if (!socket || socket.destroyed) {
       throw new Error("Codex app-tools pipe is unavailable");
@@ -156,6 +169,8 @@ export class AppToolsClient {
   }
 
   async close() {
+    this.signal?.removeEventListener("abort", this.abort);
+    this.connectAbort?.(new Error("Codex app-tools client closed"));
     const socket = this.socket;
     this.socket = null;
     this.buffer = Buffer.alloc(0);

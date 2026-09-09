@@ -76,10 +76,14 @@ document.querySelector("#approve").addEventListener("click", async (event) => {
         headers: { authorization: `Bearer ${data.session.access_token}` },
       },
     );
-    if (!response.ok) throw new Error("This pairing cannot be approved.");
+    if (!response.ok)
+      throw new Error(
+        "This pairing cannot be approved. Check that this browser uses the same Synapse account as Codex.",
+      );
     consent.hidden = true;
     document.querySelector("h1").textContent = "Receiver enabled";
-    status.textContent = "Return to the terminal to finish connecting.";
+    status.textContent =
+      "Return to Codex. Synapse will finish connecting automatically.";
   } catch (error) {
     fail(error);
     button.disabled = false;
