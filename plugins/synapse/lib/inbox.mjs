@@ -235,7 +235,12 @@ function deliveryFromRow(
     row.source === "cloud"
       ? `Synapse message from @${row.sender_username} (conversation ${row.cloud_conversation_id}, sequence ${row.cloud_sequence}):\n\n${row.task}`
       : row.task;
-  const nativePrompt = `${nativeBody}\n\n<!-- ${deliveryMarker} -->`;
+  // Keep a local receipt before cloud content as well as the terminal trigger
+  // marker. Native read_thread caps each output at 20,000 characters; large
+  // tasks must still be reconcilable without copying their bodies elsewhere.
+  const receipt =
+    row.source === "cloud" ? `<!-- ${deliveryMarker} -->\n\n` : "";
+  const nativePrompt = `${receipt}${nativeBody}\n\n<!-- ${deliveryMarker} -->`;
   if (Buffer.byteLength(nativePrompt, "utf8") > MAX_TASK_BYTES) {
     throw new Error("Rendered native prompt exceeds the 64 KiB limit");
   }
@@ -675,7 +680,7 @@ export function markCloudEventFailure(
 }
 
 export function reserveNextMessage(
-  { projectRoot, ownerSessionId },
+  { projectRoot, ownerSessionId, source = null },
   {
     path = inboxPath(),
     now = Date.now,
@@ -686,6 +691,8 @@ export function reserveNextMessage(
 ) {
   requireProjectRoot(projectRoot);
   requireId(ownerSessionId, "owner session ID");
+  if (source !== null && source !== "local" && source !== "cloud")
+    throw new Error("Invalid inbox source");
   const database = openInbox(path);
   try {
     return transaction(database, () => {
@@ -727,6 +734,7 @@ export function reserveNextMessage(
       let job = database
         .prepare(`${DELIVERY_SELECT}
         WHERE jobs.project_root = ? AND jobs.owner_session_id = ?
+          AND (? IS NULL OR jobs.source = ?)
           AND jobs.status = 'routing' AND jobs.lease_expires_at <= ?
           AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
             AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
@@ -737,6 +745,8 @@ export function reserveNextMessage(
         .get(
           projectRoot,
           ownerSessionId,
+          source,
+          source,
           currentTime,
           receiverIdentity?.installationId ?? "",
           receiverIdentity?.userId ?? "",
@@ -747,6 +757,7 @@ export function reserveNextMessage(
         job = database
           .prepare(`${DELIVERY_SELECT}
           WHERE jobs.project_root = ? AND jobs.status = 'pending'
+            AND (? IS NULL OR jobs.source = ?)
             AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
               AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
               AND jobs.recipient_project_id = ?))
@@ -761,6 +772,8 @@ export function reserveNextMessage(
         `)
           .get(
             projectRoot,
+            source,
+            source,
             receiverIdentity?.installationId ?? "",
             receiverIdentity?.userId ?? "",
             receiverIdentity?.projectId ?? "",
@@ -1283,6 +1296,27 @@ export function getJob(jobId, { path = inboxPath() } = {}) {
           nativeMutationState: row.native_mutation_state,
         }
       : null;
+  } finally {
+    database.close();
+  }
+}
+
+export function listPendingNativeBindings(
+  { projectRoot, installationId },
+  { path = inboxPath() } = {},
+) {
+  const database = openInbox(path);
+  try {
+    return database
+      .prepare(`SELECT id AS jobId, delivery_id AS deliveryId,
+      client_thread_id AS clientThreadId, owner_session_id AS ownerSessionId,
+      project_root AS projectRoot FROM jobs WHERE project_root = ?
+      AND receiver_installation_id = ? AND source = 'cloud'
+      AND status = 'accepted' AND cloud_import_state = 'confirmed'
+      AND native_mutation_state = 'issued' AND thread_id IS NULL
+      AND EXISTS (SELECT 1 FROM channels WHERE channels.id=jobs.channel_id AND channels.host_id='local')
+      AND client_thread_id IS NOT NULL ORDER BY accepted_at LIMIT 3`)
+      .all(projectRoot, installationId);
   } finally {
     database.close();
   }

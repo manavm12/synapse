@@ -110,6 +110,7 @@ export class ReceiverClient {
     fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     allowInsecureHttp = false,
+    signal,
   }) {
     if (typeof fetchImpl !== "function")
       throw new Error("fetch is unavailable");
@@ -126,6 +127,7 @@ export class ReceiverClient {
     this.credential = credential;
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
+    this.signal = signal;
   }
 
   async createPairing(credentialHash) {
@@ -176,8 +178,12 @@ export class ReceiverClient {
       throw new Error("Receiver credential is unavailable");
     }
     const controller = new AbortController();
+    const abort = () => controller.abort(this.signal.reason);
+    if (this.signal?.aborted) abort();
+    else this.signal?.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
+      controller.signal.throwIfAborted();
       const response = await this.fetchImpl(new URL(path, this.baseUrl), {
         method,
         headers: {
@@ -202,7 +208,12 @@ export class ReceiverClient {
           `Receiver request failed with HTTP ${response.status}`,
           {
             status: response.status,
-            code: typeof result?.code === "string" ? result.code : undefined,
+            code:
+              typeof result?.code === "string"
+                ? result.code
+                : result?.error === "unauthorized"
+                  ? "unauthorized"
+                  : undefined,
           },
         );
       }
@@ -224,6 +235,7 @@ export class ReceiverClient {
       );
     } finally {
       clearTimeout(timer);
+      this.signal?.removeEventListener("abort", abort);
     }
   }
 }

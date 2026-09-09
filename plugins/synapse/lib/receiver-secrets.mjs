@@ -12,6 +12,7 @@ function collect(
     input,
     timeoutMs = DEFAULT_KEYCHAIN_TIMEOUT_MS,
     allowedExitCodes = [],
+    signal,
   } = {},
 ) {
   return new Promise((resolvePromise, reject) => {
@@ -23,6 +24,7 @@ function collect(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       callback();
     };
     const append = (target) => (chunk) => {
@@ -51,10 +53,16 @@ function collect(
           : reject(new Error("macOS Keychain operation failed")),
       );
     });
+    const abort = () => {
+      child.kill();
+      finish(() => reject(signal.reason));
+    };
     const timer = setTimeout(() => {
       child.kill();
       finish(() => reject(new Error("macOS Keychain operation timed out")));
     }, timeoutMs);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
     if (child.stdin) {
       child.stdin.once("error", (error) =>
         finish(() =>
@@ -83,7 +91,8 @@ export class MacOsKeychainStore {
     this.timeoutMs = timeoutMs;
   }
 
-  async set(account, secret) {
+  async set(account, secret, { signal } = {}) {
+    signal?.throwIfAborted();
     if (!SAFE_ACCOUNT.test(account) || !SAFE_CREDENTIAL.test(secret)) {
       throw new Error("Invalid receiver Keychain account or credential");
     }
@@ -93,13 +102,15 @@ export class MacOsKeychainStore {
     await collect(child, {
       input: `add-generic-password -U -s ${RECEIVER_KEYCHAIN_SERVICE} -a ${account} -w ${secret}\n`,
       timeoutMs: this.timeoutMs,
+      signal,
     });
-    if ((await this.get(account)) !== secret) {
+    if ((await this.get(account, { signal })) !== secret) {
       throw new Error("macOS Keychain did not persist the receiver credential");
     }
   }
 
-  async get(account) {
+  async get(account, { signal } = {}) {
+    signal?.throwIfAborted();
     if (!SAFE_ACCOUNT.test(account))
       throw new Error("Invalid Keychain account");
     const child = this.spawnImpl(
@@ -115,7 +126,7 @@ export class MacOsKeychainStore {
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     const secret = (
-      await collect(child, { timeoutMs: this.timeoutMs })
+      await collect(child, { timeoutMs: this.timeoutMs, signal })
     ).replace(/[\r\n]+$/, "");
     if (!SAFE_CREDENTIAL.test(secret)) {
       throw new Error("macOS Keychain returned an invalid receiver credential");
@@ -123,7 +134,8 @@ export class MacOsKeychainStore {
     return secret;
   }
 
-  async delete(account) {
+  async delete(account, { signal } = {}) {
+    signal?.throwIfAborted();
     if (!SAFE_ACCOUNT.test(account))
       throw new Error("Invalid Keychain account");
     const child = this.spawnImpl(
@@ -140,6 +152,7 @@ export class MacOsKeychainStore {
     await collect(child, {
       timeoutMs: this.timeoutMs,
       allowedExitCodes: [44],
+      signal,
     });
   }
 }

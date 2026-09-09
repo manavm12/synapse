@@ -159,7 +159,12 @@ function toolDefinitions({ includeRetrieval = false } = {}) {
   ];
 }
 
-export async function createMcpRuntime({ database, logger, memoryRetrieval }) {
+export async function createMcpRuntime({
+  database,
+  logger,
+  memoryRetrieval,
+  config,
+}) {
   const server = new McpServer(
     { name: "synapse-memory", version: "0.3.0" },
     {
@@ -297,6 +302,7 @@ export async function createMcpRuntime({ database, logger, memoryRetrieval }) {
   );
 
   registerMessagingTools(server, {
+    config,
     database,
     logger,
     helpers: {

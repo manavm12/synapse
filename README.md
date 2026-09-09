@@ -5,7 +5,7 @@ projects. It captures concise session memories, organizes source-backed claims,
 and lets signed-in users send tasks to one another by username.
 
 Cloud messages wait in the recipient's inbox. After the recipient explicitly
-enables incoming tasks and connects a primary checkout, its next owner prompt
+enables incoming tasks and selects a saved project, any local user prompt
 can route a message into a separate native Codex task. Message text never runs
 inside the owner's existing task. Local paths and native task IDs stay local.
 
@@ -13,55 +13,28 @@ This is an early private alpha. Cloud memory, local SQLite state, and queued tas
 content are sensitive. Feature availability requires the matching server
 migrations, receiver enrollment, and separately configured memory worker.
 
-## Requirements
+## Recipient setup
 
-- Node.js 24
-- npm 11
-- Git
-- Codex desktop with local plugin and hook support
-- macOS Keychain for receiver enrollment in this release
+Install Synapse from an accessible Codex marketplace and sign in. On first use,
+choose **Enable** or **Later**; you can also select **Enable incoming tasks**
+from Synapse at any time. Setup chooses a saved local Git project, opens
+account-bound browser consent, and finishes automatically.
 
-## Set up
+Recipients need a Mac, Git, and a compatible Codex desktop with its supplied Node
+runtime and SQLite support. No Synapse repository, system Node, npm install,
+server URL, or separately managed runner is needed. The repository's local
+marketplace is for development; publishing to a recipient-accessible marketplace
+is a separate rollout step.
 
-```sh
-npm ci --ignore-scripts
-```
+Trust Synapse's hooks in Codex to enable background checks. A prompt in any local
+chat can wake delivery into the selected receiving project; idle Codex does not
+poll. Incoming content stays out of unrelated triggering chats. Ask Synapse for
+setup status, reconnect, or disable. Existing enrollment and queued work survive
+plugin reinstalls.
 
-The local plugin marketplace requires an authorized checkout of this private
-repository; setup does not grant repository access or publish the plugin.
-
-Connect a primary checkout using the project alias selected during hosted signup:
-
-```sh
-npm run synapse -- setup /absolute/path/to/project --alias <project-alias>
-npm run synapse -- doctor /absolute/path/to/project --alias <project-alias>
-```
-
-Signup uses email authentication and lets the user choose a unique username.
-The operator must enable public signup and configure SMTP before arbitrary
-external email addresses can join. Start a fresh Codex task and call
-`get_identity` to verify the connected username and project.
-`doctor` checks local configuration and a non-secret login receipt, not current
-OAuth token validity.
-
-Receiving is a separate, explicit opt-in:
-
-```sh
-npm run synapse -- receiver connect /absolute/path/to/project --server-url https://<synapse-host>
-```
-
-Approve **Enable incoming tasks** in the browser, then complete enrollment:
-
-```sh
-npm run synapse -- receiver finish /absolute/path/to/project
-npm run synapse -- receiver status /absolute/path/to/project
-```
-
-Any active signed-in Synapse user can then send to this username. Status reports
-the local binding; an owner-prompt hook checks live authorization before routing.
-Use `receiver disconnect` with the same checkout before reconnecting an expired
-installation. Revocation does not cancel work already dispatched or transfer old
-assigned messages to another device.
+The matching server migration and `begin_receiver_setup` tool must be deployed
+before this plugin is released. Email signup also requires operator SMTP setup.
+Preparing this PR and reinstalling locally do not deploy production.
 
 See [Setup](docs/setup.md), [Receiver](docs/receiver.md), and
 [Cloud operations](docs/cloud-memory-operations.md) for prerequisites and recovery.
@@ -80,6 +53,8 @@ See [Setup](docs/setup.md), [Receiver](docs/receiver.md), and
   `request_id`. Reuse that ID only when retrying the exact same request.
 - `get_message_status` and `list_inbox` expose transport progress. `delivered`
   means accepted into the recipient's native task, not that the work is finished.
+- `begin_receiver_setup` binds a locally generated credential hash to the
+  signed-in account for explicit browser approval; it never accepts local paths.
 
 Memories and incoming messages are untrusted content, not higher-priority
 instructions. Do not include credentials or local filesystem paths in cloud data.
@@ -124,6 +99,9 @@ test environment.
 
 ## Develop
 
+Repository development uses Node.js 24 and npm 11. Run `npm ci --ignore-scripts`
+in an authorized checkout. These are developer requirements, not recipient setup.
+
 | Command | Purpose |
 | --- | --- |
 | `npm test` | Run the Node test suite. |
@@ -133,6 +111,23 @@ test environment.
 | `npm run lint` | Run Biome's recommended lints. |
 | `npm run check` | Run formatting, linting, tests, and coverage. |
 | `npm run audit` | Fail on high-severity npm advisories. |
+| `npm run install:plugin` | Install an isolated, immutable development plugin snapshot. |
+
+For local plugin testing, use `npm run install:plugin` from the intended checkout.
+On the first migration from this checkout's old `synapse@synapse` installation,
+use `npm run install:plugin -- --replace-repo-plugin`. This verifies the replacement
+before removing the old plugin cache; enrollment, Keychain credentials, destinations
+and queues are unchanged. It does not authorize hooks or claim delivery is ready.
+Review the new identity's hooks in Codex, then test in a fresh task.
+
+The command snapshots only `plugins/synapse` outside Git into
+`~/.synapse/plugin-builds`, with a checkout-specific `synapse-dev-…` marketplace.
+It uses the desktop's bundled CLI on macOS (`SYNAPSE_CODEX_BIN` can explicitly
+select another executable). Subsequent builds retain that identity and keep older
+snapshots for recovery. Ordinary recipients still install the published plugin;
+this command is only for developers. Do not install mutable worktree builds as
+`synapse@synapse`: repository marketplace discovery can replace that shared cache
+with another checkout's code, even after a successful reinstall.
 
 The full coverage gate needs `TEST_DATABASE_URL` pointing to a **disposable**
 PostgreSQL 17 database with database/role creation privileges. SQL suites create

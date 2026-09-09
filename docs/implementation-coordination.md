@@ -28,8 +28,10 @@ revocation findings, and retrieval discovery/historical-topic findings have
 corrections integrated. Independent re-review cleared the receiver's local
 identity, dispatch/revocation races, reconnect isolation, bounded response reads,
 and resumable cancellation, plus backend atomic approval/cancellation. The
-combined disposable-Postgres gate passed 182 tests without failures or skips.
-This is local acceptance; live deployment gates below remain outstanding.
+combined disposable-Postgres gate at that earlier integration checkpoint passed
+182 tests without failures or skips. This historical count is not current PR #9
+release evidence; see [the current validation scope and command](plugin-setup-validation.md).
+Live deployment gates below remain outstanding.
 
 Local fixtures, real subprocess tests, and disposable Postgres are distinct from
 live OAuth/email, real macOS/native-task operation, and paid semantic-quality
@@ -85,13 +87,16 @@ limits in planning documents.
 
 1. Operator applies all migrations, provisions separate runtime/worker roles,
    verifies TLS and reverse-proxy configuration, and configures Supabase
-   OAuth/email. Private repository access is required for local installation;
-   arbitrary external email signup requires custom SMTP.
-2. User runs setup with the cloud project alias, then verifies `get_identity` in
-   a fresh task. A doctor login receipt does not establish live token validity.
-3. Receiver enrollment is `receiver connect` → browser **Enable incoming tasks**
-   → `receiver finish`. The explicit policy accepts any active signed-in sender.
-4. A receiver's owner-prompt hook syncs and routes confirmed cloud jobs; there is
+   OAuth/email. Distribute the plugin through an accessible marketplace;
+   arbitrary external email signup requires custom SMTP. Deploy bound-pairing
+   migration and MCP support before releasing the matching plugin.
+2. User installs Synapse, signs in, and accepts its first-use Enable offer (or
+   Later). The bundled skill verifies `get_identity` and selects a saved project.
+3. `begin_receiver_setup` binds consent to the exact OAuth account/project IDs.
+   The helper completes enrollment after browser approval, with no CLI step.
+   The explicit policy accepts any active signed-in sender; repository commands
+   remain optional developer/recovery wrappers.
+4. A prompt in any local chat syncs and routes cloud jobs to the saved destination; there is
    no continuously polling receiver daemon. Transport `delivered` is native
    acceptance, not completed work.
 5. Operator separately enables `npm run worker` with its own database credential,
@@ -108,7 +113,10 @@ only under explicit test/development configuration. A receiver credential is
 stores it securely. The server stores SHA-256 of the entire credential string.
 Never print credentials or expose them through command arguments.
 
-1. `POST /receiver/pairings` with `{credential_hash}` returns
+1. Plugin onboarding uses OAuth MCP `begin_receiver_setup({credential_hash})`,
+   returning the pairing plus expected authenticated account/project IDs. Browser
+   approval must match those exact IDs. The legacy recovery endpoint
+   `POST /receiver/pairings` with `{credential_hash}` returns
    `{pairing_id, verification_url, expires_at}`. Pairings expire after 10 minutes.
    Creation is unauthenticated, bounded and rate-limited; it cannot enable a
    receiver. Reusing the same pending credential hash is replay-safe.

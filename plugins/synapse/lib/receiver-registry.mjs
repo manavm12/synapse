@@ -33,7 +33,31 @@ function openRegistry(path) {
       credential_expires_at TEXT,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS receiver_connection_history (
+      connection_id TEXT PRIMARY KEY, project_root TEXT NOT NULL, user_id TEXT
+    );
   `);
+  try {
+    database.exec("BEGIN IMMEDIATE");
+    const columns = database
+      .prepare("PRAGMA table_info(receiver_connections)")
+      .all();
+    for (const name of ["expected_user_id", "expected_project_id"]) {
+      if (!columns.some((column) => column.name === name)) {
+        database.exec(
+          `ALTER TABLE receiver_connections ADD COLUMN ${name} TEXT`,
+        );
+      }
+    }
+    if (!columns.some((column) => column.name === "credential_ready"))
+      database.exec(
+        "ALTER TABLE receiver_connections ADD COLUMN credential_ready INTEGER NOT NULL DEFAULT 1",
+      );
+    database.exec("COMMIT");
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   return database;
 }
 
@@ -46,10 +70,13 @@ function fromRow(row) {
     serverUrl: row.server_url,
     credentialAccount: row.credential_account,
     credentialHash: row.credential_hash,
+    credentialReady: Boolean(row.credential_ready),
     pairingId: row.pairing_id,
     verificationUrl: row.verification_url,
     pairingExpiresAt: row.pairing_expires_at,
     status: row.status,
+    expectedUserId: row.expected_user_id ?? null,
+    expectedProjectId: row.expected_project_id ?? null,
     identity: row.installation_id
       ? {
           installationId: row.installation_id,
@@ -80,6 +107,22 @@ export function getReceiverConnection(
   }
 }
 
+export function getReceiverConnectionById(
+  connectionId,
+  { path = receiverRegistryPath() } = {},
+) {
+  const database = openRegistry(path);
+  try {
+    return fromRow(
+      database
+        .prepare("SELECT * FROM receiver_connections WHERE connection_id=?")
+        .get(connectionId),
+    );
+  } finally {
+    database.close();
+  }
+}
+
 export function getLocalProject(
   projectRoot,
   { path = receiverRegistryPath() } = {},
@@ -103,6 +146,9 @@ export function beginReceiverConnection(
     serverUrl,
     credentialAccount,
     credentialHash,
+    expectedUserId = null,
+    expectedProjectId = null,
+    credentialReady = true,
   },
   { path = receiverRegistryPath(), now = Date.now } = {},
 ) {
@@ -118,8 +164,8 @@ export function beginReceiverConnection(
     database
       .prepare(`INSERT INTO receiver_connections (
         connection_id, project_root, project_alias, server_url, credential_account,
-        credential_hash, status, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?)`)
+        credential_hash, status, updated_at, expected_user_id, expected_project_id, credential_ready
+      ) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?)`)
       .run(
         connectionId,
         projectRoot,
@@ -128,6 +174,9 @@ export function beginReceiverConnection(
         credentialAccount,
         credentialHash,
         now(),
+        expectedUserId,
+        expectedProjectId,
+        Number(credentialReady),
       );
     return fromRow(
       database
@@ -139,6 +188,72 @@ export function beginReceiverConnection(
   }
 }
 
+export function markCredentialReady(
+  connectionId,
+  { path = receiverRegistryPath() } = {},
+) {
+  const db = openRegistry(path);
+  try {
+    const result = db
+      .prepare(
+        "UPDATE receiver_connections SET credential_ready=1 WHERE connection_id=? AND status='starting'",
+      )
+      .run(connectionId);
+    if (result.changes !== 1)
+      throw new Error("Setup was cancelled before credential publication");
+  } finally {
+    db.close();
+  }
+}
+
+export function receiverTarget(
+  connectionId,
+  { path = receiverRegistryPath() } = {},
+) {
+  const db = openRegistry(path);
+  try {
+    return db
+      .prepare(`SELECT project_root AS projectRoot,coalesce(expected_user_id,user_id) AS userId FROM receiver_connections WHERE connection_id=?
+      UNION ALL SELECT project_root AS projectRoot,user_id AS userId FROM receiver_connection_history WHERE connection_id=? LIMIT 1`)
+      .get(connectionId, connectionId);
+  } finally {
+    db.close();
+  }
+}
+
+// Couple the final local authorization check to the durable inbox issue marker.
+// Disable cannot change the receiver row between these two synchronous writes.
+export function withReceiverAuthorization(
+  { projectRoot, identity },
+  operation,
+  { path = receiverRegistryPath(), now = Date.now } = {},
+) {
+  const db = openRegistry(path);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    const row = db
+      .prepare("SELECT * FROM receiver_connections WHERE project_root=?")
+      .get(projectRoot);
+    if (
+      row?.status !== "connected" ||
+      row.installation_id !== identity?.installationId ||
+      row.user_id !== identity?.userId ||
+      row.cloud_project_id !== identity?.projectId ||
+      row.cloud_project_alias !== identity?.projectAlias ||
+      Date.parse(row.credential_expires_at) <= now()
+    ) {
+      throw new Error("Cloud receiver authorization is no longer current");
+    }
+    const result = operation();
+    if (result?.then)
+      throw new Error("Receiver authorization fence must be synchronous");
+    db.exec("COMMIT");
+    return result;
+  } finally {
+    db.close();
+  }
+}
+
 export function recordReceiverPairing(
   { connectionId, pairingId, verificationUrl, expiresAt },
   { path = receiverRegistryPath(), now = Date.now } = {},
@@ -147,7 +262,7 @@ export function recordReceiverPairing(
   try {
     const result = database
       .prepare(`UPDATE receiver_connections SET pairing_id = ?, verification_url = ?,
-        pairing_expires_at = ?, status = 'pending', updated_at = ? WHERE connection_id = ?`)
+        pairing_expires_at = ?, status = 'pending', updated_at = ? WHERE connection_id = ? AND status IN ('starting','pending')`)
       .run(pairingId, verificationUrl, expiresAt, now(), connectionId);
     if (result.changes !== 1) throw new Error("Unknown receiver connection");
   } finally {
@@ -170,11 +285,23 @@ export function completeReceiverConnection(
         `Approved cloud project ${identity.projectAlias} does not match local alias ${row.project_alias}`,
       );
     }
-    database
+    if (
+      (row.expected_user_id && row.expected_user_id !== identity.userId) ||
+      (row.expected_project_id &&
+        row.expected_project_id !== identity.projectId)
+    ) {
+      throw new Error(
+        "Approved account does not match Synapse sign-in; reconnect from setup",
+      );
+    }
+    if (!["pending", "connected"].includes(row.status)) {
+      throw new Error("Receiver completion was cancelled");
+    }
+    const updated = database
       .prepare(`UPDATE receiver_connections SET status = 'connected',
         installation_id = ?, user_id = ?, username = ?, cloud_project_id = ?,
         cloud_project_alias = ?, credential_expires_at = ?, updated_at = ?
-        WHERE connection_id = ?`)
+        WHERE connection_id = ? AND status IN ('pending','connected')`)
       .run(
         identity.installationId,
         identity.userId,
@@ -185,6 +312,8 @@ export function completeReceiverConnection(
         now(),
         connectionId,
       );
+    if (updated.changes !== 1)
+      throw new Error("Receiver completion was cancelled");
     return fromRow(
       database
         .prepare("SELECT * FROM receiver_connections WHERE connection_id = ?")
@@ -254,9 +383,15 @@ export function removeReceiverConnection(
 ) {
   const database = openRegistry(path);
   try {
+    database.exec("BEGIN IMMEDIATE");
+    database
+      .prepare(`INSERT OR IGNORE INTO receiver_connection_history(connection_id,project_root,user_id)
+      SELECT connection_id,project_root,coalesce(expected_user_id,user_id) FROM receiver_connections WHERE connection_id=?`)
+      .run(connectionId);
     database
       .prepare("DELETE FROM receiver_connections WHERE connection_id = ?")
       .run(connectionId);
+    database.exec("COMMIT");
   } finally {
     database.close();
   }

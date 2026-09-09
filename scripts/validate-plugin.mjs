@@ -105,16 +105,31 @@ assert(
   new URL(memoryServer.url).pathname === "/mcp",
   "MCP URL must use the exact /mcp path",
 );
-const serverDirectory = resolve(pluginRoot, "server");
-for (const file of await readdir(serverDirectory)) {
+for (const file of await readdir(pluginRoot, { recursive: true })) {
   if (!file.endsWith(".mjs")) continue;
-  const serverSource = await readFile(resolve(serverDirectory, file), "utf8");
+  const serverSource = await readFile(resolve(pluginRoot, file), "utf8");
   const runtimePackages = findRuntimePackageLoads(serverSource);
   assert(
     runtimePackages.length === 0,
     `${file} must not load runtime packages: ${runtimePackages.join(", ")}`,
   );
+  for (const match of serverSource.matchAll(
+    /(?:from\s*|import\s*\(\s*)["'](\.[^"']+)["']/g,
+  )) {
+    const target = resolve(dirname(resolve(pluginRoot, file)), match[1]);
+    assert(
+      target.startsWith(`${pluginRoot}/`),
+      `${file} imports outside the installed plugin`,
+    );
+    await access(target);
+  }
 }
+assert(
+  manifest.skills === "./skills",
+  "plugin must expose bundled setup skill",
+);
+await access(resolve(pluginRoot, "skills/setup-synapse/SKILL.md"));
+await access(resolve(pluginRoot, "scripts/setup.mjs"));
 
 const hooks = (await readJson(resolve(pluginRoot, "hooks/hooks.json"))).hooks;
 assert(
@@ -123,14 +138,15 @@ assert(
 );
 assert(
   hooks.Stop[0].hooks[0].command ===
-    `node \${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs`,
+    `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs"`,
   "Stop must launch the dependency-free checkpoint scheduler",
 );
 await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
 assert(
   hooks?.UserPromptSubmit?.[0]?.hooks?.some(
     (hook) =>
-      hook.command === `node \${PLUGIN_ROOT}/hooks/prompt-memory.mjs` &&
+      hook.command ===
+        `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/prompt-memory.mjs"` &&
       hook.async !== true,
   ),
   "UserPromptSubmit must inject due memory saves privately",
@@ -142,7 +158,8 @@ assert(
       entry.matcher === "^startup$" &&
       entry.hooks?.some(
         (hook) =>
-          hook.command === `node \${PLUGIN_ROOT}/hooks/bind-child.mjs` &&
+          hook.command ===
+            `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/bind-child.mjs"` &&
           hook.async === true,
       ),
   ),
@@ -151,7 +168,7 @@ assert(
 assert(
   hooks?.UserPromptSubmit?.[0]?.hooks?.some(
     (hook) =>
-      hook.command === `/bin/sh \${PLUGIN_ROOT}/hooks/run-dispatch.sh` &&
+      hook.command === `/bin/sh "\${PLUGIN_ROOT}/hooks/run-dispatch.sh"` &&
       hook.async === true,
   ),
   "UserPromptSubmit must route Synapse tasks asynchronously through the signed desktop runtime",

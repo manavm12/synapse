@@ -761,7 +761,31 @@ test("an issued native mutation with an uncertain response is fenced from replay
 });
 
 test("the native router classifies a cloud mutation timeout as uncertain, not retryable", async () => {
-  const { inbox } = await paths();
+  const { inbox, registry } = await paths();
+  beginReceiverConnection(
+    {
+      connectionId: "timeout-fixture",
+      projectRoot: "/project",
+      projectAlias: "demo",
+      serverUrl: "https://example.test",
+      credentialAccount: "receiver:timeout-fixture",
+      credentialHash: "0".repeat(64),
+    },
+    { path: registry },
+  );
+  recordReceiverPairing(
+    {
+      connectionId: "timeout-fixture",
+      pairingId: "fixture",
+      verificationUrl: "https://example.test",
+      expiresAt: identity.expiresAt,
+    },
+    { path: registry },
+  );
+  completeReceiverConnection(
+    { connectionId: "timeout-fixture", identity },
+    { path: registry },
+  );
   const message = cloudMessage();
   stage(inbox, message);
   confirmCloudImport(
@@ -817,6 +841,7 @@ test("the native router classifies a cloud mutation timeout as uncertain, not re
             ...metadata,
             createClient: () => client,
             authorizeCloud: async () => {},
+            cloudAuthorizationOptions: { registryPath: registry },
             markIssued: (input) =>
               markNativeMutationIssued(input, { path: inbox }),
           }),

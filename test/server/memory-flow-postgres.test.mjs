@@ -317,9 +317,10 @@ test("Postgres memory capture composes with the queue, organizer and authenticat
       "send_message",
       "get_message_status",
       "list_inbox",
+      "begin_receiver_setup",
     ]),
   );
-  assert.equal(listed.body.result.tools.length, 8);
+  assert.equal(listed.body.result.tools.length, 9);
   assert.equal((await rpc(null, "tools/list", {})).status, 401);
 
   const firstCapture = capture("Production retains logs for 7 days.");
