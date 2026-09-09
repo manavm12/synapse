@@ -1,12 +1,44 @@
 import { validateSchema } from "../../memory/core/schema.mjs";
 
 export class MemoryInferenceError extends Error {
-  constructor(code, { retryable = false, transport = false } = {}) {
+  constructor(
+    code,
+    { retryable = false, transport = false, details = {} } = {},
+  ) {
     super(`Memory inference ${code}`);
     this.name = "MemoryInferenceError";
     this.code = code;
     this.retryable = retryable;
     this.transport = transport;
+    // Only fixed enums and nonnegative token counts may reach operational logs.
+    const safe = {};
+    for (const [key, allowed] of Object.entries({
+      inference_stage: ["extract", "reconcile", "review"],
+      response_status: [
+        "completed",
+        "failed",
+        "in_progress",
+        "cancelled",
+        "queued",
+        "incomplete",
+      ],
+      incomplete_reason: ["max_output_tokens", "content_filter"],
+    })) {
+      if (allowed.includes(details[key])) safe[key] = details[key];
+    }
+    for (const key of [
+      "input_tokens",
+      "output_tokens",
+      "reasoning_tokens",
+      "max_output_tokens",
+    ]) {
+      if (Number.isSafeInteger(details[key]) && details[key] >= 0)
+        safe[key] = details[key];
+    }
+    Object.defineProperty(this, "details", {
+      value: Object.freeze(safe),
+      enumerable: true,
+    });
   }
 }
 
@@ -60,7 +92,7 @@ export function createMemoryInferenceAPI({
         "Explicit extraction and review model names are required",
       );
   boundedInteger(timeoutMs, "timeoutMs", 360_000);
-  boundedInteger(maxOutputTokens, "maxOutputTokens", 18_000);
+  boundedInteger(maxOutputTokens, "maxOutputTokens", 32_000);
   boundedInteger(maxPromptCharacters, "maxPromptCharacters", 200_000);
   boundedInteger(maxResponseBytes, "maxResponseBytes", 4_000_000);
   if (
@@ -162,8 +194,28 @@ export function createMemoryInferenceAPI({
               maxResponseBytes,
               controller.signal,
             );
-            if (raw.status !== "completed")
-              throw new MemoryInferenceError("incomplete response");
+            if (raw.status !== "completed") {
+              const reason = raw.incomplete_details?.reason;
+              const code =
+                raw.status === "incomplete" && reason === "max_output_tokens"
+                  ? "output token limit reached"
+                  : raw.status === "incomplete" && reason === "content_filter"
+                    ? "content filtered"
+                    : raw.status === "failed"
+                      ? "provider response failed"
+                      : "incomplete response";
+              throw new MemoryInferenceError(code, {
+                details: {
+                  response_status: raw.status,
+                  incomplete_reason: reason,
+                  input_tokens: raw.usage?.input_tokens,
+                  output_tokens: raw.usage?.output_tokens,
+                  reasoning_tokens:
+                    raw.usage?.output_tokens_details?.reasoning_tokens,
+                  max_output_tokens: maxOutputTokens,
+                },
+              });
+            }
             const content = (raw.output ?? [])
               .filter((item) => item.type === "message")
               .flatMap((item) => item.content ?? []);
@@ -191,8 +243,15 @@ export function createMemoryInferenceAPI({
           })(),
         ]);
       } catch (error) {
-        if (error instanceof MemoryInferenceError) throw error;
-        throw new MemoryInferenceError("invalid response");
+        if (error instanceof MemoryInferenceError)
+          throw new MemoryInferenceError(error.code, {
+            retryable: error.retryable,
+            transport: error.transport,
+            details: { ...error.details, inference_stage: stage },
+          });
+        throw new MemoryInferenceError("invalid response", {
+          details: { inference_stage: stage },
+        });
       } finally {
         clearTimeout(timeout);
         signal?.removeEventListener("abort", onAbort);

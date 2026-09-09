@@ -62,6 +62,16 @@ test("worker is opt-in and requires separate credentials and explicit models", (
 });
 
 test("worker request, retry and polling configuration is bounded", () => {
+  assert.equal(loadWorkerConfig(environment()).maxOutputTokens, 8000);
+  assert.equal(
+    loadWorkerConfig(environment({ MEMORY_MAX_OUTPUT_TOKENS: "32000" }))
+      .maxOutputTokens,
+    32000,
+  );
+  assert.throws(
+    () => loadWorkerConfig(environment({ MEMORY_MAX_OUTPUT_TOKENS: "32001" })),
+    /MEMORY_MAX_OUTPUT_TOKENS/,
+  );
   for (const key of [
     "MEMORY_MAX_STAGE_CALLS",
     "MEMORY_REQUEST_TIMEOUT_MS",

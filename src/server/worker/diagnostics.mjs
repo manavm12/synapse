@@ -42,6 +42,9 @@ export function workerFailureCategory(error) {
       return "context_limit";
     if (code === "semantic review rejected proposal") return "review_rejected";
     if (code === "incomplete response") return "model_incomplete";
+    if (code === "output token limit reached") return "model_output_limit";
+    if (code === "content filtered") return "model_content_filter";
+    if (code === "provider response failed") return "model_response_failed";
     if (error.transport) return "model_transport";
     return "model_validation";
   }
@@ -57,6 +60,10 @@ export function workerFailureCategory(error) {
   )
     return "database_connection";
   return "unknown";
+}
+
+export function workerFailureDetails(error) {
+  return error instanceof MemoryInferenceError ? error.details : {};
 }
 
 export async function requireWorkerRole(client) {

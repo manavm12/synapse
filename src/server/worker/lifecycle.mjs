@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { workerFailureCategory } from "./diagnostics.mjs";
+import { workerFailureCategory, workerFailureDetails } from "./diagnostics.mjs";
 
 async function pause(milliseconds, signal) {
   try {
@@ -55,6 +55,7 @@ export async function runMemoryWorker({
         ...(result.status === "failed"
           ? {
               category: workerFailureCategory(result.error),
+              ...workerFailureDetails(result.error),
               queue_status: ["pending", "failed", "lease_lost"].includes(
                 result.queueStatus,
               )

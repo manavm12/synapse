@@ -319,6 +319,68 @@ test("API refuses malformed, incomplete, refused, oversized and error responses 
   );
 });
 
+test("incomplete responses retain only safe stage, reason and token diagnostics", async () => {
+  for (const [status, reason, expected] of [
+    ["incomplete", "max_output_tokens", "output token limit reached"],
+    ["incomplete", "content_filter", "content filtered"],
+    ["incomplete", "private provider secret", "incomplete response"],
+    ["failed", undefined, "provider response failed"],
+    ["private provider status", undefined, "incomplete response"],
+  ]) {
+    const api = createMemoryInferenceAPI({
+      ...apiOptions,
+      maxOutputTokens: 32_000,
+      fetcher: async () =>
+        Response.json({
+          status,
+          incomplete_details: { reason },
+          output: [{ text: "private partial output" }],
+          error: { message: "private provider secret" },
+          usage: {
+            input_tokens: 120,
+            output_tokens: 32000,
+            output_tokens_details: { reasoning_tokens: 31000 },
+          },
+        }),
+    });
+    await assert.rejects(
+      api.structured("extract", "prompt", extractionSchema),
+      (error) => {
+        assert.equal(error.code, expected);
+        assert.equal(error.details.inference_stage, "extract");
+        assert.equal(error.details.input_tokens, 120);
+        assert.equal(error.details.output_tokens, 32000);
+        assert.equal(error.details.reasoning_tokens, 31000);
+        assert.equal(error.details.max_output_tokens, 32000);
+        assert.equal(error.retryable, false);
+        assert.equal(error.transport, false);
+        assert.doesNotMatch(JSON.stringify(error), /private/);
+        assert.ok(Object.isFrozen(error.details));
+        assert.throws(() => {
+          error.details = { secret: "private" };
+        });
+        return true;
+      },
+    );
+  }
+  const error = new MemoryInferenceError("incomplete response", {
+    details: {
+      inference_stage: "private",
+      response_status: "private",
+      incomplete_reason: "private",
+      input_tokens: -1,
+      output_tokens: "private",
+      reasoning_tokens: Number.MAX_SAFE_INTEGER + 1,
+      arbitrary: "private",
+    },
+  });
+  assert.deepEqual(error.details, {});
+  assert.throws(
+    () => createMemoryInferenceAPI({ ...apiOptions, maxOutputTokens: 32001 }),
+    /maxOutputTokens/,
+  );
+});
+
 test("API deadline covers stalled fetch/body and shutdown cancels an in-flight request", async () => {
   const stalledFetch = createMemoryInferenceAPI({
     ...apiOptions,

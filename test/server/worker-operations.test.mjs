@@ -11,6 +11,7 @@ import { loadWorkerDatabaseConfig } from "../../src/server/worker/config.mjs";
 import {
   WorkerDatabaseError,
   workerFailureCategory,
+  workerFailureDetails,
 } from "../../src/server/worker/diagnostics.mjs";
 import { runMemoryWorker } from "../../src/server/worker/lifecycle.mjs";
 import { parseWorkerArguments } from "../../src/server/worker/options.mjs";
@@ -58,6 +59,51 @@ test("canary options require exact scope and an explicit bounded attempt count",
       DATABASE_WORKER_URL: "fixture",
       DATABASE_SSL: "bad",
     }),
+  );
+});
+
+test("revision targeting requires a UUID and exactly one canary attempt", async () => {
+  const revisionId = "33333333-3333-4333-8333-333333333333";
+  assert.deepEqual(
+    parseWorkerArguments([
+      "--canary",
+      ...scopeArgs,
+      "--max-jobs",
+      "1",
+      "--revision-id",
+      revisionId,
+    ]),
+    {
+      scope: { ...scope, revisionId },
+      maxJobs: 1,
+    },
+  );
+  for (const tail of [
+    ["--max-jobs", "2", "--revision-id", revisionId],
+    ["--max-jobs", "1", "--revision-id", "private-secret"],
+    [
+      "--max-jobs",
+      "1",
+      "--revision-id",
+      revisionId,
+      "--revision-id",
+      revisionId,
+    ],
+  ])
+    assert.throws(() =>
+      parseWorkerArguments(["--canary", ...scopeArgs, ...tail]),
+    );
+  assert.throws(() =>
+    parseWorkerArguments([...scopeArgs, "--revision-id", revisionId], {
+      status: true,
+    }),
+  );
+  await assert.rejects(
+    createWorkerRuntime(
+      { enabled: true },
+      { scope: { ...scope, revisionId }, maxJobs: 2 },
+    ),
+    /canary/,
   );
 });
 
@@ -139,6 +185,15 @@ test("diagnostics use fixed categories without exposing arbitrary messages", () 
     ],
     [new MemoryInferenceError("incomplete response"), "model_incomplete"],
     [
+      new MemoryInferenceError("output token limit reached"),
+      "model_output_limit",
+    ],
+    [new MemoryInferenceError("content filtered"), "model_content_filter"],
+    [
+      new MemoryInferenceError("provider response failed"),
+      "model_response_failed",
+    ],
+    [
       new MemoryInferenceError("transport failure", { transport: true }),
       "model_transport",
     ],
@@ -150,6 +205,53 @@ test("diagnostics use fixed categories without exposing arbitrary messages", () 
     [new Error("secret token"), "unknown"],
   ])
     assert.equal(workerFailureCategory(error), expected);
+  assert.deepEqual(workerFailureDetails(new Error("secret")), {});
+  assert.deepEqual(
+    workerFailureDetails(
+      new MemoryInferenceError("output token limit reached", {
+        details: {
+          inference_stage: "extract",
+          output_tokens: 8000,
+          secret: "private",
+        },
+      }),
+    ),
+    { inference_stage: "extract", output_tokens: 8000 },
+  );
+});
+
+test("failed canary logs fixed inference details without provider text", async () => {
+  const logs = [];
+  await runMemoryWorker({
+    runner: {
+      enabled: true,
+      async runOnce() {
+        return {
+          status: "failed",
+          jobId: "job",
+          queueStatus: "pending",
+          error: new MemoryInferenceError("output token limit reached", {
+            details: {
+              inference_stage: "review",
+              incomplete_reason: "max_output_tokens",
+              output_tokens: 8000,
+              body: "private",
+            },
+          }),
+        };
+      },
+    },
+    logger: {
+      info: (event, fields) => logs.push({ event, ...fields }),
+      error() {},
+    },
+    signal: new AbortController().signal,
+    maxJobs: 1,
+  });
+  assert.equal(logs[0].category, "model_output_limit");
+  assert.equal(logs[0].inference_stage, "review");
+  assert.equal(logs[0].output_tokens, 8000);
+  assert.doesNotMatch(JSON.stringify(logs), /private/);
 });
 
 test("runner exposes retry versus terminal failure and loss of lease", async () => {

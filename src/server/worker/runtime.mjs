@@ -35,7 +35,8 @@ export async function createWorkerRuntime(
   if (
     (scope === null) !== (maxJobs === null) ||
     (maxJobs !== null &&
-      (!Number.isSafeInteger(maxJobs) || maxJobs < 1 || maxJobs > 1000))
+      (!Number.isSafeInteger(maxJobs) || maxJobs < 1 || maxJobs > 1000)) ||
+    (scope?.revisionId && maxJobs !== 1)
   )
     throw new TypeError(
       "A canary requires exact scope and maxJobs from 1 to 1000",

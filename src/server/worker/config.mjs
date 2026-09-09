@@ -73,7 +73,7 @@ export function loadWorkerConfig(env = process.env) {
       "MEMORY_MAX_OUTPUT_TOKENS",
       8_000,
       256,
-      16_000,
+      32_000,
     ),
     pollIntervalMs: integer(env, "MEMORY_POLL_INTERVAL_MS", 2_000, 100, 60_000),
     errorDelayMs: integer(env, "MEMORY_ERROR_DELAY_MS", 5_000, 100, 60_000),

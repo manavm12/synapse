@@ -24,7 +24,7 @@ try {
   const options = parseWorkerArguments(process.argv.slice(2));
   if (options.help) {
     process.stdout.write(
-      "Usage: npm run worker\n       npm run worker:canary -- --owner-id <UUID> --project-id <UUID> --max-jobs <1..1000>\nCanaries count claimed attempts, stop on failure or no eligible work, and must run without automatic restarts.\n",
+      "Usage: npm run worker\n       npm run worker:canary -- --owner-id <UUID> --project-id <UUID> --max-jobs <1..1000> [--revision-id <UUID>]\nRevision-targeted canaries require --max-jobs 1. Canaries count claimed attempts, stop on failure or no eligible work, and must run without automatic restarts.\n",
     );
   } else {
     const config = loadWorkerConfig();

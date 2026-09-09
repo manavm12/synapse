@@ -62,6 +62,7 @@ const claimableJobsSql = `
     and job.available_at <= $2
     and job.attempt_count < job.max_attempts
     and ($3::uuid is null or (job.owner_id = $3 and job.project_id = $4))
+    and ($5::uuid is null or job.revision_id = $5)
     and not exists (
       select 1
       from synapse_private.memory_processing_jobs as earlier_job
@@ -125,8 +126,14 @@ export function createMemoryProcessingStorage({
          from synapse_private.memory_processing_jobs
          where status = 'processing' and lease_expires_at <= $1
            and ($2::uuid is null or (owner_id = $2 and project_id = $3))
+           and ($4::uuid is null or revision_id = $4)
          order by lease_expires_at, created_at`,
-        [now, scope?.ownerId ?? null, scope?.projectId ?? null],
+        [
+          now,
+          scope?.ownerId ?? null,
+          scope?.projectId ?? null,
+          scope?.revisionId ?? null,
+        ],
       ),
     );
     let recovered = 0;
@@ -150,8 +157,15 @@ export function createMemoryProcessingStorage({
            where id = $1 and project_id = $2
              and status = 'processing' and lease_expires_at <= $3
              and ($4::uuid is null or owner_id = $4)
+             and ($5::uuid is null or revision_id = $5)
            for update`,
-          [candidate.id, candidate.project_id, now, scope?.ownerId ?? null],
+          [
+            candidate.id,
+            candidate.project_id,
+            now,
+            scope?.ownerId ?? null,
+            scope?.revisionId ?? null,
+          ],
         );
         if (expired.rowCount !== 1) return 0;
         const row = expired.rows[0];
@@ -212,6 +226,7 @@ export function createMemoryProcessingStorage({
           now,
           scope?.ownerId ?? null,
           scope?.projectId ?? null,
+          scope?.revisionId ?? null,
         ],
       ),
     );
@@ -236,13 +251,14 @@ export function createMemoryProcessingStorage({
         if (lease.rowCount !== 1) return null;
         const ready = await client.query(
           `${claimableJobsSql}
-           and job.id = $5
+           and job.id = $6
            for update of job`,
           [
             processorVersion,
             now,
             scope?.ownerId ?? null,
             scope?.projectId ?? null,
+            scope?.revisionId ?? null,
             candidate.id,
           ],
         );
