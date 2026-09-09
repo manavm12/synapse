@@ -116,6 +116,9 @@ async function start() {
       body: JSON.stringify({ state }),
     });
     if (!consumeResponse.ok) {
+      if (consumeResponse.status >= 500) {
+        throw new Error("Sign-in is temporarily unavailable. Try again.");
+      }
       throw new Error("The sign-in link is invalid, expired, or already used");
     }
     location.replace("/authorize");

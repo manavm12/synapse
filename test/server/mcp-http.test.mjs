@@ -358,11 +358,71 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
   const emailSubmissionScript = await (
     await fetch(`${baseUrl}/assets/email-submission.js`)
   ).text();
-  assert.match(
-    emailSubmissionScript,
-    /if \(pending \|\| now\(\) < cooldownUntil\)/,
+  const emailSubmissionModule = await import(
+    `data:text/javascript;base64,${Buffer.from(emailSubmissionScript).toString("base64")}`
   );
-  assert.match(emailSubmissionScript, /error\?\.status === 429/);
+  let now = 1_000;
+  let submissions = 0;
+  const button = { disabled: false, textContent: "Send link" };
+  const form = {
+    addEventListener() {},
+    querySelector() {
+      return button;
+    },
+  };
+  const panel = { hidden: false };
+  const status = { className: "", textContent: "" };
+  const shownErrors = [];
+  const controller = emailSubmissionModule.installEmailSubmission({
+    form,
+    panel,
+    status,
+    now: () => now,
+    readEmail: () => "person@example.com",
+    showError(error) {
+      shownErrors.push(error.message);
+    },
+    async submit() {
+      submissions += 1;
+      return { cooldownSeconds: 60 };
+    },
+  });
+  t.after(() => controller.dispose());
+  await controller.handleSubmit({ preventDefault() {} });
+  now += 1_000;
+  await controller.handleSubmit({ preventDefault() {} });
+  assert.equal(submissions, 1);
+  assert.equal(button.textContent, "Try again in 60s");
+
+  const limitedButton = { disabled: false, textContent: "Send link" };
+  const limitedController = emailSubmissionModule.installEmailSubmission({
+    form: {
+      addEventListener() {},
+      querySelector() {
+        return limitedButton;
+      },
+    },
+    panel: { hidden: false },
+    status: { className: "", textContent: "" },
+    now: () => now,
+    readEmail: () => "person@example.com",
+    showError(error) {
+      shownErrors.push(error.message);
+    },
+    async submit() {
+      throw Object.assign(new Error("Too many requests"), {
+        status: 429,
+        retryAfterSeconds: 30,
+      });
+    },
+  });
+  t.after(() => limitedController.dispose());
+  await limitedController.handleSubmit({ preventDefault() {} });
+  assert.equal(limitedButton.textContent, "Try again in 30s");
+  assert.equal(
+    shownErrors.at(-1),
+    "Please wait a minute before requesting another link.",
+  );
   const unauthorized = await mcp(
     baseUrl,
     { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
