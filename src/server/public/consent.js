@@ -110,6 +110,7 @@ async function start() {
     const consumeResponse = await fetch("/auth/state/consume", {
       method: "POST",
       headers: {
+        authorization: `Bearer ${sessionData.session.access_token}`,
         "content-type": "application/json",
         "x-synapse-auth-request": "1",
       },

@@ -150,7 +150,7 @@ function setAuthorizationCookie(res, authorizationId, config) {
 export function installConsentRoutes(
   app,
   config,
-  { database, supabaseBrowserPath },
+  { database, sessionVerifier, supabaseBrowserPath },
 ) {
   const csp = [
     "default-src 'none'",
@@ -274,6 +274,21 @@ export function installConsentRoutes(
 
   app.post("/auth/state/consume", async (req, res) => {
     res.set("Cache-Control", "no-store");
+    const authorization = req.headers.authorization;
+    const accessToken =
+      typeof authorization === "string" && authorization.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length).trim()
+        : null;
+    if (!accessToken) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    try {
+      await sessionVerifier.verifyAccessToken(accessToken);
+    } catch {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
     const authorizationId = authorizationFromRequest(req, config.cookieSecret);
     const state = typeof req.body?.state === "string" ? req.body.state : null;
     if (

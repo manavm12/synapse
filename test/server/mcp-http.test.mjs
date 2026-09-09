@@ -303,9 +303,35 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
   const callbackCookie = callback.headers.get("set-cookie").split(";", 1)[0];
   assert.match(callbackCookie, /synapse_authorization=/);
   assert.equal((await fetch(baseUrl + callbackPath)).status, 200);
+  const unauthenticatedConsume = await fetch(`${baseUrl}/auth/state/consume`, {
+    method: "POST",
+    headers: {
+      cookie: callbackCookie,
+      "content-type": "application/json",
+      "x-synapse-auth-request": "1",
+    },
+    body: JSON.stringify({
+      state: new URL(state.redirect_to).searchParams.get("state"),
+    }),
+  });
+  assert.equal(unauthenticatedConsume.status, 401);
+  const invalidSessionConsume = await fetch(`${baseUrl}/auth/state/consume`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer invalid",
+      cookie: callbackCookie,
+      "content-type": "application/json",
+      "x-synapse-auth-request": "1",
+    },
+    body: JSON.stringify({
+      state: new URL(state.redirect_to).searchParams.get("state"),
+    }),
+  });
+  assert.equal(invalidSessionConsume.status, 401);
   const consumeState = await fetch(`${baseUrl}/auth/state/consume`, {
     method: "POST",
     headers: {
+      authorization: "Bearer session",
       cookie: callbackCookie,
       "content-type": "application/json",
       "x-synapse-auth-request": "1",
