@@ -7,6 +7,7 @@ import {
   markNativeMutationUncertain,
   retryRoutingMessage,
 } from "./inbox.mjs";
+import { NativeQueueClient } from "./native-queue.mjs";
 import { ReceiverClient } from "./receiver-client.mjs";
 import { validateReceiverIdentity } from "./receiver-contract.mjs";
 import {
@@ -130,10 +131,13 @@ export async function routeDelivery(
     markIssued = markNativeMutationIssued,
     authorizeCloud = authorizeCloudDelivery,
     cloudAuthorizationOptions,
+    createQueueClient = () => new NativeQueueClient(),
+    assertLease = () => {},
   } = {},
 ) {
   const client = createClient();
   let mutationIssued = false;
+  let queueClient;
   try {
     await client.start();
     const listed = appToolJson(
@@ -157,12 +161,31 @@ export async function routeDelivery(
     }
 
     if (delivery.channel.threadId) {
+      if (delivery.protocolVersion === 2) {
+        if (delivery.channel.hostId && delivery.channel.hostId !== "local")
+          throw new Error(
+            "Destination is on another host; reconnect its local receiver",
+          );
+        queueClient = createQueueClient();
+        const destination = await queueClient.prepare(
+          delivery.channel.threadId,
+        );
+        if (
+          destination?.projectId &&
+          delivery.channel.bindingRole !== "origin" &&
+          destination.projectId !== project.projectId
+        )
+          throw new Error(
+            "Destination task moved to another project; repair its local routing before delivery",
+          );
+      }
       if (delivery.source === "cloud") {
         await authorizeCloud(delivery, {
           ...cloudAuthorizationOptions,
           signal,
         });
         signal?.throwIfAborted();
+        assertLease();
         withReceiverAuthorization(
           {
             projectRoot: delivery.projectRoot,
@@ -185,15 +208,22 @@ export async function routeDelivery(
           },
         );
       }
-      await client.callTool(
-        "send_message_to_thread",
-        {
+      if (queueClient) {
+        await queueClient.submit({
           threadId: delivery.channel.threadId,
-          hostId: delivery.channel.hostId ?? "local",
           prompt: delivery.nativePrompt,
-        },
-        { threadId: ownerThreadId, turnId },
-      );
+          deliveryId: delivery.deliveryId,
+        });
+      } else
+        await client.callTool(
+          "send_message_to_thread",
+          {
+            threadId: delivery.channel.threadId,
+            hostId: delivery.channel.hostId ?? "local",
+            prompt: delivery.nativePrompt,
+          },
+          { threadId: ownerThreadId, turnId },
+        );
       return acknowledge({
         jobId: delivery.jobId,
         deliveryId: delivery.deliveryId,
@@ -206,6 +236,7 @@ export async function routeDelivery(
     if (delivery.source === "cloud") {
       await authorizeCloud(delivery, { ...cloudAuthorizationOptions, signal });
       signal?.throwIfAborted();
+      assertLease();
       withReceiverAuthorization(
         {
           projectRoot: delivery.projectRoot,
@@ -233,7 +264,9 @@ export async function routeDelivery(
         "create_thread",
         {
           prompt: delivery.nativePrompt,
-          title: `Synapse: ${delivery.channelId}`,
+          title: delivery.cloud?.senderUsername
+            ? `Synapse: @${delivery.cloud.senderUsername}`
+            : `Synapse: ${delivery.channelId}`,
           target: taskTarget(project),
         },
         { threadId: ownerThreadId, turnId },
@@ -263,6 +296,7 @@ export async function routeDelivery(
     if (mutationIssued) error.nativeMutationIssued = true;
     throw error;
   } finally {
+    queueClient?.close();
     await client.close();
   }
 }

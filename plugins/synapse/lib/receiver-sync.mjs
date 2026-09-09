@@ -152,7 +152,7 @@ export async function syncReceiver(
     inboxOptions,
   });
   if (receiptsOnly) return { flushed };
-  const claim = await client.claim(10);
+  const claim = await client.claim(10, 2);
   signal?.throwIfAborted();
   const identity = validateReceiverIdentity(claim.identity);
   if (!sameIdentity(connection.identity, identity)) {

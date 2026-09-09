@@ -16,6 +16,7 @@ import {
   listPendingCloudEvents,
   markNativeMutationIssued,
   reserveNextMessage,
+  withInbox,
 } from "../../plugins/synapse/lib/inbox.mjs";
 import { reconcileNativeBindings } from "../../plugins/synapse/lib/native-reconcile.mjs";
 import { routeDelivery } from "../../plugins/synapse/lib/native-router.mjs";
@@ -314,6 +315,11 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   assert.equal(delivery.jobId, sent.message_id);
   const nativeCalls = [];
   const routeOptions = {
+    createQueueClient: () => ({
+      async prepare() {},
+      async submit() {},
+      close() {},
+    }),
     ownerThreadId: "fixture-owner",
     turnId: "fixture-turn",
     cloudAuthorizationOptions: options,
@@ -435,6 +441,11 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     request_id: randomUUID(),
     conversation_id: sent.conversation_id,
   });
+  withInbox(
+    (db) =>
+      db.prepare("UPDATE conversation_responses SET status='replied'").run(),
+    inboxOptions,
+  );
   const later = await call("alice", "send_message", {
     ...request,
     request_id: randomUUID(),
@@ -583,9 +594,11 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     { projectRoot: root, ownerSessionId: "fixture-owner" },
     { ...inboxOptions, receiverIdentity: replacementSync.identity },
   );
-  assert.equal(replacementDelivery.jobId, afterReconnect.message_id);
-  assert.notEqual(replacementDelivery.channelId, next.channelId);
-  assert.equal(replacementDelivery.channel.threadId, null);
+  assert.equal(replacementDelivery, null);
+  assert.equal(
+    getJob(afterReconnect.message_id, inboxOptions).bindingState,
+    "missing",
+  );
   // Old assigned work is never silently transferred to the new installation.
   assert.equal(getJob(later.message_id, inboxOptions).status, "routing");
   // Expired credentials cannot claim, but must still be able to revoke.

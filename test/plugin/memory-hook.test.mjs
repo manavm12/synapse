@@ -104,11 +104,15 @@ test("hook configuration uses local commands for scheduling only", async () => {
     await readFile(resolve("plugins/synapse/hooks/hooks.json"), "utf8"),
   ).hooks;
   assert.deepEqual(Object.keys(hooks).sort(), [
+    "Interrupt",
+    "PostToolUse",
+    "PreToolUse",
     "SessionStart",
     "Stop",
     "UserPromptSubmit",
   ]);
   assert.deepEqual(hooks.SessionStart.map((entry) => entry.matcher).sort(), [
+    "^(startup|resume|compact)$",
     "^compact$",
     "^startup$",
   ]);
