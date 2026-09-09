@@ -271,13 +271,24 @@ MEMORY_MODEL=<explicit-extraction-and-reconciliation-model>
 MEMORY_REVIEW_MODEL=<explicit-review-model>
 ```
 
-In the dedicated service's settings, select the custom Railway config path
-`/deploy/railway-worker.json`, with repository root `/`. The file sets the
-Dockerfile build, worker command, one Singapore replica, no HTTP healthcheck,
-no cron schedule, no sleeping, and three retries on process failure. Leave the
-HTTP service on its existing configuration. Do not generate a public worker
-domain. Confirm the effective configuration in the deployment details; these
-values follow [Railway's config-as-code reference](https://docs.railway.com/config-as-code/reference).
+Apply the settings recorded in `deploy/railway-worker.json` directly to the
+dedicated service before connecting its source repository. Keep repository root
+`/`, Dockerfile path `Dockerfile`, start command `npm run worker`, one Singapore
+(`asia-southeast1-eqsg3a`) replica, no HTTP healthcheck or cron schedule, sleeping
+disabled, restart policy `ON_FAILURE` with three retries, zero overlap seconds
+and 30 draining seconds. Leave the HTTP service on its existing configuration.
+Do not generate a public worker domain.
+
+As verified during deployment on 9 September 2026, Railway rejects new custom
+config-as-code paths as deprecated. The JSON file is a settings reference, not
+an automatically applied deployment configuration. Configure these settings in
+the service dashboard or through `serviceInstanceUpdate`, then connect
+`manavm12/synapse` on `main`. For that API, supply `dockerfilePath: "Dockerfile"`
+to select the Dockerfile build; `DOCKERFILE` is not a valid `Builder` enum value.
+Confirm the effective command, build and replica configuration after applying.
+For future declarative management, follow
+[Railway's Infrastructure as Code migration guide](https://docs.railway.com/infrastructure-as-code#migrating-from-config-as-code)
+and review the plan for changes to unrelated services before applying it.
 
 Provision the worker credential and verify schema readiness before enabling the
 continuous service. From an operator checkout or the built image, with

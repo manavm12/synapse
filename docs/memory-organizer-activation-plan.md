@@ -1,8 +1,8 @@
 # Activate the production memory organizer
 
-Status: deployment/status/canary tooling implemented and locally verified;
-production activation awaits credentials, model selection and an operating
-inference allowance.
+Status: deployment/status/canary tooling implemented, verified and merged in
+PR #11. The dedicated production worker is deployed but disabled; activation
+awaits credentials, model selection and an operating inference allowance.
 
 Worktree: `/Users/manavmehta/synapse-memory-organizer`
 
@@ -32,7 +32,7 @@ citations to the original revision. Historical captures are also processed.
 - `scripts/backfill-memory.mjs`: bounded, idempotent enqueue of missing old jobs,
   with a read-only preview by default.
 
-The live Railway checks in this conversation found one running HTTP service and
+The initial Railway checks in this conversation found one running HTTP service and
 no worker service. Its image starts `node src/server/index.mjs`. Worker enablement,
 database credentials, inference key and model configuration are absent from that
 HTTP service, consistent with the intended service separation. Those checks do
@@ -46,8 +46,9 @@ deployment repeatable and its first real run bounded and observable.
 
 ### Dedicated deployment configuration
 
-Add a worker-specific Railway configuration under `deploy/`, selected explicitly
-by the new service. Use the existing Dockerfile and `npm run worker`, one replica,
+Record worker-specific Railway settings under `deploy/` and apply them explicitly
+to the new service (see the runbook's config-as-code deprecation note). Use the
+existing Dockerfile and `npm run worker`, one replica,
 and no public domain or HTTP healthcheck. Keep the existing HTTP service's start
 command and deployment configuration intact. The operator migration/backfill
 commands run from the checkout; the current image copies `src/`, not `scripts/`
@@ -237,5 +238,29 @@ this worktree. They are needed before its live rollout.
 - `npm run audit`: zero reported vulnerabilities. Plugin validation passed.
 - Docker build and container checks for disabled startup and both command help
   paths passed. Tests use synthetic inference; no live model call was performed.
-- Production recheck still found only the existing HTTP service. No worker
-  service, production migration, backfill or live inference was started.
+- Before merge/deployment, the production recheck still found only the existing
+  HTTP service. No production migration, backfill or live inference was started.
+
+## Production deployment verification — 9 September 2026
+
+- PR #11 merged as `563f7fbace5764abe47d490f18b7562e967fd4ad` after CI, real
+  database integration checks, secret scanning and automated review passed.
+- Railway project `considerate-truth`, environment `production`, now has the
+  separate `synapse-memory-worker` service connected to the repository's `main`.
+- Worker deployment `6e056fc2-afa7-415a-af90-494e298037f3` successfully built that
+  release. Its effective manifest confirms the Dockerfile, `npm run worker`,
+  one Singapore replica, no HTTP healthcheck, `ON_FAILURE`/three retries, no
+  sleeping, zero overlap and 30-second draining.
+- Railway rejected the new custom JSON config path as deprecated. The same
+  settings were applied through the service API instead; the runbook records
+  that correction. The HTTP service's configuration was left unchanged.
+- Worker logs show `memory_worker_started` with `enabled: false`, followed by
+  `memory_worker_stopped` with `status: disabled`. This confirms the entrypoint,
+  not successful organization. There is no public worker domain.
+- `MEMORY_PROCESSING_ENABLED=false`, production mode and verified TLS with the
+  existing Supabase CA reference are configured. `DATABASE_WORKER_URL`,
+  `OPENAI_API_KEY` and `MEMORY_MODEL` still need secure provisioning. Supabase
+  operator access was unavailable, so role/schema verification, canaries,
+  historical backfill and continuous processing remain unperformed.
+- The HTTP service deployed the same release; `/healthz` returned `ok` and
+  `/readyz` returned `ready` after deployment.
