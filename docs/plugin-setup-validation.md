@@ -2,13 +2,13 @@
 
 PR #9 replaces compulsory repository CLI enrollment with the installed Synapse
 plugin's opt-in setup skill and short-lived helpers. No production migration,
-deployment, merge, or marketplace release was performed for these checks.
+deployment, PR merge, or marketplace release was performed for these checks.
 
 ## Passed
 
 - Full serialized coverage gate with a fresh disposable PostgreSQL 17 database:
-  **203 tests passed**, zero failures/skips; line coverage 94.99%, branch 84.05%,
-  function 94.17%. Existing memory, queue ordering, temporary/permanent task-ID
+  **205 tests passed**, zero failures/skips; line coverage 94.95%, branch 84.15%,
+  function 94.14%. Existing memory, queue ordering, temporary/permanent task-ID
   reconciliation, native uncertainty fencing, RLS, and migration tests remain green.
 - Real HTTP/MCP/PostgreSQL flow: authenticated identity → bound pairing → reject
   wrong-account approval despite identical alias → complete → confirmed import →
@@ -33,6 +33,9 @@ deployment, merge, or marketplace release was performed for these checks.
   account was enrolled by the smoke check.
 - Plugin and skill validators, bundle import-isolation validation, formatting/lint,
   `git diff --check`, and dependency audit (zero vulnerabilities).
+- Incorporated main's `a5a3668` cross-browser authentication fix into the feature
+  branch to remove its documentation conflict; retained both email-link safeguards
+  and plugin-first setup guidance. The full coverage gate above includes this update.
 
 ## Independent review
 

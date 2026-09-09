@@ -10,6 +10,9 @@ the repository's local marketplace is a development source, not public distribut
 
 1. Install Synapse and sign in through its existing OAuth connection. Email
    signup requires the operator's SMTP configuration.
+   Email requests are single-flight and limited to one link per authorization
+   request every 60 seconds. One-time server-side state allows opening the link
+   in another browser without allowing replay.
 2. Accept the one-time **Enable** offer, or choose **Later**. Deferral suppresses
    automatic offers. The **Enable incoming tasks** starter prompt remains
    available even before hooks are trusted.
@@ -44,7 +47,7 @@ Credentials stay in macOS Keychain. Only their SHA-256 hash reaches the
 authenticated setup MCP tool. Expected account and cloud-project IDs, destination
 paths, onboarding preferences, and task bindings stay local. Reinstalling the
 plugin preserves existing databases and credentials. Never delete local state
-to troubleshoot a uncertain delivery; uncertain native mutations must not replay.
+to troubleshoot an uncertain delivery; uncertain native mutations must not replay.
 
 ## Developer and recovery CLI
 
