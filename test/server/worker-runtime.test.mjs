@@ -16,6 +16,10 @@ function dependencies(overrides = {}) {
   const calls = [];
   const pool = {
     async query(sql) {
+      if (sql.includes("jsonb_to_recordset")) {
+        calls.push(["schema-check"]);
+        return { rows: [{ present: true, permitted: true }] };
+      }
       calls.push(["role-check", sql]);
       return {
         rows: [
@@ -78,7 +82,16 @@ test("worker runtime checks the dedicated DB role before constructing inference"
   assert.equal(runtime.enabled, true);
   assert.deepEqual(
     calls.map(([name]) => name),
-    ["pool", "role-check", "adapter", "api", "handler", "storage", "runner"],
+    [
+      "pool",
+      "role-check",
+      "schema-check",
+      "adapter",
+      "api",
+      "handler",
+      "storage",
+      "runner",
+    ],
   );
   assert.deepEqual(calls.find(([name]) => name === "adapter")[1], { pool });
   assert.equal(
@@ -117,10 +130,9 @@ test("worker refuses runtime/admin/bypass roles and releases the pool", async ()
   ]) {
     const { deps, calls, pool } = dependencies();
     pool.query = async () => ({ rows: role ? [role] : [] });
-    await assert.rejects(
-      createWorkerRuntime(config, deps),
-      /dedicated non-superuser/,
-    );
+    await assert.rejects(createWorkerRuntime(config, deps), {
+      category: "database_role",
+    });
     assert.deepEqual(
       calls.map(([name]) => name),
       ["pool", "close"],

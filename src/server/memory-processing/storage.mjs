@@ -1,6 +1,7 @@
 import pg from "pg";
 
 import { databaseConnectionOptions } from "../../database-ssl.mjs";
+import { workerScope } from "../worker/options.mjs";
 
 export class MemoryProcessingLeaseLostError extends Error {
   constructor(message = "memory processing lease is no longer valid") {
@@ -60,6 +61,7 @@ const claimableJobsSql = `
     and job.processor_version = $1
     and job.available_at <= $2
     and job.attempt_count < job.max_attempts
+    and ($3::uuid is null or (job.owner_id = $3 and job.project_id = $4))
     and not exists (
       select 1
       from synapse_private.memory_processing_jobs as earlier_job
@@ -75,8 +77,10 @@ export function createMemoryProcessingStorage({
   databaseUrl,
   databaseSsl,
   pool: suppliedPool,
+  scope: requestedScope = null,
   retryDelay = (attempt) => Math.min(60_000, 1_000 * 2 ** (attempt - 1)),
 }) {
+  const scope = requestedScope === null ? null : workerScope(requestedScope);
   const ownsPool = !suppliedPool;
   const pool =
     suppliedPool ??
@@ -120,8 +124,9 @@ export function createMemoryProcessingStorage({
         `select id, project_id
          from synapse_private.memory_processing_jobs
          where status = 'processing' and lease_expires_at <= $1
+           and ($2::uuid is null or (owner_id = $2 and project_id = $3))
          order by lease_expires_at, created_at`,
-        [now],
+        [now, scope?.ownerId ?? null, scope?.projectId ?? null],
       ),
     );
     let recovered = 0;
@@ -144,8 +149,9 @@ export function createMemoryProcessingStorage({
            from synapse_private.memory_processing_jobs
            where id = $1 and project_id = $2
              and status = 'processing' and lease_expires_at <= $3
+             and ($4::uuid is null or owner_id = $4)
            for update`,
-          [candidate.id, candidate.project_id, now],
+          [candidate.id, candidate.project_id, now, scope?.ownerId ?? null],
         );
         if (expired.rowCount !== 1) return 0;
         const row = expired.rows[0];
@@ -201,7 +207,12 @@ export function createMemoryProcessingStorage({
            )
          order by job.available_at, revision.created_at, revision.revision
          limit 50`,
-        [processorVersion, now],
+        [
+          processorVersion,
+          now,
+          scope?.ownerId ?? null,
+          scope?.projectId ?? null,
+        ],
       ),
     );
     const expiresAt = new Date(now.getTime() + leaseDurationMs);
@@ -225,9 +236,15 @@ export function createMemoryProcessingStorage({
         if (lease.rowCount !== 1) return null;
         const ready = await client.query(
           `${claimableJobsSql}
-           and job.id = $3
+           and job.id = $5
            for update of job`,
-          [processorVersion, now, candidate.id],
+          [
+            processorVersion,
+            now,
+            scope?.ownerId ?? null,
+            scope?.projectId ?? null,
+            candidate.id,
+          ],
         );
         if (ready.rowCount !== 1) {
           await releaseProjectLease(client, {

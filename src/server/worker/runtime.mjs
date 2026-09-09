@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { databaseConnectionOptions } from "../../database-ssl.mjs";
+import { requireWorkerRole, WorkerDatabaseError } from "./diagnostics.mjs";
 import { runMemoryWorker } from "./lifecycle.mjs";
+import { workerScope } from "./options.mjs";
+import { inspectWorkerSchema, readMemoryStatus } from "./status.mjs";
 
 export async function createWorkerRuntime(
   config,
@@ -15,6 +18,8 @@ export async function createWorkerRuntime(
     logger,
     signal,
     workerId = randomUUID(),
+    scope: requestedScope = null,
+    maxJobs = null,
   },
 ) {
   if (!config.enabled) {
@@ -26,6 +31,15 @@ export async function createWorkerRuntime(
       async close() {},
     };
   }
+  const scope = requestedScope === null ? null : workerScope(requestedScope);
+  if (
+    (scope === null) !== (maxJobs === null) ||
+    (maxJobs !== null &&
+      (!Number.isSafeInteger(maxJobs) || maxJobs < 1 || maxJobs > 1000))
+  )
+    throw new TypeError(
+      "A canary requires exact scope and maxJobs from 1 to 1000",
+    );
   const pool = createPool(
     databaseConnectionOptions({
       connectionString: config.databaseUrl,
@@ -37,18 +51,12 @@ export async function createWorkerRuntime(
     }),
   );
   try {
-    const permissions = await pool.query(`
-      select role.rolsuper, role.rolbypassrls,
-             pg_has_role(current_user, 'synapse_memory_worker', 'member') as worker,
-             pg_has_role(current_user, 'synapse_runtime', 'member') as runtime
-      from pg_roles as role where role.rolname = current_user
-    `);
-    const role = permissions.rows[0];
-    if (!role?.worker || role.runtime || role.rolsuper || role.rolbypassrls) {
-      throw new Error(
-        "Memory worker requires a dedicated non-superuser worker role without BYPASSRLS or runtime membership",
-      );
-    }
+    await requireWorkerRole(pool);
+    const tables = await inspectWorkerSchema(pool);
+    if (tables.some((table) => !table.present || !table.permitted))
+      throw new WorkerDatabaseError("database_schema");
+    if (scope && !(await readMemoryStatus({ pool, scope })).ready)
+      throw new WorkerDatabaseError("database_schema");
     const adapter = createAdapter({ pool });
     const api = createAPI({
       apiKey: config.apiKey,
@@ -65,7 +73,7 @@ export async function createWorkerRuntime(
       maxStageCalls: config.maxStageCalls,
     });
     const runner = createRunner({
-      storage: createStorage({ pool }),
+      storage: createStorage({ pool, scope }),
       handler,
       workerId,
       leaseDurationMs: config.leaseDurationMs,
@@ -80,6 +88,12 @@ export async function createWorkerRuntime(
           signal,
           pollIntervalMs: config.pollIntervalMs,
           errorDelayMs: config.errorDelayMs,
+          maxJobs,
+          describeIdle: async () => {
+            const status = await readMemoryStatus({ pool, scope });
+            if (!status.ready) throw new WorkerDatabaseError("database_schema");
+            return status.work_remaining ? "blocked" : "idle";
+          },
         }),
       async close() {
         if (closed) return;

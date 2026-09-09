@@ -67,6 +67,11 @@ HTTP/MCP service with `npm start`; run organization separately with
 and needs its own restricted `DATABASE_WORKER_URL`, an `OPENAI_API_KEY`, and an
 explicit `MEMORY_MODEL`. Keep inference and administrator secrets out of the
 HTTP service. Retrieval makes no model calls; organization uses paid inference.
+Select `/deploy/railway-worker.json` on the separate Railway worker service.
+Use `npm run memory:status -- --owner-id <UUID> --project-id <UUID>` for read-only
+readiness and backlog counts. Before continuous activation, run
+`npm run worker:canary -- --owner-id <UUID> --project-id <UUID> --max-jobs 1`
+without automatic restarts to verify one scoped processing attempt.
 See the [operations runbook](docs/cloud-memory-operations.md) for role setup,
 verified TLS, proxy configuration, and rollout gates.
 
