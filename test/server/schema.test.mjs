@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { runMigrations } from "../../scripts/migrate.mjs";
 import {
+  AuthorizationStateCooldownError,
   createDatabase,
   MemoryConflictError,
   UsernameTakenError,
@@ -59,13 +60,25 @@ test("migration enforces user isolation and durable capture semantics", {
          'synapse_private.claim_receiver_messages(bytea,integer)', 'execute') as runtime_claim,
        has_function_privilege('authenticated',
          'synapse_private.claim_receiver_messages(bytea,integer)', 'execute') as browser_claim,
+       has_function_privilege('synapse_runtime',
+         'synapse_private.create_authorization_state(text,bytea)', 'execute') as runtime_auth_state,
+       has_function_privilege('authenticated',
+         'synapse_private.create_authorization_state(text,bytea)', 'execute') as browser_auth_state,
+       has_function_privilege('synapse_runtime',
+         'synapse_private.resolve_authorization_state(bytea)', 'execute') as runtime_auth_state_resolve,
        has_table_privilege('synapse_runtime',
-         'public.receiver_installations', 'select') as runtime_receiver_table`,
+         'public.receiver_installations', 'select') as runtime_receiver_table,
+       has_table_privilege('synapse_runtime',
+         'synapse_private.authorization_states', 'select') as runtime_auth_state_table`,
   );
   assert.deepEqual(messagingPrivileges.rows[0], {
     runtime_claim: true,
     browser_claim: false,
+    runtime_auth_state: true,
+    browser_auth_state: false,
+    runtime_auth_state_resolve: true,
     runtime_receiver_table: false,
+    runtime_auth_state_table: false,
   });
 
   const userOne = "00000000-0000-4000-8000-000000000001";
@@ -130,6 +143,39 @@ test("migration enforces user isolation and durable capture semantics", {
     databaseSsl,
   });
   t.after(() => database.close());
+
+  const stateOne = createHash("sha256").update("state-one").digest();
+  const stateTwo = createHash("sha256").update("state-two").digest();
+  const stateThree = createHash("sha256").update("state-three").digest();
+  await database.createAuthorizationState("oauth-request-one", stateOne);
+  await assert.rejects(
+    database.createAuthorizationState("oauth-request-one", stateTwo),
+    AuthorizationStateCooldownError,
+  );
+  assert.equal(
+    await database.resolveAuthorizationState(stateOne),
+    "oauth-request-one",
+  );
+  assert.equal(
+    await database.consumeAuthorizationState(stateOne),
+    "oauth-request-one",
+  );
+  assert.equal(await database.consumeAuthorizationState(stateOne), null);
+  assert.equal(await database.resolveAuthorizationState(stateOne), null);
+
+  await database.createAuthorizationState("oauth-request-two", stateTwo);
+  await admin.query(
+    `update synapse_private.authorization_states
+     set created_at = now() - interval '61 seconds'
+     where state_hash = $1`,
+    [stateTwo],
+  );
+  await database.createAuthorizationState("oauth-request-two", stateThree);
+  assert.equal(await database.consumeAuthorizationState(stateTwo), null);
+  assert.equal(
+    await database.consumeAuthorizationState(stateThree),
+    "oauth-request-two",
+  );
 
   assert.equal(await database.getAccount(userThree), null);
   const registered = await database.registerAccount(userThree, {

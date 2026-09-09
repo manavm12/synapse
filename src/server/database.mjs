@@ -31,6 +31,13 @@ export class AccountDisabledError extends Error {
   }
 }
 
+export class AuthorizationStateCooldownError extends Error {
+  constructor(message = "Wait before requesting another sign-in email") {
+    super(message);
+    this.name = "AuthorizationStateCooldownError";
+  }
+}
+
 function contentHash(input) {
   return createHash("sha256")
     .update(
@@ -174,6 +181,43 @@ export function createDatabase(config) {
       [tokenHash],
     );
     return result.rowCount === 1 ? result.rows[0] : null;
+  }
+
+  async function createAuthorizationState(authorizationId, stateHash) {
+    try {
+      const result = await pool.query(
+        `select synapse_private.create_authorization_state($1, $2)
+           as expires_at`,
+        [authorizationId, stateHash],
+      );
+      return { expiresAt: result.rows[0].expires_at };
+    } catch (error) {
+      if (
+        error?.code === "P0001" &&
+        error?.message === "authorization state cooldown"
+      ) {
+        throw new AuthorizationStateCooldownError();
+      }
+      throw error;
+    }
+  }
+
+  async function consumeAuthorizationState(stateHash) {
+    const result = await pool.query(
+      `select authorization_id
+       from synapse_private.consume_authorization_state($1)`,
+      [stateHash],
+    );
+    return result.rowCount === 1 ? result.rows[0].authorization_id : null;
+  }
+
+  async function resolveAuthorizationState(stateHash) {
+    const result = await pool.query(
+      `select authorization_id
+       from synapse_private.resolve_authorization_state($1)`,
+      [stateHash],
+    );
+    return result.rowCount === 1 ? result.rows[0].authorization_id : null;
   }
 
   async function saveSessionMemory(identity, input, requestId) {
@@ -371,6 +415,9 @@ export function createDatabase(config) {
     resolveIdentity,
     getAccount,
     registerAccount,
+    createAuthorizationState,
+    resolveAuthorizationState,
+    consumeAuthorizationState,
     exchangeDevelopmentToken,
     saveSessionMemory,
     ...messaging,

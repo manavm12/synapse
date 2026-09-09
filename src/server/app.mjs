@@ -120,6 +120,8 @@ export async function createApplication({
   }
 
   installConsentRoutes(app, config, {
+    database,
+    sessionVerifier,
     supabaseBrowserPath: supabaseBrowserPath(),
   });
   installOnboardingRoutes(app, config, {
