@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "0.3.0+codex.20260908084229",
+  "version": "0.3.0+codex.20260909064308",
   "description": "Route Synapse tasks and capture authenticated cloud session memory.",
   "author": {
     "name": "Synapse"
@@ -9,10 +9,15 @@
   "interface": {
     "displayName": "Synapse",
     "shortDescription": "Route tasks and preserve durable session memory.",
-    "longDescription": "Synapse routes queued messages in the background through Codex desktop, accepting temporary task IDs immediately while delegated children bind their permanent IDs independently. It captures concise session memory in the authenticated user's cloud knowledge tree at regular turn checkpoints and after compaction.",
+    "longDescription": "Sign in and enable incoming tasks directly in Codex. Synapse keeps one saved local Git receiving project per account on this Mac; any local chat can wake one bounded background delivery. No separate runner or repository checkout is needed. Durable session memory is captured every ten completed turns and after compaction.",
     "developerName": "Synapse",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
-    "defaultPrompt": ["Check my Synapse inbox.", "Verify my Synapse identity."]
-  }
+    "defaultPrompt": [
+      "Enable incoming tasks.",
+      "Check my Synapse inbox.",
+      "Show incoming-task setup status."
+    ]
+  },
+  "skills": "./skills"
 }

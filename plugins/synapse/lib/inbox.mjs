@@ -675,7 +675,7 @@ export function markCloudEventFailure(
 }
 
 export function reserveNextMessage(
-  { projectRoot, ownerSessionId },
+  { projectRoot, ownerSessionId, source = null },
   {
     path = inboxPath(),
     now = Date.now,
@@ -686,6 +686,8 @@ export function reserveNextMessage(
 ) {
   requireProjectRoot(projectRoot);
   requireId(ownerSessionId, "owner session ID");
+  if (source !== null && source !== "local" && source !== "cloud")
+    throw new Error("Invalid inbox source");
   const database = openInbox(path);
   try {
     return transaction(database, () => {
@@ -727,6 +729,7 @@ export function reserveNextMessage(
       let job = database
         .prepare(`${DELIVERY_SELECT}
         WHERE jobs.project_root = ? AND jobs.owner_session_id = ?
+          AND (? IS NULL OR jobs.source = ?)
           AND jobs.status = 'routing' AND jobs.lease_expires_at <= ?
           AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
             AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
@@ -737,6 +740,8 @@ export function reserveNextMessage(
         .get(
           projectRoot,
           ownerSessionId,
+          source,
+          source,
           currentTime,
           receiverIdentity?.installationId ?? "",
           receiverIdentity?.userId ?? "",
@@ -747,6 +752,7 @@ export function reserveNextMessage(
         job = database
           .prepare(`${DELIVERY_SELECT}
           WHERE jobs.project_root = ? AND jobs.status = 'pending'
+            AND (? IS NULL OR jobs.source = ?)
             AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
               AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
               AND jobs.recipient_project_id = ?))
@@ -761,6 +767,8 @@ export function reserveNextMessage(
         `)
           .get(
             projectRoot,
+            source,
+            source,
             receiverIdentity?.installationId ?? "",
             receiverIdentity?.userId ?? "",
             receiverIdentity?.projectId ?? "",

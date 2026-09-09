@@ -128,6 +128,7 @@ export async function syncReceiver(
     inboxOptions,
     secretStore = null,
     createClient = (options) => new ReceiverClient(options),
+    signal,
   } = {},
 ) {
   const connection = getReceiverConnection(projectRoot, { path: registryPath });
@@ -135,15 +136,19 @@ export async function syncReceiver(
     return { authorized: false, connected: false, claimed: 0, activated: 0 };
   }
   const credentials = secretStore ?? new MacOsKeychainStore();
-  const credential = await credentials.get(connection.credentialAccount);
+  const credential = await credentials.get(connection.credentialAccount, {
+    signal,
+  });
   const client = createClient({
     serverUrl: connection.serverUrl,
     credential,
     allowInsecureHttp: allowInsecure(env),
     timeoutMs: 2_500,
+    signal,
   });
   await flushEvents({ client, identity: connection.identity, inboxOptions });
   const claim = await client.claim(10);
+  signal?.throwIfAborted();
   const identity = validateReceiverIdentity(claim.identity);
   if (!sameIdentity(connection.identity, identity)) {
     throw new Error(
@@ -175,6 +180,7 @@ export async function syncReceiver(
     );
   }
   const activated = await flushImports({ client, identity, inboxOptions });
+  signal?.throwIfAborted();
   return {
     authorized: true,
     connected: true,

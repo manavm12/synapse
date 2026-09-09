@@ -8,7 +8,7 @@ flowchart LR
   Cloud -->|scoped receiver claim| Stage[(Local staging + outboxes)]
   Stage -->|confirmed durable import| DB[(Local SQLite inbox)]
   CLI[Synapse CLI] -->|local-only queued task| DB
-  Hook[Owner prompt hook] -->|reserve by project and owner| DB
+  Hook[Any local user prompt] -->|saved receiving destination + receiver lease| DB
   Hook -->|untrusted prompt plus stable marker| Task[Native Codex task]
   Task -->|permanent-ID binding| DB
   DB -->|idempotent transport receipts| Cloud
@@ -20,8 +20,10 @@ flowchart LR
 
 1. The CLI resolves the primary Git checkout and stores a validated task in the
    local inbox.
-2. The next owner prompt for that checkout reserves one eligible message. Linked
-   worktrees cannot consume messages.
+2. Cloud receiving is enabled in the bundled setup skill, bound to exact OAuth
+   account/project IDs and a saved local Git destination. Any local chat can
+   wake one bounded background check. Legacy local-only queue messages still
+   require a prompt in their own primary checkout.
 3. A background hook calls Codex desktop's native project-task tools. New task
    creation is provisionally accepted by its temporary client ID, so the owner
    prompt resumes without waiting for worktree setup or a permanent task ID.
@@ -41,8 +43,10 @@ acceptance, not successful execution of the requested work.
 - `src/client/cli.mjs` parses commands and resolves primary Git checkouts.
 - `plugins/synapse/lib/inbox.mjs` owns validation, storage, leasing, recovery,
   and acknowledgement.
-- `plugins/synapse/hooks/dispatch.mjs` validates hook input and emits routing
-  context for one reserved message.
+- `plugins/synapse/hooks/dispatch.mjs` runs the bounded global receiver dispatch;
+  no incoming content is emitted to the triggering chat.
+- `plugins/synapse/skills/setup-synapse` and bundled scripts implement opt-in
+  onboarding, live status, reconnect, disable, and the shared Codex runtime launcher.
 - `plugins/synapse/lib/receiver-*.mjs` implements scoped transport, local account
   binding, Keychain access, staging and receipt synchronization.
 - `src/server/messaging/` implements OAuth sender tools and scoped receiver HTTP.

@@ -158,6 +158,21 @@ export function createMessagingDatabase(pool, withUser) {
       });
     },
 
+    async createBoundReceiverPairing(user, hashHex) {
+      return translated(() =>
+        withUser(user.userId, async (client) => {
+          const result = await client.query(
+            "select * from synapse_private.create_bound_receiver_pairing($1)",
+            [Buffer.from(hashHex, "hex")],
+          );
+          return {
+            pairingId: result.rows[0].pairing_id,
+            expiresAt: date(result.rows[0].expires_at),
+          };
+        }),
+      );
+    },
+
     async approveReceiverPairing(userId, pairingId) {
       return translated(() =>
         withUser(userId, async (client) => {

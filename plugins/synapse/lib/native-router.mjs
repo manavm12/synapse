@@ -12,6 +12,7 @@ import { validateReceiverIdentity } from "./receiver-contract.mjs";
 import {
   getReceiverConnection,
   receiverRegistryPath,
+  withReceiverAuthorization,
 } from "./receiver-registry.mjs";
 import { MacOsKeychainStore } from "./receiver-secrets.mjs";
 
@@ -44,6 +45,7 @@ export async function authorizeCloudDelivery(
     secretStore = null,
     createReceiverClient = (options) => new ReceiverClient(options),
     now = Date.now,
+    signal,
   } = {},
 ) {
   if (delivery.source !== "cloud") return null;
@@ -55,14 +57,18 @@ export async function authorizeCloudDelivery(
     throw new Error("Cloud receiver authorization is no longer current");
   }
   const credentials = secretStore ?? new MacOsKeychainStore();
-  const credential = await credentials.get(connection.credentialAccount);
+  const credential = await credentials.get(connection.credentialAccount, {
+    signal,
+  });
   const client = createReceiverClient({
     serverUrl: connection.serverUrl,
     credential,
     allowInsecureHttp: allowInsecure(env),
     timeoutMs: 2_500,
+    signal,
   });
   const response = await client.getIdentity();
+  signal?.throwIfAborted();
   const fresh = validateReceiverIdentity(response.identity);
   if (
     !sameReceiverIdentity(expected, fresh) ||
@@ -113,7 +119,8 @@ export async function routeDelivery(
   {
     ownerThreadId,
     turnId,
-    createClient = () => new AppToolsClient(),
+    signal,
+    createClient = () => new AppToolsClient({ signal }),
     accept = acceptProvisioning,
     acknowledge = acknowledgeMessage,
     markIssued = markNativeMutationIssued,
@@ -147,12 +154,29 @@ export async function routeDelivery(
 
     if (delivery.channel.threadId) {
       if (delivery.source === "cloud") {
-        await authorizeCloud(delivery, cloudAuthorizationOptions);
-        markIssued({
-          jobId: delivery.jobId,
-          deliveryId: delivery.deliveryId,
-          receiverIdentity: delivery.receiverAuthorization,
+        await authorizeCloud(delivery, {
+          ...cloudAuthorizationOptions,
+          signal,
         });
+        signal?.throwIfAborted();
+        withReceiverAuthorization(
+          {
+            projectRoot: delivery.projectRoot,
+            identity: delivery.receiverAuthorization,
+          },
+          () =>
+            markIssued({
+              jobId: delivery.jobId,
+              deliveryId: delivery.deliveryId,
+              receiverIdentity: delivery.receiverAuthorization,
+            }),
+          {
+            path:
+              cloudAuthorizationOptions?.registryPath ??
+              receiverRegistryPath(cloudAuthorizationOptions?.env),
+            now: cloudAuthorizationOptions?.now,
+          },
+        );
         mutationIssued = true;
       }
       await client.callTool(
@@ -174,12 +198,26 @@ export async function routeDelivery(
     }
 
     if (delivery.source === "cloud") {
-      await authorizeCloud(delivery, cloudAuthorizationOptions);
-      markIssued({
-        jobId: delivery.jobId,
-        deliveryId: delivery.deliveryId,
-        receiverIdentity: delivery.receiverAuthorization,
-      });
+      await authorizeCloud(delivery, { ...cloudAuthorizationOptions, signal });
+      signal?.throwIfAborted();
+      withReceiverAuthorization(
+        {
+          projectRoot: delivery.projectRoot,
+          identity: delivery.receiverAuthorization,
+        },
+        () =>
+          markIssued({
+            jobId: delivery.jobId,
+            deliveryId: delivery.deliveryId,
+            receiverIdentity: delivery.receiverAuthorization,
+          }),
+        {
+          path:
+            cloudAuthorizationOptions?.registryPath ??
+            receiverRegistryPath(cloudAuthorizationOptions?.env),
+          now: cloudAuthorizationOptions?.now,
+        },
+      );
       mutationIssued = true;
     }
     const created = appToolJson(
@@ -228,12 +266,19 @@ export async function runReservedDelivery(
     route = routeDelivery,
     retry = retryRoutingMessage,
     uncertain = markNativeMutationUncertain,
+    signal,
+    routeOptions,
   } = {},
 ) {
   const delivery = load({ jobId, deliveryId, receiverIdentity });
   if (!delivery) return null;
   try {
-    return await route(delivery, { ownerThreadId, turnId });
+    return await route(delivery, {
+      ...routeOptions,
+      ownerThreadId,
+      turnId,
+      signal,
+    });
   } catch (error) {
     if (delivery.source === "cloud" && error.nativeMutationIssued === true) {
       uncertain({ jobId, deliveryId, error: error.message });

@@ -29,7 +29,7 @@ test("the marketplace and plugin manifests reference repository content", async 
 
   assert.equal(listing.name, pluginManifest.name);
   assert.equal(pluginManifest.version.split("+")[0], packageManifest.version);
-  assert.equal(pluginManifest.skills, undefined);
+  assert.equal(pluginManifest.skills, "./skills");
   assert.equal(
     hooksManifest.hooks.SessionStart.some(
       (entry) => entry.matcher === "^startup$",
@@ -39,7 +39,7 @@ test("the marketplace and plugin manifests reference repository content", async 
 
   const hook = hooksManifest.hooks.UserPromptSubmit[0].hooks[0];
   assert.equal(hook.type, "command");
-  assert.equal(hook.command, `/bin/sh \${PLUGIN_ROOT}/hooks/run-dispatch.sh`);
+  assert.equal(hook.command, `/bin/sh "\${PLUGIN_ROOT}/hooks/run-dispatch.sh"`);
   assert.equal(hook.async, true);
   await access(join(pluginRoot, "hooks/dispatch.mjs"));
   await access(join(pluginRoot, "hooks/run-dispatch.sh"));

@@ -17,7 +17,13 @@ import {
   reserveNextMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
 import { routeDelivery } from "../../plugins/synapse/lib/native-router.mjs";
+import {
+  completeSetup,
+  disableSetup,
+  prepareSetup,
+} from "../../plugins/synapse/lib/plugin-setup.mjs";
 import { ReceiverClient } from "../../plugins/synapse/lib/receiver-client.mjs";
+import { getReceiverConnectionById } from "../../plugins/synapse/lib/receiver-registry.mjs";
 import { syncReceiver } from "../../plugins/synapse/lib/receiver-sync.mjs";
 import { runMigrations } from "../../scripts/migrate.mjs";
 import {
@@ -217,21 +223,64 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     env: { SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP: "1" },
     openBrowser: false,
   };
-  const pending = await startReceiverConnection(
-    { serverUrl: baseUrl },
-    options,
+  const oauthIdentity = await call("bob", "get_identity", {});
+  const unpublished = await prepareSetup(
+    { identity: oauthIdentity },
+    { ...options, serverUrl: baseUrl },
   );
-  assert.equal((await finishReceiverConnection({}, options)).status, "pending");
+  // Unknown credentials are definitively absent at the revoke-only endpoint.
+  await disableSetup({ connection_id: unpublished.connection_id }, options);
+  assert.equal(secrets.size, 0);
+  const prepared = await prepareSetup(
+    { identity: oauthIdentity },
+    { ...options, serverUrl: baseUrl },
+  );
+  const pairing = await call("bob", "begin_receiver_setup", {
+    credential_hash: prepared.credential_hash,
+  });
+  assert.equal(pairing.identity.user_id, users.get("bob"));
+  assert.equal(pairing.identity.project_id, oauthIdentity.project_id);
+  assert.equal(
+    (
+      await call("bob", "begin_receiver_setup", {
+        credential_hash: prepared.credential_hash,
+      })
+    ).pairing_id,
+    pairing.pairing_id,
+  );
+  await call(
+    "eve",
+    "begin_receiver_setup",
+    { credential_hash: prepared.credential_hash },
+    { isError: true },
+  );
+  // Bob and Eve have the same alias; only exact bound account IDs may approve.
   assert.equal(
     (
       await post(
-        `/auth/receiver-pairings/${pending.pairingId}/approve`,
+        `/auth/receiver-pairings/${pairing.pairing_id}/approve`,
+        "session:eve",
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await post(
+        `/auth/receiver-pairings/${pairing.pairing_id}/approve`,
         "session:bob",
       )
     ).status,
     200,
   );
-  const connection = await finishReceiverConnection({}, options);
+  const ready = await completeSetup(
+    { connection_id: prepared.connection_id, pairing },
+    { ...options, openUrl: async () => {} },
+  );
+  assert.equal(ready.status, "ready");
+  const connection = getReceiverConnectionById(prepared.connection_id, {
+    path: registryPath,
+  });
   assert.equal(connection.identity.userId, users.get("bob"));
   const receiver = new ReceiverClient({
     serverUrl: baseUrl,
@@ -467,6 +516,20 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   assert.equal(replacementDelivery.channel.threadId, null);
   // Old assigned work is never silently transferred to the new installation.
   assert.equal(getJob(later.message_id, inboxOptions).status, "routing");
+  // Expired credentials cannot claim, but must still be able to revoke.
+  await seed.query(
+    "update public.receiver_installations set expires_at=now()-interval '1 second' where id=$1",
+    [replacement.identity.installationId],
+  );
+  const expired = new ReceiverClient({
+    serverUrl: baseUrl,
+    credential: secrets.get(replacement.credentialAccount),
+    allowInsecureHttp: true,
+  });
+  await assert.rejects(
+    () => expired.claim(),
+    (error) => error.status === 401,
+  );
   await disconnectReceiver({}, options);
   assert.equal(secrets.size, 0);
 });

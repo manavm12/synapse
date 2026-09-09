@@ -43,7 +43,6 @@ import {
 import { syncReceiver } from "../../plugins/synapse/lib/receiver-sync.mjs";
 import {
   disconnectReceiver,
-  enrollReceiver,
   finishReceiverConnection,
   startReceiverConnection,
 } from "../../src/client/receiver/enrollment.mjs";
@@ -92,91 +91,6 @@ function cloudMessage({
     leaseExpiresAt: "2026-09-07T01:00:00.000Z",
   };
 }
-
-test("integrated enrollment waits for approval and is resumable", async () => {
-  const calls = [];
-  let clock = 0;
-  let attempts = 0;
-  const result = await enrollReceiver(
-    {
-      project: "/project",
-      cwd: "/cwd",
-      serverUrl: "https://synapse.example",
-    },
-    {
-      env: { SYNAPSE_HOME: "/state" },
-      resolveRoot: async () => "/project",
-      start: async (input, dependencies) => {
-        calls.push({ operation: "start", input, dependencies });
-        return {
-          status: "pending",
-          verificationUrl: "https://synapse.example/approve",
-        };
-      },
-      finish: async (input, dependencies) => {
-        calls.push({ operation: "finish", input, dependencies });
-        attempts += 1;
-        return attempts === 2
-          ? { status: "connected", identity }
-          : { status: "pending" };
-      },
-      wait: async (milliseconds) => {
-        clock += milliseconds;
-      },
-      now: () => clock,
-      timeoutMs: 5_000,
-      pollIntervalMs: 1_000,
-    },
-  );
-  assert.equal(result.changed, true);
-  assert.equal(result.connection.identity.username, "bob");
-  assert.deepEqual(
-    calls.map(({ operation }) => operation),
-    ["start", "finish", "finish"],
-  );
-  assert.equal(calls[0].dependencies.env.SYNAPSE_HOME, "/state");
-  assert.equal(calls[1].input.cwd, "/cwd");
-});
-
-test("integrated enrollment preserves an existing connection", async () => {
-  let finishCalled = false;
-  const result = await enrollReceiver(
-    { project: "/project", serverUrl: "https://synapse.example" },
-    {
-      start: async () => ({ status: "connected", identity }),
-      finish: async () => {
-        finishCalled = true;
-      },
-    },
-  );
-  assert.equal(result.changed, false);
-  assert.equal(result.connection.identity.username, "bob");
-  assert.equal(finishCalled, false);
-});
-
-test("integrated enrollment times out with a resumable instruction", async () => {
-  let clock = 0;
-  await assert.rejects(
-    () =>
-      enrollReceiver(
-        { project: "/project", serverUrl: "https://synapse.example" },
-        {
-          start: async () => ({
-            status: "pending",
-            verificationUrl: "https://synapse.example/approve",
-          }),
-          finish: async () => ({ status: "pending" }),
-          wait: async (milliseconds) => {
-            clock += milliseconds;
-          },
-          now: () => clock,
-          timeoutMs: 1_000,
-          pollIntervalMs: 1_000,
-        },
-      ),
-    /Approve it at https:\/\/synapse\.example\/approve, then rerun the same setup command/,
-  );
-});
 
 function wireMessage(options = {}) {
   const message = cloudMessage(options);
@@ -847,7 +761,31 @@ test("an issued native mutation with an uncertain response is fenced from replay
 });
 
 test("the native router classifies a cloud mutation timeout as uncertain, not retryable", async () => {
-  const { inbox } = await paths();
+  const { inbox, registry } = await paths();
+  beginReceiverConnection(
+    {
+      connectionId: "timeout-fixture",
+      projectRoot: "/project",
+      projectAlias: "demo",
+      serverUrl: "https://example.test",
+      credentialAccount: "receiver:timeout-fixture",
+      credentialHash: "0".repeat(64),
+    },
+    { path: registry },
+  );
+  recordReceiverPairing(
+    {
+      connectionId: "timeout-fixture",
+      pairingId: "fixture",
+      verificationUrl: "https://example.test",
+      expiresAt: identity.expiresAt,
+    },
+    { path: registry },
+  );
+  completeReceiverConnection(
+    { connectionId: "timeout-fixture", identity },
+    { path: registry },
+  );
   const message = cloudMessage();
   stage(inbox, message);
   confirmCloudImport(
@@ -903,6 +841,7 @@ test("the native router classifies a cloud mutation timeout as uncertain, not re
             ...metadata,
             createClient: () => client,
             authorizeCloud: async () => {},
+            cloudAuthorizationOptions: { registryPath: registry },
             markIssued: (input) =>
               markNativeMutationIssued(input, { path: inbox }),
           }),

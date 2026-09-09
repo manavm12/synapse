@@ -114,10 +114,10 @@ test("hook configuration uses local commands for scheduling only", async () => {
   ]);
   const stop = hooks.Stop[0].hooks[0];
   assert.equal(stop.type, "command");
-  assert.match(stop.command, /checkpoint-memory\.mjs$/);
+  assert.match(stop.command, /checkpoint-memory\.mjs"$/);
   assert.equal(JSON.stringify(stop).includes("mcp_tool"), false);
   const prompt = hooks.UserPromptSubmit[0].hooks[1];
   assert.equal(prompt.type, "command");
-  assert.match(prompt.command, /prompt-memory\.mjs$/);
+  assert.match(prompt.command, /prompt-memory\.mjs"$/);
   assert.notEqual(prompt.async, true);
 });

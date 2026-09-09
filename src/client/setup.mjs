@@ -18,7 +18,6 @@ import {
   PROJECT_ALIAS_PATTERN,
   resolveProjectRoot,
 } from "./project-registry.mjs";
-import { enrollReceiver } from "./receiver/enrollment.mjs";
 
 const execFileAsync = promisify(execFile);
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -80,14 +79,6 @@ function canonicalAlias(alias) {
   return normalized;
 }
 
-function receiverServerUrl(mcpUrl) {
-  const url = new URL(mcpUrl);
-  url.pathname = url.pathname.replace(/\/mcp\/?$/, "").replace(/\/$/, "");
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
-}
-
 async function recordOAuthLogin(env, expectedServer, now) {
   const path = setupStatePath(env);
   const temporaryPath = `${path}.${process.pid}.tmp`;
@@ -122,7 +113,6 @@ export async function runSetup(
     runCommand = runSetupCommand,
     resolveRoot = resolveProjectRoot,
     connect = connectProject,
-    enroll = enrollReceiver,
     now = () => Date.now(),
   } = {},
 ) {
@@ -244,21 +234,7 @@ export async function runSetup(
     { env, resolveRoot: async () => root },
   );
   steps.push({ id: "project", changed: binding.created });
-  const receiver = await enroll(
-    {
-      project: root,
-      cwd,
-      serverUrl: receiverServerUrl(expectedServer.url),
-    },
-    { env, resolveRoot: async () => root },
-  );
-  steps.push({ id: "receiver", changed: receiver.changed });
-  return {
-    root,
-    alias: normalizedAlias,
-    receiver: receiver.connection,
-    steps,
-  };
+  return { root, alias: normalizedAlias, steps };
 }
 
 export function formatSetupResult(result) {
@@ -268,7 +244,6 @@ export function formatSetupResult(result) {
     `Plugin: ${label(result.steps.find((step) => step.id === "plugin"))}`,
     `OAuth login: ${label(result.steps.find((step) => step.id === "oauth"))}`,
     `Project binding: ${label(result.steps.find((step) => step.id === "project"))}`,
-    `Incoming-task receiver: ${label(result.steps.find((step) => step.id === "receiver"))}`,
     `Synapse setup is ready for ${result.alias} at ${result.root}.`,
     "Start a new Codex task and call get_identity to verify live OAuth access.",
   ].join("\n")}\n`;

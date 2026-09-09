@@ -1,3 +1,5 @@
+import * as z from "zod/v4";
+
 import {
   decodeCursor,
   encodeCursor,
@@ -45,6 +47,27 @@ export function messagingToolDefinitions() {
       outputSchema: listInboxOutputSchema,
       annotations: { ...annotations, readOnlyHint: true },
     },
+    {
+      name: "begin_receiver_setup",
+      title: "Prepare incoming-task approval",
+      description:
+        "After the user accepts Synapse setup, bind a locally generated credential hash to this signed-in account. Returns a browser approval link; does not enable receiving. Never send the credential, local paths, or Codex task IDs.",
+      inputSchema: z
+        .object({ credential_hash: z.string().regex(/^[0-9a-f]{64}$/) })
+        .strict(),
+      outputSchema: z.object({
+        pairing_id: z.uuid(),
+        verification_url: z.url(),
+        expires_at: z.iso.datetime({ offset: true }),
+        identity: z.object({
+          user_id: z.uuid(),
+          project_id: z.uuid(),
+          username: z.string(),
+          project_alias: z.string(),
+        }),
+      }),
+      annotations,
+    },
   ];
 }
 
@@ -52,8 +75,50 @@ function iso(value) {
   return value ? new Date(value).toISOString() : null;
 }
 
-export function registerMessagingTools(server, { database, logger, helpers }) {
+export function registerMessagingTools(
+  server,
+  { database, logger, helpers, config },
+) {
   const { identityFromContext, result, errorResult, securitySchemes } = helpers;
+
+  server.registerTool(
+    "begin_receiver_setup",
+    {
+      ...messagingToolDefinitions()[3],
+      _meta: { securitySchemes },
+    },
+    async (input, context) => {
+      try {
+        const identity = identityFromContext(context);
+        if (identity.authMethod !== "oauth")
+          throw new Error(
+            "Sign in to Synapse with OAuth before enabling receiving",
+          );
+        if (!config?.resourceUrl)
+          throw new Error("Receiver setup is unavailable");
+        const pairing = await database.createBoundReceiverPairing(
+          identity,
+          input.credential_hash,
+        );
+        return result({
+          pairing_id: pairing.pairingId,
+          verification_url: new URL(
+            `/receiver/pairings/${pairing.pairingId}`,
+            config.resourceUrl,
+          ).href,
+          expires_at: iso(pairing.expiresAt),
+          identity: {
+            user_id: identity.userId,
+            project_id: identity.projectId,
+            username: identity.username,
+            project_alias: identity.projectAlias,
+          },
+        });
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
 
   server.registerTool(
     "send_message",

@@ -419,6 +419,7 @@ test("MCP publishes memory and messaging tools with OAuth schemes", async (t) =>
       "send_message",
       "get_message_status",
       "list_inbox",
+      "begin_receiver_setup",
     ],
   );
   for (const tool of listed.body.result.tools) {
@@ -551,6 +552,7 @@ test("MCP publishes and authenticates bounded memory retrieval tools", async (t)
       "send_message",
       "get_message_status",
       "list_inbox",
+      "begin_receiver_setup",
     ],
   );
   assert.equal(
