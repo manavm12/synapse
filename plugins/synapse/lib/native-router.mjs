@@ -168,12 +168,15 @@ export async function routeDelivery(
             projectRoot: delivery.projectRoot,
             identity: delivery.receiverAuthorization,
           },
-          () =>
-            markIssued({
+          () => {
+            const marked = markIssued({
               jobId: delivery.jobId,
               deliveryId: delivery.deliveryId,
               receiverIdentity: delivery.receiverAuthorization,
-            }),
+            });
+            mutationIssued = true;
+            return marked;
+          },
           {
             path:
               cloudAuthorizationOptions?.registryPath ??
@@ -181,7 +184,6 @@ export async function routeDelivery(
             now: cloudAuthorizationOptions?.now,
           },
         );
-        mutationIssued = true;
       }
       await client.callTool(
         "send_message_to_thread",
@@ -209,12 +211,15 @@ export async function routeDelivery(
           projectRoot: delivery.projectRoot,
           identity: delivery.receiverAuthorization,
         },
-        () =>
-          markIssued({
+        () => {
+          const marked = markIssued({
             jobId: delivery.jobId,
             deliveryId: delivery.deliveryId,
             receiverIdentity: delivery.receiverAuthorization,
-          }),
+          });
+          mutationIssued = true;
+          return marked;
+        },
         {
           path:
             cloudAuthorizationOptions?.registryPath ??
@@ -222,7 +227,6 @@ export async function routeDelivery(
           now: cloudAuthorizationOptions?.now,
         },
       );
-      mutationIssued = true;
     }
     const created = appToolJson(
       await client.callTool(

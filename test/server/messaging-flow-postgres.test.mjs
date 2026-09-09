@@ -30,7 +30,6 @@ import { syncReceiver } from "../../plugins/synapse/lib/receiver-sync.mjs";
 import { runMigrations } from "../../scripts/migrate.mjs";
 import {
   disconnectReceiver,
-  finishReceiverConnection,
   startReceiverConnection,
 } from "../../src/client/receiver/enrollment.mjs";
 import { createApplication } from "../../src/server/app.mjs";
@@ -498,12 +497,11 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     ["list_projects", "create_thread", "list_projects", "list_projects"],
   );
 
-  // Approval may succeed remotely while local completion rejects the binding.
-  const localRegistry = new DatabaseSync(registryPath);
-  localRegistry
-    .prepare("UPDATE projects SET alias = ? WHERE root = ?")
-    .run("wrong-alias", root);
-  localRegistry.close();
+  // Finish plugin disable too: transport revocation alone intentionally retains
+  // the selected local destination until the user disables or reconnects setup.
+  await disableSetup({ connection_id: prepared.connection_id }, options);
+
+  // Legacy unbound enrollment cannot bypass the authenticated setup tool.
   const mismatched = await startReceiverConnection(
     { serverUrl: baseUrl },
     options,
@@ -515,16 +513,10 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
         "session:bob",
       )
     ).status,
-    200,
+    403,
   );
-  await assert.rejects(finishReceiverConnection({}, options), /alias/);
   await disconnectReceiver({}, options);
   assert.equal(secrets.size, 0);
-  const resetRegistry = new DatabaseSync(registryPath);
-  resetRegistry
-    .prepare("UPDATE projects SET alias = ? WHERE root = ?")
-    .run("demo", root);
-  resetRegistry.close();
 
   // Cancelling before approval must prevent a delayed browser approval as well.
   const cancelled = await startReceiverConnection(
@@ -542,20 +534,36 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     200,
   );
 
-  const replacementPending = await startReceiverConnection(
-    { serverUrl: baseUrl },
-    options,
+  const replacementPending = await prepareSetup(
+    { identity: oauthIdentity },
+    { ...options, serverUrl: baseUrl },
   );
+  const replacementPairing = await call("bob", "begin_receiver_setup", {
+    credential_hash: replacementPending.credential_hash,
+  });
   assert.equal(
     (
       await post(
-        `/auth/receiver-pairings/${replacementPending.pairingId}/approve`,
+        `/auth/receiver-pairings/${replacementPairing.pairing_id}/approve`,
         "session:bob",
       )
     ).status,
     200,
   );
-  const replacement = await finishReceiverConnection({}, options);
+  const replacementReady = await completeSetup(
+    {
+      connection_id: replacementPending.connection_id,
+      pairing: replacementPairing,
+    },
+    { ...options, openUrl: async () => {} },
+  );
+  assert.equal(replacementReady.status, "ready");
+  const replacement = getReceiverConnectionById(
+    replacementPending.connection_id,
+    {
+      path: registryPath,
+    },
+  );
   assert.notEqual(
     replacement.identity.installationId,
     connection.identity.installationId,

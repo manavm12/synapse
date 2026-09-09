@@ -130,6 +130,8 @@ export async function dispatchPrompt(
                     await reconcile(reconcileInput, {
                       ...reconcileOptions,
                       waitMs: 5000,
+                    }).catch(() => {
+                      signal.throwIfAborted();
                     });
                   await sync(
                     {

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { withDeadline } from "../../plugins/synapse/lib/deadline.mjs";
 import {
   dispatchPrompt,
@@ -28,13 +29,17 @@ import {
   stageCloudMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
 import { formatDeliveryMarker } from "../../plugins/synapse/lib/markers.mjs";
-import { routeDelivery } from "../../plugins/synapse/lib/native-router.mjs";
+import {
+  routeDelivery,
+  runReservedDelivery,
+} from "../../plugins/synapse/lib/native-router.mjs";
 import {
   activateDestination,
   activeDestinations,
   deactivateDestination,
   deferSetup,
   offerSetupOnce,
+  readPromptReceipt,
   savePromptReceipt,
   setupConnections,
   withReceiverLease,
@@ -855,6 +860,176 @@ test("concurrent prompts share a receiver lock and delivery prompts never trigge
   );
   await dispatchPrompt(input, f.dispatchOptions);
   assert.equal(f.calls.length, 2);
+});
+
+test("post-delivery reconciliation failure consumes the prompt and preserves cancellation", async (t) => {
+  const f = await dispatchFixture(t);
+  const root = f.connection.projectRoot;
+  execFileSync("git", ["init", "-b", "main", root]);
+  const local = queueMessage(
+    { channelId: "legacy-fallback", projectRoot: root, task: "local task" },
+    f.inboxOptions,
+  );
+  f.stage();
+  let reconciliations = 0;
+  const input = {
+    hook_event_name: "UserPromptSubmit",
+    session_id: "owner",
+    cwd: root,
+  };
+  assert.deepEqual(
+    await dispatchPrompt(input, {
+      ...f.dispatchOptions,
+      reconcile: async () => {
+        if (++reconciliations === 2) throw new Error("binding database busy");
+      },
+    }),
+    { attempted: true },
+  );
+  assert.equal(f.calls.length, 1);
+  assert.equal(getJob(local.jobId, f.inboxOptions).status, "pending");
+
+  f.stage(2);
+  const controller = new AbortController();
+  const reason = new Error("cancel reconciliation");
+  reconciliations = 0;
+  await assert.rejects(
+    () =>
+      dispatchPrompt(input, {
+        ...f.dispatchOptions,
+        signal: controller.signal,
+        reconcile: async () => {
+          if (++reconciliations === 2) {
+            controller.abort(reason);
+            throw reason;
+          }
+        },
+      }),
+    (error) => error === reason,
+  );
+  assert.equal(f.calls.length, 2);
+  assert.equal(getJob(local.jobId, f.inboxOptions).status, "pending");
+});
+
+test("setup state reads and writes wait for a concurrent SQLite writer", async (t) => {
+  const f = await dispatchFixture(t);
+  const options = { path: f.options.registryPath };
+  savePromptReceipt(
+    { sessionId: "busy-owner", pluginRoot: "/fixture", version: "test" },
+    options,
+  );
+  const checks = [
+    () =>
+      assert.equal(readPromptReceipt("busy-owner", options).version, "test"),
+    () => assert.equal(activeDestinations(options).length, 1),
+    () => assert.equal(setupConnections(options).length, 1),
+    () =>
+      savePromptReceipt(
+        { sessionId: "next-owner", pluginRoot: "/fixture", version: "test" },
+        options,
+      ),
+  ];
+  for (const check of checks) {
+    const worker = new Worker(
+      `
+      const { DatabaseSync } = require("node:sqlite");
+      const { parentPort, workerData } = require("node:worker_threads");
+      const db = new DatabaseSync(workerData);
+      db.exec("BEGIN EXCLUSIVE");
+      parentPort.postMessage("locked");
+      setTimeout(() => { db.exec("COMMIT"); db.close(); }, 350);
+    `,
+      { eval: true, workerData: options.path },
+    );
+    t.after(() => worker.terminate());
+    const exited = once(worker, "exit");
+    await once(worker, "message");
+    try {
+      check();
+    } finally {
+      await exited;
+    }
+  }
+});
+
+test("authorization fence failures after issuing a mutation stay uncertain for new and existing tasks", async (t) => {
+  for (const existingTask of [false, true]) {
+    const f = await dispatchFixture(t);
+    if (existingTask) {
+      f.stage();
+      await dispatchPrompt(
+        { hook_event_name: "UserPromptSubmit", session_id: "owner" },
+        f.dispatchOptions,
+      );
+    }
+    const jobId = f.stage(existingTask ? 2 : 1);
+    await dispatchPrompt(
+      { hook_event_name: "UserPromptSubmit", session_id: "owner" },
+      {
+        ...f.dispatchOptions,
+        deliver: (input) =>
+          runReservedDelivery(input, {
+            load: (value) => getReservedDelivery(value, f.inboxOptions),
+            retry: () => assert.fail("issued mutations must never be retried"),
+            uncertain: (value) => {
+              assert.match(value.error, /must be synchronous/);
+              return markNativeMutationUncertain(value, f.inboxOptions);
+            },
+            route: (delivery, metadata) =>
+              routeDelivery(delivery, {
+                ...metadata,
+                authorizeCloud: async () => {},
+                cloudAuthorizationOptions: {
+                  registryPath: f.options.registryPath,
+                },
+                markIssued: (value) => {
+                  markNativeMutationIssued(value, f.inboxOptions);
+                  // Rejected by the synchronous fence after the inbox commit succeeds.
+                  return Promise.resolve(true);
+                },
+                createClient: () => ({
+                  start: async () => {},
+                  close: async () => {},
+                  callTool: async (name) => {
+                    assert.equal(
+                      name,
+                      "list_projects",
+                      "fence failure prevents native calls",
+                    );
+                    return {
+                      success: true,
+                      contentItems: [
+                        {
+                          type: "inputText",
+                          text: JSON.stringify({
+                            projects: [
+                              {
+                                projectId: "saved-project",
+                                path: f.connection.projectRoot,
+                                isGitRepository: true,
+                              },
+                            ],
+                          }),
+                        },
+                      ],
+                    };
+                  },
+                }),
+              }),
+          }),
+      },
+    );
+    assert.equal(getJob(jobId, f.inboxOptions).status, "uncertain");
+    assert.equal(
+      getJob(jobId, f.inboxOptions).nativeMutationState,
+      "uncertain",
+    );
+    await dispatchPrompt(
+      { hook_event_name: "UserPromptSubmit", session_id: "owner" },
+      f.dispatchOptions,
+    );
+    assert.equal(f.calls.length, existingTask ? 1 : 0);
+  }
 });
 
 test("prompt dispatch repairs a missed startup binding and flushes receipts without creating a second task", async (t) => {

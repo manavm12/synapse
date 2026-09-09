@@ -8,7 +8,7 @@ function openState(path) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path);
   chmodSync(path, 0o600);
-  db.exec(`PRAGMA busy_timeout = 250;
+  db.exec(`PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS synapse_onboarding (id INTEGER PRIMARY KEY CHECK(id = 1), preference TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS receiver_destinations (
       server_url TEXT NOT NULL, user_id TEXT NOT NULL, project_id TEXT NOT NULL,
@@ -49,6 +49,7 @@ export function readPromptReceipt(
   if (!existsSync(path)) return null;
   const db = new DatabaseSync(path, { readOnly: true });
   try {
+    db.exec("PRAGMA busy_timeout = 5000");
     if (
       !db
         .prepare(
@@ -141,6 +142,7 @@ export function setupConnections({ path = receiverRegistryPath() } = {}) {
   if (!existsSync(path)) return [];
   const db = new DatabaseSync(path, { readOnly: true });
   try {
+    db.exec("PRAGMA busy_timeout = 5000");
     if (
       !db
         .prepare(
@@ -177,6 +179,7 @@ export function activeDestinations({ path = receiverRegistryPath() } = {}) {
   if (!existsSync(path)) return [];
   const db = new DatabaseSync(path, { readOnly: true });
   try {
+    db.exec("PRAGMA busy_timeout = 5000");
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table'")
       .all();

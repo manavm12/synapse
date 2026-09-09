@@ -11,9 +11,10 @@ function decodeXmlText(value) {
 
 export function delegationFromOutput(output, { receiptOnly = false } = {}) {
   if (output?.truncated === true && !receiptOnly) return null;
-  const text = typeof output === "string" ? output : output?.text;
-  if (typeof text !== "string" || !text.startsWith("<codex_delegation>"))
-    return null;
+  const raw = typeof output === "string" ? output : output?.text;
+  if (typeof raw !== "string") return null;
+  const text = raw.trimStart();
+  if (!text.startsWith("<codex_delegation>")) return null;
   const source = text.match(/<source_thread_id>([^<]+)<\/source_thread_id>/);
   const taskInput = receiptOnly
     ? text.match(/<input>([^\n]*)(?:\n|<\/input>)/)

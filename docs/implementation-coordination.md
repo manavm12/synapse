@@ -28,8 +28,10 @@ revocation findings, and retrieval discovery/historical-topic findings have
 corrections integrated. Independent re-review cleared the receiver's local
 identity, dispatch/revocation races, reconnect isolation, bounded response reads,
 and resumable cancellation, plus backend atomic approval/cancellation. The
-combined disposable-Postgres gate passed 182 tests without failures or skips.
-This is local acceptance; live deployment gates below remain outstanding.
+combined disposable-Postgres gate at that earlier integration checkpoint passed
+182 tests without failures or skips. This historical count is not current PR #9
+release evidence; see [the current validation scope and command](plugin-setup-validation.md).
+Live deployment gates below remain outstanding.
 
 Local fixtures, real subprocess tests, and disposable Postgres are distinct from
 live OAuth/email, real macOS/native-task operation, and paid semantic-quality

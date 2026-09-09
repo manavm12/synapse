@@ -108,6 +108,7 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       const key = stateHash.toString("hex");
       const authorizationId = authorizationStates.get(key) ?? null;
       authorizationStates.delete(key);
+      if (authorizationId) activeAuthorizationStates.delete(authorizationId);
       return authorizationId;
     },
     async resolveAuthorizationState(stateHash) {
@@ -341,6 +342,12 @@ test("OAuth discovery, readiness, and bearer challenge are public", async (t) =>
     }),
   });
   assert.equal(consumeState.status, 204);
+  const reissuedState = await fetch(`${baseUrl}/auth/state`, {
+    method: "POST",
+    headers: { cookie, "x-synapse-auth-request": "1" },
+  });
+  assert.equal(reissuedState.status, 201);
+  assert.notEqual((await reissuedState.json()).redirect_to, state.redirect_to);
   assert.equal((await fetch(baseUrl + callbackPath)).status, 400);
   assert.equal(
     (await fetch(`${baseUrl}/authorize?authorization_id=bad%20request`)).status,

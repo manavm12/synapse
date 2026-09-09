@@ -11,10 +11,12 @@ import {
   getJob,
   markNativeMutationIssued,
   markNativeMutationUncertain,
+  queueMessage,
   reserveNextMessage,
   stageCloudMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
 import { formatDeliveryMarker } from "../../plugins/synapse/lib/markers.mjs";
+import { delegationFromOutput } from "../../plugins/synapse/lib/native-evidence.mjs";
 import {
   reconcileNativeBindings,
   resolveClientThreadId,
@@ -207,6 +209,81 @@ test("a missed child hook is reconciled from native evidence after restart, exac
   });
   assert.equal(f.reads, 1);
   assert.equal(f.closes, 1);
+});
+
+test("native evidence tolerates leading whitespace but not arbitrary preambles", async (t) => {
+  const f = await fixture(t);
+  const output = f.result.turns[0].items[0].output;
+  const original = output.text;
+  output.text = ` \t\r\n${original}`;
+  assert.deepEqual(await reconcileNativeBindings(f.input, f.options), {
+    reconciled: 1,
+    pending: 0,
+  });
+  assert.equal(delegationFromOutput(`Untrusted preamble\n${original}`), null);
+  for (const value of [null, 42, {}, { text: false }])
+    assert.equal(delegationFromOutput(value), null);
+});
+
+test("a null native response can be retried within the same bounded reconciliation", async (t) => {
+  const f = await fixture(t);
+  let attempts = 0;
+  const createClient = f.options.createClient;
+  assert.deepEqual(
+    await reconcileNativeBindings(f.input, {
+      ...f.options,
+      waitMs: 1500,
+      createClient: () => {
+        const client = createClient();
+        const call = client.callTool.bind(client);
+        client.callTool = (...args) =>
+          ++attempts === 1
+            ? {
+                success: true,
+                contentItems: [{ type: "inputText", text: "null" }],
+              }
+            : call(...args);
+        return client;
+      },
+    }),
+    { reconciled: 1, pending: 0 },
+  );
+  assert.equal(attempts, 2);
+});
+
+test("cloud receipt reconciliation excludes accepted legacy local tasks", async (t) => {
+  const f = await fixture(t);
+  const local = queueMessage(
+    { channelId: "legacy-local", projectRoot: f.root, task: "local task" },
+    f.options.inboxOptions,
+  );
+  const reserved = reserveNextMessage(
+    { projectRoot: f.root, ownerSessionId: "local-owner", source: "local" },
+    f.options.inboxOptions,
+  );
+  acceptProvisioning(
+    {
+      jobId: local.jobId,
+      deliveryId: reserved.deliveryId,
+      clientThreadId: "client-new-thread:local",
+      projectId: "saved-project",
+      hostId: "local",
+    },
+    f.options.inboxOptions,
+  );
+  assert.deepEqual(await reconcileNativeBindings(f.input, f.options), {
+    reconciled: 1,
+    pending: 0,
+  });
+  assert.equal(getJob(local.jobId, f.options.inboxOptions).status, "accepted");
+  assert.equal(f.reads, 1);
+  assert.equal(
+    delegationFromOutput({
+      text: "<codex_delegation>truncated local data",
+      truncated: true,
+    }),
+    null,
+  );
 });
 
 test("missing, corrupt, changed and duplicate alias formats keep accepted jobs fenced", async (t) => {

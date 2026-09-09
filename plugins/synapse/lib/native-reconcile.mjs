@@ -159,7 +159,7 @@ export async function reconcileNativeBindings(
                   break;
                 }
                 // A settled nonmatching task is never sufficient evidence.
-                if (result.turns?.length) break;
+                if (result?.turns?.length) break;
               }
               if (!waitMs) break;
               await waitForApproval(250, boundedSignal);

@@ -830,13 +830,13 @@ test("migration enforces user isolation and durable capture semantics", {
   const requesterHash = createHash("sha256")
     .update("schema-test-requester")
     .digest();
-  const pairing = await database.createReceiverPairing(
+  const pairing = await database.createBoundReceiverPairing(
+    identityTwo,
     credentialHex,
-    requesterHash,
   );
-  const pairingReplay = await database.createReceiverPairing(
+  const pairingReplay = await database.createBoundReceiverPairing(
+    identityTwo,
     credentialHex,
-    requesterHash,
   );
   assert.equal(pairingReplay.pairingId, pairing.pairingId);
   assert.deepEqual(
@@ -865,9 +865,9 @@ test("migration enforces user isolation and durable capture semantics", {
   );
 
   const secondCredential = `syn_recv_${Buffer.alloc(32, 8).toString("base64url")}`;
-  const secondPairing = await database.createReceiverPairing(
+  const secondPairing = await database.createBoundReceiverPairing(
+    identityTwo,
     createHash("sha256").update(secondCredential).digest("hex"),
-    requesterHash,
   );
   await assert.rejects(
     database.approveReceiverPairing(userTwo, secondPairing.pairingId),
@@ -875,9 +875,9 @@ test("migration enforces user isolation and durable capture semantics", {
   );
 
   const otherUserCredential = `syn_recv_${Buffer.alloc(32, 10).toString("base64url")}`;
-  const otherUserPairing = await database.createReceiverPairing(
+  const otherUserPairing = await database.createBoundReceiverPairing(
+    identityThree,
     createHash("sha256").update(otherUserCredential).digest("hex"),
-    requesterHash,
   );
   const otherUserReceiver = await database.approveReceiverPairing(
     userThree,
@@ -1178,9 +1178,13 @@ test("migration enforces user isolation and durable capture semantics", {
   });
   assert.equal(registeredFour.username, "agent_four");
   const raceCredential = `syn_recv_${Buffer.alloc(32, 11).toString("base64url")}`;
-  const racePairing = await database.createReceiverPairing(
+  const identityFour = await database.resolveIdentity(userFour, {
+    oauthClientId: "codex-client",
+    authMethod: "oauth",
+  });
+  const racePairing = await database.createBoundReceiverPairing(
+    identityFour,
     createHash("sha256").update(raceCredential).digest("hex"),
-    requesterHash,
   );
   const approvalCancellationRace = await Promise.allSettled([
     database.approveReceiverPairing(userFour, racePairing.pairingId),

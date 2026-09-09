@@ -4,6 +4,48 @@ PR #9 replaces compulsory repository CLI enrollment with the installed Synapse
 plugin's opt-in setup skill and short-lived helpers. No production migration,
 deployment, PR merge, or marketplace release was performed for these checks.
 
+## Current review-fix gate
+
+The 2026-09-09 review-fix run passed **222 tests**, with zero failures or skips:
+**95.32% lines / 84.97% branches / 94.24% functions**. This is whole-suite Node
+test discovery with serialized execution and all database-dependent tests enabled,
+including a fresh PostgreSQL 17 database and isolated per-test databases. Auth,
+Keychain and native task creation remain explicit doubles in integration tests.
+
+Command run from the PR worktree using Codex's supplied Node v24.19.0 (substitute
+a fresh disposable database URL for the local test URL):
+
+```sh
+TEST_DATABASE_URL=<fresh-local-postgres-url> DATABASE_SSL=disable \
+  "$CODEX_MCP_NODE_PATH" --test --test-concurrency=1 \
+  --experimental-test-coverage \
+  --test-coverage-exclude=scripts/migrate.mjs \
+  --test-coverage-exclude=src/server/database.mjs \
+  --test-coverage-lines=85 --test-coverage-branches=70 --test-coverage-functions=90
+```
+
+This is the flag set in `npm run test:coverage`; the executable is selected
+explicitly to avoid relying on system Node. Coverage includes test files, as
+configured by that script; the percentages are not production-code-only coverage.
+Historical 182/205/215-test checkpoints below or in coordination notes are not
+current release evidence. Earlier runs without a test database likewise do not
+establish database coverage.
+
+New regressions cover post-delivery reconciliation failure and cancellation,
+authorization-fence failure after the durable issue marker, SQLite writer
+contention for setup reads/writes, whitespace/native-null responses, cloud-only
+reconciliation, and OAuth state reissue after consumption. The upgrade test first
+applies the old migrations and creates pending/approved unbound pairings, then
+runs the new migration: pending unbound approval is rejected, already-connected
+legacy receivers still authorize/complete/claim, and expired credentials still
+disconnect. New bound approvals reject the wrong account despite identical aliases.
+
+Formatting/lint, both plugin validators, bundle import isolation and diff checks
+pass. Reinstalled local build `0.3.0+codex.20260909083644`; the desktop-matching
+CLI reports it enabled and the cached bundle matches the PR source byte-for-byte.
+No receiver reset or manual delivery was performed. These results do not replace
+the clean-Mac live release gate below.
+
 ## Plugin-level follow-up after the live receiver failure
 
 The local repair exposed gaps not covered by the original smoke tests: enrollment
@@ -27,7 +69,8 @@ Large task prompts have a leading local receipt because real `read_thread` outpu
 is capped at 20,000 characters. Identical remote project paths cannot override the
 local receiving project.
 
-Validation of this follow-up:
+Historical validation of this follow-up at `f48a09a` (superseded by the current
+review-fix gate below; exact historical invocation is not retained here):
 
 - Fresh disposable PostgreSQL 17 full gate: **215 passed**, zero failures/skips;
   **95.21% lines / 84.52% branches / 94.22% functions**.
@@ -57,7 +100,11 @@ marketplace distribution remain release gates. The historical plugin downgrade's
 cause has not been established; build-specific readiness detects a stale running
 installation but does not claim to repair Codex's plugin cache lifecycle.
 
-## Passed
+## Historical original replacement validation
+
+These results predate `f48a09a` and the review fixes. They describe the earlier
+replacement's scope, not the current release gate. The exact historical command
+is not reconstructed from the test count.
 
 - Full serialized coverage gate with a fresh disposable PostgreSQL 17 database:
   **205 tests passed**, zero failures/skips; line coverage 94.95%, branch 84.15%,
@@ -103,7 +150,8 @@ withdrawn: expired credentials were already intentionally supported for revocati
 
 ## Still required before release
 
-Apply `202609090001_bound_receiver_setup.sql`, then deploy the matching authenticated
+Apply `202609090001_bound_receiver_setup.sql` and the subsequent
+`202609090002_require_bound_receiver_approval.sql`, then deploy the matching authenticated
 `begin_receiver_setup` MCP tool and browser behavior **before** distributing the
 plugin. Keep production rollout/merge separate from preparing this replacement PR.
 
