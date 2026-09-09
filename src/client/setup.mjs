@@ -161,6 +161,17 @@ export async function runSetup(
   }
 
   let plugins = await runJson(runCommand, ["plugin", "list", "--json"]);
+  if (
+    plugins.installed?.some(
+      (candidate) =>
+        candidate.name === "synapse" &&
+        candidate.pluginId.startsWith("synapse@synapse-dev-"),
+    )
+  ) {
+    throw new Error(
+      "An isolated Synapse development plugin is installed. Use its setup-synapse skill for receiving or npm run install:plugin to update it; repository setup must not install the colliding synapse@synapse identity.",
+    );
+  }
   let plugin = plugins.installed?.find(
     (candidate) => candidate.pluginId === PLUGIN_ID,
   );

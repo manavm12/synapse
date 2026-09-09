@@ -106,6 +106,23 @@ in an authorized checkout. These are developer requirements, not recipient setup
 | `npm run lint` | Run Biome's recommended lints. |
 | `npm run check` | Run formatting, linting, tests, and coverage. |
 | `npm run audit` | Fail on high-severity npm advisories. |
+| `npm run install:plugin` | Install an isolated, immutable development plugin snapshot. |
+
+For local plugin testing, use `npm run install:plugin` from the intended checkout.
+On the first migration from this checkout's old `synapse@synapse` installation,
+use `npm run install:plugin -- --replace-repo-plugin`. This verifies the replacement
+before removing the old plugin cache; enrollment, Keychain credentials, destinations
+and queues are unchanged. It does not authorize hooks or claim delivery is ready.
+Review the new identity's hooks in Codex, then test in a fresh task.
+
+The command snapshots only `plugins/synapse` outside Git into
+`~/.synapse/plugin-builds`, with a checkout-specific `synapse-dev-…` marketplace.
+It uses the desktop's bundled CLI on macOS (`SYNAPSE_CODEX_BIN` can explicitly
+select another executable). Subsequent builds retain that identity and keep older
+snapshots for recovery. Ordinary recipients still install the published plugin;
+this command is only for developers. Do not install mutable worktree builds as
+`synapse@synapse`: repository marketplace discovery can replace that shared cache
+with another checkout's code, even after a successful reinstall.
 
 The full coverage gate needs `TEST_DATABASE_URL` pointing to a **disposable**
 PostgreSQL 17 database with database/role creation privileges. SQL suites create

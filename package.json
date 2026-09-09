@@ -12,6 +12,7 @@
     "audit": "npm audit --audit-level=high",
     "check": "biome check . && npm run test:coverage",
     "configure:plugin": "node scripts/configure-plugin.mjs",
+    "install:plugin": "node scripts/install-local-plugin.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "memory:backfill": "node scripts/backfill-memory.mjs",
     "format": "biome format --write .",

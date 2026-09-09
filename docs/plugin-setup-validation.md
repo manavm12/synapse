@@ -6,6 +6,39 @@ deployment, PR merge, or marketplace release was performed for these checks.
 
 ## Current review-fix gate
 
+### Local install identity repair — 2026-09-09
+
+Live diagnosis found both checkouts advertising `synapse@synapse`. At 08:59:01 UTC,
+the installed cache was replaced with the other checkout's September 8-based
+bundle, including its unique uncommitted conversation files, alongside a desktop
+plugin refresh. A successful immediate setup delivery had concealed the later
+loss of the new setup skill and prompt hooks. This is not a credential-expiry fix.
+
+`npm run install:plugin` now builds an immutable snapshot outside Git, under a
+checkout-specific `synapse-dev-…` marketplace. It verifies the installed identity,
+version, source and actual cached bytes before optionally retiring this checkout's
+legacy ID. Updates preserve prior snapshots; unrelated installations are rejected.
+Repository setup refuses to reintroduce the old ID beside an isolated install.
+No receiving state, Keychain item, hook trust, server code, or delivery logic changes.
+
+The client/plugin gate passed **137 tests**, zero failures/skips, including new
+identity/snapshot isolation, symlink/alias validation, cache integrity, conflict
+preservation, failed-install behavior, and repository-setup regressions. Existing
+ten-turn memory and delivery fencing tests pass. Both plugin validators pass.
+This focused gate does not claim a new full PostgreSQL/coverage run.
+
+Installed local build `0.3.0+codex.20260909091049` as
+`synapse@synapse-dev-e058c040e5a7`. A fresh desktop-matching app-server process
+listed plugins with **each** competing checkout supplied in `cwds`; only the new
+ID remained installed/enabled, and cached bytes still matched the snapshot after
+both refreshes. `skills/list` discovered the installed setup skill, and
+`hooks/list` discovered all six hooks from the new cache. They correctly report
+**untrusted** for the new identity. No trust was copied or bypassed. Native delivery
+after user approval, another prompt and a full app restart remains to be tested;
+installation success is not a claim that receiving is ready.
+
+### Previous full database gate
+
 The 2026-09-09 review-fix run passed **222 tests**, with zero failures or skips:
 **95.32% lines / 84.97% branches / 94.24% functions**. This is whole-suite Node
 test discovery with serialized execution and all database-dependent tests enabled,
@@ -96,9 +129,9 @@ review-fix gate below; exact historical invocation is not retained here):
 
 The original independent reviews below predate this follow-up. Clean-Mac live
 installation, actual scheduler invocation after hook review, and recipient-accessible
-marketplace distribution remain release gates. The historical plugin downgrade's
-cause has not been established; build-specific readiness detects a stale running
-installation but does not claim to repair Codex's plugin cache lifecycle.
+marketplace distribution remain release gates. The later local install identity
+repair above addresses the observed cross-checkout cache collision; build-specific
+readiness alone did not prevent that replacement.
 
 ## Historical original replacement validation
 
