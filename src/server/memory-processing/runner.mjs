@@ -52,14 +52,15 @@ export function createMemoryProcessingRunner({
       );
       return { status: "succeeded", jobId: job.id };
     } catch (error) {
+      let queueStatus = "lease_lost";
       try {
-        await storage.fail(job, error, { now: now() });
+        queueStatus = await storage.fail(job, error, { now: now() });
       } catch (failureError) {
         if (failureError.name !== "MemoryProcessingLeaseLostError") {
           throw failureError;
         }
       }
-      return { status: "failed", jobId: job.id, error };
+      return { status: "failed", jobId: job.id, error, queueStatus };
     } finally {
       clearInterval(timer);
       await renewalPromise;

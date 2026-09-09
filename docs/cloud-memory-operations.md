@@ -281,6 +281,63 @@ MEMORY_MODEL=<explicit-extraction-and-reconciliation-model>
 MEMORY_REVIEW_MODEL=<explicit-review-model>
 ```
 
+In the dedicated service's settings, select the custom Railway config path
+`/deploy/railway-worker.json`, with repository root `/`. The file sets the
+Dockerfile build, worker command, one Singapore replica, no HTTP healthcheck,
+no cron schedule, no sleeping, and three retries on process failure. Leave the
+HTTP service on its existing configuration. Do not generate a public worker
+domain. Confirm the effective configuration in the deployment details; these
+values follow [Railway's config-as-code reference](https://docs.railway.com/config-as-code/reference).
+
+Provision the worker credential and verify schema readiness before enabling the
+continuous service. From an operator checkout or the built image, with
+`DATABASE_WORKER_URL` and verified TLS configured:
+
+```sh
+npm run memory:status -- --owner-id <owner-uuid> --project-id <project-uuid>
+```
+
+This command runs a read-only repeatable-read transaction. It checks the dedicated
+role, required table privileges and owner/project relationship, then reports
+processor-v1 counts, oldest pending work, last successful completion, expired
+leases, missing old jobs, revisions blocked by an earlier terminal failure, and
+the ledger generation. It never claims or recovers a job and needs neither an
+inference key nor `MEMORY_PROCESSING_ENABLED=true`. `ready: true` establishes
+database prerequisites, not model access, a running worker or an empty backlog.
+Exit status is 0 for database readiness and 1 for errors; diagnostics omit secrets
+and source content. Migration-version inspection still uses the operator's admin
+connection, not this worker command.
+
+With the continuous worker stopped, first verify a bounded canary using the
+worker database credential, inference key and chosen model:
+
+```sh
+MEMORY_PROCESSING_ENABLED=true npm run worker:canary -- --owner-id <owner-uuid> --project-id <project-uuid> --max-jobs 1
+```
+
+Both UUIDs and `--max-jobs` (1–1000) are required. Selection, locked eligibility
+checks and expired-job recovery are confined to that owner/project. Each claimed
+attempt counts toward the limit, including failures. A failed attempt stops the
+canary immediately; it does not poll for retries. Queue backoff/terminal-failure
+state is preserved for a later deliberate run. Internal per-stage inference
+retries still apply. A canary can recover expired leases in its own project.
+
+The final `memory_worker_stopped` event includes the attempts and successes.
+Exit 0 with `limit_reached` means the requested attempts succeeded, not that the
+whole backlog is empty. Exit 1 indicates failure. Exit 2 means the run stopped
+early, was idle, or had remaining work but no claimable job (`blocked`); inspect
+`memory:status` to distinguish a failed predecessor, backoff, an active lease or
+missing jobs. Never run a canary under automatic restarts: invocation limits reset
+on process launch. Use an operator process or a one-shot container with restart
+policy `no`, not the continuous Railway worker configuration.
+
+Verify the first revision through job status, ledger generation and authenticated
+`memory_topics`, `search_memory` and `read_memory`, including source citations.
+Exercise a subsequent revision against existing claims to establish reconciliation
+and mandatory review. Use a separately scoped test project for synthetic sources.
+An inference key, explicit model and operating spend allowance must be supplied;
+attempt and token bounds do not establish an overall monetary cap.
+
 The selected models must support the structured Responses API requests used by
 the adapter, including medium reasoning. Review is always enabled in the
 production worker. The request uses the standard service tier with storage
@@ -325,6 +382,21 @@ Repeat bounded batches until `has_more` is false. Failed older jobs still requir
 separate investigation and can block later revisions of the same session.
 Exact source reads remain available without a derived ledger.
 
+Complete historical enqueue while the continuous worker is stopped, before
+draining the production backlog. Run a small scoped canary, inspect evidence and
+actual model usage, then enable the dedicated continuous service. Verify a fresh
+capture is organized automatically and monitor the status counts until old work
+is resolved. The image contains the status and worker commands under `src/`;
+backfill and migration commands need the operator checkout's `scripts/` and
+`supabase/` directories.
+
+The organizer still reads project history and refuses excessive context: source
+segmentation is limited to 160 segments and prompts to 160,000 characters for
+extraction or 200,000 for reconciliation/review. A limit failure needs source or
+context handling work; repeated restarts do not repair it. Stop/disable the worker
+to pause processing. Captures, queued jobs and already accepted memory persist;
+stopping the worker does not undo committed semantic results.
+
 ## 7. Release gate
 
 Run these before every deployment:
@@ -365,6 +437,13 @@ bodies to them. Alert on repeated
 401/403 responses, `memory.capture_conflict`, readiness failures, and process
 restarts, a growing processing backlog, terminally failed jobs, and persistent
 `needs_attention` receipts. HTTP readiness alone is not a complete product check.
+
+Worker failures include a fixed `category` (configuration, database role/schema,
+model access/rate-limit/timeout/validation, context limit, review rejection, lease
+loss, or unknown). Job events include `duration_ms` and, on failure,
+`queue_status`: `pending` means rescheduled, `failed` means terminal, and
+`lease_lost` means this attempt could not update the job. Read durable status to
+see its current owner/outcome. No arbitrary error text is copied into these logs.
 
 ## 8. Recovery and rotation
 
