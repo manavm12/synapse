@@ -121,7 +121,7 @@ async function flushImports({ client, identity, inboxOptions }) {
 }
 
 export async function syncReceiver(
-  { projectRoot },
+  { projectRoot, receiptsOnly = false },
   {
     env = process.env,
     registryPath = receiverRegistryPath(env),
@@ -146,7 +146,12 @@ export async function syncReceiver(
     timeoutMs: 2_500,
     signal,
   });
-  await flushEvents({ client, identity: connection.identity, inboxOptions });
+  const flushed = await flushEvents({
+    client,
+    identity: connection.identity,
+    inboxOptions,
+  });
+  if (receiptsOnly) return { flushed };
   const claim = await client.claim(10);
   signal?.throwIfAborted();
   const identity = validateReceiverIdentity(claim.identity);

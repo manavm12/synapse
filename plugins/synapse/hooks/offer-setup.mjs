@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { isDeliveryPrompt } from "../lib/dispatch.mjs";
 import { readInput, safeSessionId } from "../lib/hook-input.mjs";
 import { offerSetupOnce } from "../lib/onboarding-state.mjs";
@@ -16,8 +17,7 @@ try {
       JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext:
-            "Synapse first-use setup offer (once on this Mac): briefly offer Enable or Later for incoming tasks. Explain that any local Codex chat can check the inbox in the background, and incoming tasks go to one saved local Git project selected during setup. Idle Codex does not poll. Use the setup-synapse skill only after acceptance; never open a browser, create credentials, or enroll without consent. Later defers automatic offers; the Synapse starter prompt Enable incoming tasks remains available. Continue the user's current request normally.",
+          additionalContext: `Synapse first-use setup offer (once on this Mac): briefly offer Enable or Later for incoming tasks. Explain that any local Codex chat can check the inbox in the background, and incoming tasks go to one saved local Git project selected during setup. Idle Codex does not poll. After acceptance, read the installed setup-synapse skill at ${fileURLToPath(new URL("../skills/setup-synapse/SKILL.md", import.meta.url))}, even if it is not in this chat's skill catalog yet. Use its bundled helper, not repository CLI instructions. Never open a browser, create credentials, or enroll without consent. Later defers automatic offers; the Synapse starter prompt Enable incoming tasks remains available. Continue the user's current request normally.`,
         },
       }),
     );

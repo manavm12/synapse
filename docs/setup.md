@@ -22,9 +22,14 @@ the repository's local marketplace is a development source, not public distribut
    never silently overwritten.
 4. Approve incoming tasks in the browser using the same account/project as the
    plugin connection. The page says **Return to Codex**; there is no terminal step.
-5. Codex completes enrollment and checks live authorization before reporting
-   readiness. It makes one bounded delivery attempt, then subsequent prompts in
-   any local chat can wake delivery into the selected destination.
+5. Synapse completes enrollment, validates live authorization, and verifies that
+   this installed build's prompt hook has run in the current chat. If hooks have
+   not run, it reports **Connected; background checks still need verification**,
+   preserving enrollment and the destination. Review/trust Synapse hooks, open a
+   fresh local task, and ask for incoming-task setup status. No repeat browser
+   approval, terminal command, manual hook execution, or database repair is needed.
+   A successful enrollment also makes one bounded delivery attempt; subsequent
+   local prompts wake the same saved destination.
 
 Codex's separate hook-trust requirement must be accepted before automatic prompt
 checks work. Idle Codex does not poll. There is no daemon, service registration,
@@ -34,8 +39,9 @@ or always-running receiver process.
 
 Ask Synapse for incoming-task setup status, to reconnect, or to disable incoming
 tasks. The bundled `setup-synapse` skill handles these operations. Status verifies
-live authorization; expired, revoked, mismatched, or unavailable credentials do
-not count as ready.
+live authorization and a recent prompt-hook receipt for the current installed
+build and chat. Expired, revoked, mismatched, unavailable, or unverified hook state
+does not count as ready. Setup itself never fabricates a prompt-hook receipt.
 
 Browser approval waiting is bounded to five minutes, including network and
 Keychain work. Progress is visible; cancellation retains resumable state.

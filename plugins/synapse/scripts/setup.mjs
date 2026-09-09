@@ -45,21 +45,24 @@ try {
     default:
       throw new Error("Unknown Synapse setup action");
   }
-  process.stdout.write(`${JSON.stringify(result)}\n`);
   if (
     ["prepare", "complete"].includes(input.action) &&
-    result.status === "ready"
+    result.enrollment_status === "connected"
   ) {
     // One bounded attempt, not a persistent runner. Inbox contents never reach stdout.
-    await dispatchPrompt(
+    const delivery = await dispatchPrompt(
       {
         hook_event_name: "UserPromptSubmit",
         cwd: process.cwd(),
         session_id: input.session_id ?? process.env.CODEX_THREAD_ID,
       },
       { signal: controller.signal },
-    ).catch(() => {});
+    ).catch(() => ({ status: "check_failed" }));
+    result.initial_check = delivery?.attempted
+      ? "attempted"
+      : (delivery?.status ?? "checked");
   }
+  process.stdout.write(`${JSON.stringify(result)}\n`);
 } catch (error) {
   process.stderr.write(
     `${JSON.stringify({ status: "action_required", message: error.message })}\n`,

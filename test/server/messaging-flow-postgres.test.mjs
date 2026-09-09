@@ -8,14 +8,16 @@ import test from "node:test";
 
 import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
 import pg from "pg";
-
+import { recordPromptHook } from "../../plugins/synapse/lib/hook-health.mjs";
 import {
+  acceptProvisioning,
   acknowledgeMessage,
   getJob,
   listPendingCloudEvents,
   markNativeMutationIssued,
   reserveNextMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
+import { reconcileNativeBindings } from "../../plugins/synapse/lib/native-reconcile.mjs";
 import { routeDelivery } from "../../plugins/synapse/lib/native-router.mjs";
 import {
   completeSetup,
@@ -220,10 +222,17 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     registryPath,
     secretStore,
     resolveRoot: async () => root,
-    env: { SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP: "1" },
+    env: {
+      SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP: "1",
+      CODEX_THREAD_ID: "fixture-owner",
+    },
     openBrowser: false,
   };
   const oauthIdentity = await call("bob", "get_identity", {});
+  recordPromptHook(
+    { hook_event_name: "UserPromptSubmit", session_id: "fixture-owner" },
+    { path: registryPath },
+  );
   const unpublished = await prepareSetup(
     { identity: oauthIdentity },
     { ...options, serverUrl: baseUrl },
@@ -325,7 +334,10 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
                   },
                 ],
               }
-            : { threadId: "fixture-native-child", hostId: "local" };
+            : {
+                clientThreadId: "client-new-thread:fixture-native-child",
+                hostId: "local",
+              };
         return {
           success: true,
           contentItems: [{ type: "inputText", text: JSON.stringify(value) }],
@@ -334,6 +346,7 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
     }),
     markIssued: (input) => markNativeMutationIssued(input, inboxOptions),
     acknowledge: (input) => acknowledgeMessage(input, inboxOptions),
+    accept: (input) => acceptProvisioning(input, inboxOptions),
   };
   await routeDelivery(delivery, routeOptions);
   assert.deepEqual(
@@ -342,17 +355,68 @@ test("signup, username send, receiver enrollment, local delivery and cloud recei
   );
   assert.equal(nativeCalls[1].args.target.environment.type, "worktree");
   assert.match(nativeCalls[1].args.prompt, /from @alice/);
+  assert.equal(getJob(sent.message_id, inboxOptions).status, "accepted");
+  // No child hook runs. A later bounded check verifies the existing native task.
+  const reconciled = await reconcileNativeBindings(
+    {
+      projectRoot: root,
+      installationId: synced.identity.installationId,
+      ownerThreadId: "fixture-owner",
+    },
+    {
+      inboxOptions,
+      resolveId: async () => "fixture-native-child",
+      verifyWorktree: async () => true,
+      createClient: () => ({
+        async callTool(name) {
+          assert.equal(name, "read_thread");
+          return {
+            success: true,
+            contentItems: [
+              {
+                type: "inputText",
+                text: JSON.stringify({
+                  thread: {
+                    id: "fixture-native-child",
+                    kind: "codex",
+                    hostId: "local",
+                    cwd: root,
+                  },
+                  turns: [
+                    {
+                      items: [
+                        {
+                          type: "functionCallOutput",
+                          namespace: "codex_app",
+                          name: "create_thread",
+                          output: {
+                            text: `<codex_delegation><source_thread_id>fixture-owner</source_thread_id><input>${nativeCalls[1].args.prompt.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</input></codex_delegation>`,
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                }),
+              },
+            ],
+          };
+        },
+        async close() {},
+      }),
+    },
+  );
+  assert.equal(reconciled.reconciled, 1);
   assert.equal(getJob(sent.message_id, inboxOptions).status, "completed");
   const events = listPendingCloudEvents(
     { installationId: synced.identity.installationId },
     inboxOptions,
   );
-  assert.equal(events.length, 1);
+  assert.equal(events.length, 2);
   assert.doesNotMatch(
     JSON.stringify(events),
     /fixture-native|fixture-owner|project_root|thread_id/,
   );
-  await syncReceiver({ projectRoot: root }, syncOptions);
+  await syncReceiver({ projectRoot: root, receiptsOnly: true }, syncOptions);
   assert.equal(
     (await call("alice", "get_message_status", { message_id: sent.message_id }))
       .status,

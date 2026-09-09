@@ -5,6 +5,7 @@ import { withDeadline } from "./deadline.mjs";
 import { safeSessionId } from "./hook-input.mjs";
 import { getJob, reserveNextMessage } from "./inbox.mjs";
 import { parseDeliveryMarker } from "./markers.mjs";
+import { reconcileNativeBindings } from "./native-reconcile.mjs";
 import { runReservedDelivery } from "./native-router.mjs";
 import { activeDestinations, withReceiverLease } from "./onboarding-state.mjs";
 import { receiverRegistryPath } from "./receiver-registry.mjs";
@@ -55,6 +56,8 @@ export async function dispatchPrompt(
     signal: parentSignal,
     sync = syncReceiver,
     deliver = runReservedDelivery,
+    reconcile = reconcileNativeBindings,
+    reconciliationOptions,
     syncOptions,
     deliveryOptions,
     timeoutMs = 25_000,
@@ -95,6 +98,18 @@ export async function dispatchPrompt(
               );
               signal.throwIfAborted();
               if (!receiver.authorized) return null;
+              const reconcileInput = {
+                projectRoot: destination.projectRoot,
+                installationId: receiver.identity.installationId,
+                ownerThreadId: input.session_id,
+              };
+              const reconcileOptions = {
+                ...reconciliationOptions,
+                env,
+                inboxOptions,
+                signal,
+              };
+              await reconcile(reconcileInput, reconcileOptions);
               const delivery = reserveNextMessage(
                 {
                   projectRoot: destination.projectRoot,
@@ -103,12 +118,27 @@ export async function dispatchPrompt(
                 },
                 { ...inboxOptions, receiverIdentity: receiver.identity },
               );
-              if (!delivery) return null;
               // Failed/uncertain native responses also consume the one attempt.
               try {
+                if (!delivery) return null;
                 return await route(delivery, receiver.identity);
               } catch {
                 return { attempted: true };
+              } finally {
+                if (!signal.aborted) {
+                  if (delivery)
+                    await reconcile(reconcileInput, {
+                      ...reconcileOptions,
+                      waitMs: 5000,
+                    });
+                  await sync(
+                    {
+                      projectRoot: destination.projectRoot,
+                      receiptsOnly: true,
+                    },
+                    { ...syncOptions, env, registryPath, inboxOptions, signal },
+                  ).catch(() => {});
+                }
               }
             },
             { path: registryPath, ttlMs: timeoutMs + 5_000 },

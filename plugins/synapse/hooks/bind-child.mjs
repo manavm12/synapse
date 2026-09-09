@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import { getJob, observeProvisionedThread } from "../lib/inbox.mjs";
 import { parseDeliveryMarker } from "../lib/markers.mjs";
+import { delegationFromOutput } from "../lib/native-evidence.mjs";
 
 const MAX_HOOK_INPUT_BYTES = 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
@@ -41,32 +42,6 @@ function repositoriesMatch(projectRoot, commonDirectory) {
   } catch {
     return false;
   }
-}
-
-function decodeXmlText(value) {
-  return value
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .replaceAll("&amp;", "&");
-}
-
-function delegationFromOutput(output) {
-  const text =
-    typeof output === "string"
-      ? output
-      : typeof output?.text === "string"
-        ? output.text
-        : null;
-  if (!text?.includes("<codex_delegation>")) return null;
-  const source = text.match(/<source_thread_id>([^<]+)<\/source_thread_id>/);
-  const taskInput = text.match(/<input>([\s\S]*?)<\/input>/);
-  if (!source || !taskInput) return null;
-  return {
-    sourceThreadId: decodeXmlText(source[1]).trim(),
-    taskInput: decodeXmlText(taskInput[1]),
-  };
 }
 
 function initialDelegation(transcript) {

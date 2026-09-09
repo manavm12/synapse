@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout as pause } from "node:timers/promises";
 
@@ -29,7 +29,12 @@ function runHook(
     const executable = wrapper ? "/bin/sh" : process.execPath;
     const arguments_ = [wrapper ? dispatchWrapperPath : hookPath];
     const child = spawn(executable, arguments_, {
-      env: { ...process.env, SYNAPSE_INBOX_PATH: path, ...env },
+      env: {
+        ...process.env,
+        SYNAPSE_INBOX_PATH: path,
+        SYNAPSE_HOST_DB: join(dirname(path), "host.sqlite"),
+        ...env,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";

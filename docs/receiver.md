@@ -37,10 +37,27 @@ prompts as fresh triggers. Idle Codex never polls.
 
 Cloud payloads are staged durably in SQLite before import confirmation. Only
 confirmed imports may route. Ordering, stable delivery IDs, temporary-ID
-acceptance, permanent-task reconciliation, and outbox receipts remain unchanged.
+acceptance, permanent-task reconciliation, and outbox receipts remain durable.
 Native mutations are fenced on disk before issuance and require fresh receiver
 authorization. A missing or ambiguous response becomes `needs_attention`;
 automatic replay is forbidden.
+
+The child startup hook is a fast binding path, not the only one. After creation
+and on subsequent owner prompts, the installed plugin can resolve an accepted
+temporary ID using Codex's local client-ID map, then independently verify the
+native `read_thread` delegation, source task, local delivery marker, host, and
+Git worktree ancestry. The local map is read-only compatibility data, never proof
+of delivery. Unknown formats, duplicate aliases, mismatches, and unavailable
+native APIs preserve the existing fence; no second task is created. New cloud
+prompts carry the local receipt before their body as well as the terminal marker,
+so the native API's 20,000-character output cap does not prevent large messages
+from being reconciled. Receipts flush during the same bounded check without
+claiming another batch or starting a polling process.
+
+Setup separates connected enrollment from verified prompt hooks. A recent receipt
+from the current chat and exact installed build is required for `ready`; stale
+builds and missing hooks yield `hooks_pending`. The first-use guidance points to
+the installed skill even before the current task's skill catalog has refreshed.
 
 The selected destination and incoming content never enter unrelated triggering
 chats. Legacy local-only queue messages remain scoped to prompts in their own

@@ -91,7 +91,11 @@ export async function authorizeCloudDelivery(
 }
 
 export function selectProject(projects, projectRoot) {
-  const project = projects.find((candidate) => candidate.path === projectRoot);
+  const project = projects.find(
+    (candidate) =>
+      candidate.path === projectRoot &&
+      (candidate.hostId == null || candidate.hostId === "local"),
+  );
   if (!project) {
     throw new Error(`No saved Codex project exactly matches ${projectRoot}`);
   }

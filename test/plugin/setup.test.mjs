@@ -6,12 +6,18 @@ import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { withDeadline } from "../../plugins/synapse/lib/deadline.mjs";
 import {
   dispatchPrompt,
   isDeliveryPrompt,
 } from "../../plugins/synapse/lib/dispatch.mjs";
 import {
+  promptHookHealth,
+  recordPromptHook,
+} from "../../plugins/synapse/lib/hook-health.mjs";
+import {
+  acceptProvisioning,
   acknowledgeMessage,
   confirmCloudImport,
   getJob,
@@ -29,6 +35,7 @@ import {
   deactivateDestination,
   deferSetup,
   offerSetupOnce,
+  savePromptReceipt,
   setupConnections,
   withReceiverLease,
 } from "../../plugins/synapse/lib/onboarding-state.mjs";
@@ -38,6 +45,7 @@ import {
   disableSetup,
   prepareSetup,
   primaryProject,
+  savedProject,
   setupIdentity,
   setupStatus,
   validateSetupPairing,
@@ -218,6 +226,7 @@ async function fixture(t) {
   const secrets = new Map();
   const options = {
     registryPath,
+    hookHealth: () => ({ status: "verified" }),
     env: {},
     serverUrl: "https://synapse.example",
     resolveRoot: async () => join(directory, "project"),
@@ -268,6 +277,108 @@ test("first-use offer is once, deferral persists, manual setup remains available
   assert.equal(offerSetupOnce(opts), false);
   assert.equal((await f.prepare()).status, "approval_required");
   assert.equal(setupConnections(opts).length, 1);
+});
+
+test("enrollment is not ready until this installed build's real prompt hook is observed", async (t) => {
+  const f = await fixture(t);
+  f.options.hookHealth = promptHookHealth;
+  f.options.env.CODEX_THREAD_ID = "setup-owner";
+  const prepared = await f.prepare();
+  const result = await completeSetup(
+    { connection_id: prepared.connection_id, pairing: f.pairing() },
+    f.options,
+  );
+  assert.equal(result.status, "hooks_pending");
+  assert.equal(result.enrollment_status, "connected");
+  assert.equal(activeDestinations({ path: f.options.registryPath }).length, 1);
+  assert.equal((await f.prepare()).status, "hooks_pending");
+  const healthOptions = { path: f.options.registryPath };
+  recordPromptHook(
+    { hook_event_name: "UserPromptSubmit", session_id: "another-chat" },
+    healthOptions,
+  );
+  assert.equal((await f.prepare()).status, "hooks_pending");
+  savePromptReceipt(
+    {
+      sessionId: "setup-owner",
+      pluginRoot: "/old-install",
+      version: "old-build",
+    },
+    healthOptions,
+  );
+  assert.equal((await f.prepare()).hooks.status, "different_build");
+  recordPromptHook(
+    { hook_event_name: "SessionStart", session_id: "setup-owner" },
+    healthOptions,
+  );
+  assert.equal((await f.prepare()).status, "hooks_pending");
+  recordPromptHook(
+    { hook_event_name: "UserPromptSubmit", session_id: "setup-owner" },
+    healthOptions,
+  );
+  assert.equal((await f.prepare()).status, "ready");
+  assert.equal(
+    (await setupStatus({ connection_id: prepared.connection_id }, f.options))
+      .status,
+    "ready",
+  );
+  assert.equal(
+    promptHookHealth("setup-owner", {
+      ...healthOptions,
+      now: () => Date.now() + 31 * 60_000,
+    }).status,
+    "stale",
+  );
+  assert.equal(
+    promptHookHealth(undefined, healthOptions).status,
+    "not_observed",
+  );
+  assert.equal(f.secrets.size, 1);
+});
+
+test("installed prompt hook supplies readiness without source checkout or system Node; setup does not forge it", async (t) => {
+  const f = await fixture(t);
+  const bundle = join(f.directory, "installed plugin");
+  await cp(resolve("plugins/synapse"), bundle, { recursive: true });
+  const isolatedHealth = await import(
+    pathToFileURL(join(bundle, "lib/hook-health.mjs"))
+  );
+  const options = { path: f.options.registryPath };
+  assert.equal(
+    isolatedHealth.promptHookHealth("owner", options).status,
+    "not_observed",
+  );
+  const env = {
+    PATH: "/usr/bin:/bin",
+    CODEX_MCP_NODE_PATH: process.execPath,
+    CODEX_APP_TOOLS_PIPE_PATH: join(f.directory, "unused.sock"),
+    SYNAPSE_HOST_DB: f.options.registryPath,
+    SYNAPSE_INBOX_PATH: join(f.directory, "inbox.sqlite"),
+  };
+  execFileSync(
+    "/bin/sh",
+    [join(bundle, "scripts/run-node.sh"), join(bundle, "scripts/setup.mjs")],
+    { cwd: f.directory, env, input: '{"action":"inspect"}\n' },
+  );
+  assert.equal(
+    isolatedHealth.promptHookHealth("owner", options).status,
+    "not_observed",
+  );
+  execFileSync("/bin/sh", [join(bundle, "hooks/run-dispatch.sh")], {
+    cwd: f.directory,
+    env,
+    input: JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "owner",
+      cwd: f.directory,
+      prompt: "hello",
+    }),
+  });
+  assert.equal(
+    isolatedHealth.promptHookHealth("owner", options).status,
+    "verified",
+  );
+  assert.equal(promptHookHealth("owner", options).status, "different_build");
 });
 
 test("plugin setup exposes only the hash, completes, reuses live enrollment and preserves state on reinstall", async (t) => {
@@ -574,6 +685,47 @@ test("worktree setup resolves to its primary saved project", async (t) => {
   ]);
   assert.equal(await primaryProject(primary), await primaryProject(child));
   await assert.rejects(() => primaryProject(f.directory), /Command failed/);
+  const catalog = [
+    "list_projects",
+    "create_thread",
+    "send_message_to_thread",
+    "read_thread",
+  ].map((name) => ({ name }));
+  let closes = 0;
+  const createClient = () => ({
+    async listTools() {
+      return catalog;
+    },
+    async callTool(name) {
+      assert.equal(name, "list_projects");
+      return {
+        success: true,
+        contentItems: [
+          {
+            type: "inputText",
+            text: JSON.stringify({
+              projects: [
+                { path: primary, hostId: "local", isGitRepository: true },
+              ],
+            }),
+          },
+        ],
+      };
+    },
+    async close() {
+      closes += 1;
+    },
+  });
+  assert.equal(
+    await savedProject(child, { sessionId: "owner", createClient }),
+    await primaryProject(primary),
+  );
+  catalog.pop();
+  await assert.rejects(
+    () => savedProject(child, { sessionId: "owner", createClient }),
+    /lacks the native task tools/,
+  );
+  assert.equal(closes, 2);
 });
 
 async function dispatchFixture(t) {
@@ -703,6 +855,98 @@ test("concurrent prompts share a receiver lock and delivery prompts never trigge
   );
   await dispatchPrompt(input, f.dispatchOptions);
   assert.equal(f.calls.length, 2);
+});
+
+test("prompt dispatch repairs a missed startup binding and flushes receipts without creating a second task", async (t) => {
+  const f = await dispatchFixture(t);
+  const jobId = f.stage();
+  const threadId = randomUUID();
+  let nativeCreates = 0;
+  let receipts = 0;
+  let allowResolution = false;
+  let result;
+  const options = {
+    ...f.dispatchOptions,
+    sync: async (input) => {
+      if (input.receiptsOnly) {
+        receipts += 1;
+        return { flushed: 1 };
+      }
+      return { authorized: true, identity: f.connection.identity };
+    },
+    deliver: async (input) => {
+      nativeCreates += 1;
+      const delivery = getReservedDelivery(input, f.inboxOptions);
+      markNativeMutationIssued(
+        { ...input, receiverIdentity: f.connection.identity },
+        f.inboxOptions,
+      );
+      acceptProvisioning(
+        {
+          ...input,
+          clientThreadId: "client-new-thread:fixture",
+          projectId: "saved-project",
+          hostId: "local",
+        },
+        f.inboxOptions,
+      );
+      result = {
+        thread: {
+          id: threadId,
+          kind: "codex",
+          hostId: "local",
+          cwd: "/selected-project-worktree",
+        },
+        turns: [
+          {
+            items: [
+              {
+                type: "functionCallOutput",
+                namespace: "codex_app",
+                name: "create_thread",
+                output: {
+                  text: `<codex_delegation><source_thread_id>owner</source_thread_id><input>${delivery.nativePrompt.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</input></codex_delegation>`,
+                },
+              },
+            ],
+          },
+        ],
+      };
+    },
+    reconciliationOptions: {
+      resolveId: async () => (allowResolution ? threadId : null),
+      verifyWorktree: async () => true,
+      createClient: () => ({
+        async callTool(name) {
+          assert.equal(name, "read_thread");
+          return {
+            success: true,
+            contentItems: [{ type: "inputText", text: JSON.stringify(result) }],
+          };
+        },
+        async close() {},
+      }),
+    },
+  };
+  // First response has no permanent ID and the child startup hook never runs.
+  await dispatchPrompt(
+    { hook_event_name: "UserPromptSubmit", session_id: "owner" },
+    options,
+  );
+  assert.equal(getJob(jobId, f.inboxOptions).status, "accepted");
+  allowResolution = true;
+  await Promise.all(
+    Array.from({ length: 3 }, () =>
+      dispatchPrompt(
+        { hook_event_name: "UserPromptSubmit", session_id: "different-owner" },
+        options,
+      ),
+    ),
+  );
+  assert.equal(nativeCreates, 1);
+  assert.equal(getJob(jobId, f.inboxOptions).threadId, threadId);
+  assert.equal(getJob(jobId, f.inboxOptions).status, "completed");
+  assert.ok(receipts >= 2);
 });
 
 test("cloud wake never consumes another project's legacy local queue or retries uncertain native work", async (t) => {

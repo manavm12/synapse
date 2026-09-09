@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { AppToolsClient, appToolJson } from "./app-tools-client.mjs";
 import { waitForApproval, withDeadline } from "./deadline.mjs";
+import { promptHookHealth } from "./hook-health.mjs";
 import {
   activateDestination,
   activeDestinations,
@@ -115,11 +116,27 @@ export async function primaryProject(
 
 export async function savedProject(
   project,
-  { sessionId = process.env.CODEX_THREAD_ID, signal } = {},
+  {
+    sessionId = process.env.CODEX_THREAD_ID,
+    signal,
+    createClient = (options) => new AppToolsClient(options),
+  } = {},
 ) {
   const root = await primaryProject(project, { signal });
-  const client = new AppToolsClient({ signal });
+  const client = createClient({ signal });
   try {
+    const tools = await client.listTools();
+    if (
+      ![
+        "list_projects",
+        "create_thread",
+        "send_message_to_thread",
+        "read_thread",
+      ].every((name) => tools.some((tool) => tool.name === name))
+    )
+      throw new Error(
+        "This Codex installation lacks the native task tools required by Synapse. Update Codex before enabling incoming tasks.",
+      );
     const list = appToolJson(
       await client.callTool("list_projects", {}, { threadId: sessionId }),
     );
@@ -169,6 +186,7 @@ function optionsFor(options = {}) {
     secretStore: options.secretStore ?? new MacOsKeychainStore(),
     createClient: (input) => new ReceiverClient(input),
     resolveRoot: savedProject,
+    hookHealth: promptHookHealth,
     now: Date.now,
     ...options,
   };
@@ -209,9 +227,24 @@ async function verifyConnected(connection, expected, options, signal) {
   return { ...current, identity };
 }
 
-function summary(connection) {
+function summary(connection, input, options) {
+  const hooks = options.hookHealth(
+    input.session_id ?? options.env.CODEX_THREAD_ID,
+    {
+      path: options.registryPath,
+      now: options.now,
+    },
+  );
   return {
-    status: "ready",
+    status: hooks.status === "verified" ? "ready" : "hooks_pending",
+    enrollment_status: "connected",
+    hooks,
+    ...(hooks.status === "verified"
+      ? {}
+      : {
+          message:
+            "Your receiver is connected and the destination is saved, but this plugin's background prompt hook has not been verified in this chat. Review and trust Synapse hooks in Codex, then send a new prompt in a fresh local task. Check setup status there; do not repeat enrollment or run repository CLI commands.",
+        }),
     connection_id: connection.connectionId,
     username: connection.identity.username,
     project_alias: connection.identity.projectAlias,
@@ -284,7 +317,7 @@ export async function prepareSetup(input, dependencies = {}) {
                 signal,
               );
               activateDestination(live, { path: options.registryPath });
-              return summary(live);
+              return summary(live, input, options);
             } catch (error) {
               signal.throwIfAborted();
               return unavailable(connection, error);
@@ -409,7 +442,7 @@ export async function completeSetup(input, dependencies = {}) {
               signal,
             );
             activateDestination(connection, { path: options.registryPath });
-            return summary(connection);
+            return summary(connection, input, options);
           }
           if (!["starting", "pending"].includes(connection?.status))
             throw new Error("Setup was cancelled; reconnect from Synapse");
@@ -486,7 +519,7 @@ export async function completeSetup(input, dependencies = {}) {
                 { path: options.registryPath },
               );
               activateDestination(connection, { path: options.registryPath });
-              return summary(connection);
+              return summary(connection, input, options);
             }
             if (result.status !== "pending" || result.statusCode !== 202)
               throw new Error("Invalid receiver approval response");
@@ -537,7 +570,7 @@ export async function setupStatus(input, dependencies = {}) {
               "Enrollment is valid but no receiving destination is enabled. Select Enable incoming tasks.",
           };
         }
-        return summary(live);
+        return summary(live, input, options);
       },
       { timeoutMs: 15_000, signal: dependencies.signal },
     );

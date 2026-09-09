@@ -19,6 +19,24 @@ function toolResult(value, success = true) {
   };
 }
 
+test("a remote saved project with an identical path cannot capture local incoming work", () => {
+  const remote = {
+    path: "/project",
+    projectId: "remote-project",
+    hostId: "remote-host",
+  };
+  const local = {
+    path: "/project",
+    projectId: "local-project",
+    hostId: "local",
+  };
+  assert.equal(selectProject([remote, local], "/project"), local);
+  assert.throws(
+    () => selectProject([remote], "/project"),
+    /No saved Codex project/,
+  );
+});
+
 function delivery(channel = {}) {
   return {
     jobId: "job-1",

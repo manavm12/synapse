@@ -14,8 +14,57 @@ function openState(path) {
       server_url TEXT NOT NULL, user_id TEXT NOT NULL, project_id TEXT NOT NULL,
       connection_id TEXT NOT NULL UNIQUE, last_check INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY(server_url, user_id));
-    CREATE TABLE IF NOT EXISTS receiver_leases (key TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS receiver_leases (key TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS synapse_prompt_receipts (
+      session_id TEXT PRIMARY KEY, plugin_root TEXT NOT NULL, version TEXT NOT NULL,
+      observed_at INTEGER NOT NULL);`);
   return db;
+}
+
+export function savePromptReceipt(
+  { sessionId, pluginRoot, version },
+  { path = receiverRegistryPath(), now = Date.now } = {},
+) {
+  const db = openState(path);
+  try {
+    db.prepare(`INSERT INTO synapse_prompt_receipts VALUES (?,?,?,?)
+      ON CONFLICT(session_id) DO UPDATE SET plugin_root=excluded.plugin_root,
+      version=excluded.version,observed_at=excluded.observed_at`).run(
+      sessionId,
+      pluginRoot,
+      version,
+      now(),
+    );
+    db.prepare(`DELETE FROM synapse_prompt_receipts WHERE session_id NOT IN
+      (SELECT session_id FROM synapse_prompt_receipts ORDER BY observed_at DESC LIMIT 1000)`).run();
+  } finally {
+    db.close();
+  }
+}
+
+export function readPromptReceipt(
+  sessionId,
+  { path = receiverRegistryPath() } = {},
+) {
+  if (!existsSync(path)) return null;
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    if (
+      !db
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE name='synapse_prompt_receipts'",
+        )
+        .get()
+    )
+      return null;
+    return (
+      db
+        .prepare("SELECT * FROM synapse_prompt_receipts WHERE session_id=?")
+        .get(sessionId) ?? null
+    );
+  } finally {
+    db.close();
+  }
 }
 
 export function offerSetupOnce({ path = receiverRegistryPath() } = {}) {
