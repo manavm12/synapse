@@ -116,7 +116,7 @@ for contracts, failure modes, and deployment requirements.
 ## Limits and validation boundary
 
 This integration does not implement embeddings/semantic search, full transcript
-storage, multi-project membership, an always-on local receiver daemon, or
+storage, multi-project membership, cross-platform background receiving, or
 automatic device handoff. Historical captures predating queue integration need
 an explicit backfill plan. Semantic recall is not guaranteed by deterministic
 engineering tests.
@@ -125,3 +125,7 @@ Local mocks and disposable Postgres tests are distinct from live OAuth/email,
 installed macOS/native compatibility, and paid inference validation. This
 architecture documents the assembled code; it does not certify deployment or
 live-native compatibility.
+
+Conversational messaging extends the original owner-prompt delivery path with
+scoped sender bindings, explicit replies, and a supervised macOS receiver. See
+[Conversations](conversations.md) for its transport and response state model.

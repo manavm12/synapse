@@ -148,8 +148,10 @@ export class ReceiverClient {
     return this.#request("GET", "/receiver/identity");
   }
 
-  async claim(limit = 10) {
-    return this.#request("POST", "/receiver/claim", { body: { limit } });
+  async claim(limit = 10, version = 1) {
+    return this.#request("POST", "/receiver/claim", {
+      body: { limit, ...(version === 2 ? { version } : {}) },
+    });
   }
 
   async confirmImport(messageId, claimToken) {

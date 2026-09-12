@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
-
+import { controlConversation } from "../../plugins/synapse/lib/conversation-control.mjs";
 import {
   getJob,
   queueMessage,
   recoverMessage,
 } from "../../plugins/synapse/lib/inbox.mjs";
+import {
+  receiverServiceStatus,
+  startReceiverService,
+  stopReceiverService,
+} from "../../plugins/synapse/lib/receiver-service.mjs";
 import {
   configureMcpResource,
   createDevelopmentToken,
@@ -36,6 +41,8 @@ function usage() {
     "  npm run synapse -- receiver connect [path] --server-url <https://host> [--no-open]",
     "  npm run synapse -- receiver finish [path]",
     "  npm run synapse -- receiver status [path]",
+    "  npm run synapse -- receiver start|stop",
+    "  npm run synapse -- conversation pause|resume|repair <conversation-id> [--task <task-id>]",
     "  npm run synapse -- receiver disconnect [path]",
     "  npm run synapse -- admin invite --email <email> --username <name> --project <alias>",
     "  npm run synapse -- admin token create --username <name> [--expires-in-days <days>]",
@@ -123,8 +130,27 @@ export function parseArguments(input) {
     if (arguments_.length > 3) throw new Error(usage());
     return { command: "project-connect", alias, project };
   }
+  if (arguments_[0] === "conversation") {
+    const [, action, conversationId, ...extra] = arguments_;
+    if (
+      !["pause", "resume", "repair"].includes(action) ||
+      !conversationId ||
+      (action === "repair"
+        ? extra.length !== 2 || extra[0] !== "--task"
+        : extra.length !== 0)
+    )
+      throw new Error(usage());
+    return {
+      command: "conversation-control",
+      action,
+      conversationId,
+      taskId: extra[1],
+    };
+  }
   if (arguments_[0] === "receiver") {
     const action = arguments_[1];
+    if (["start", "stop"].includes(action) && arguments_.length === 2)
+      return { command: `receiver-${action}` };
     if (action === "connect") {
       const serverIndex = arguments_.indexOf("--server-url");
       const serverUrl = serverIndex === -1 ? null : arguments_[serverIndex + 1];
@@ -236,6 +262,10 @@ export async function main(
     receiverFinish = finishReceiverConnection,
     getReceiverStatus = receiverStatus,
     receiverDisconnect = disconnectReceiver,
+    serviceStart = startReceiverService,
+    serviceStop = stopReceiverService,
+    serviceStatus = receiverServiceStatus,
+    conversationControl = controlConversation,
   } = {},
 ) {
   const parsed = parseArguments(arguments_);
@@ -280,6 +310,21 @@ export async function main(
     );
     return;
   }
+  if (["receiver-start", "receiver-stop"].includes(parsed.command)) {
+    const result = await (parsed.command === "receiver-start"
+      ? serviceStart
+      : serviceStop)({});
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (parsed.command === "conversation-control") {
+    const result = conversationControl({
+      ...parsed,
+      projectRoot: await resolveProjectRoot("."),
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   if (parsed.command === "receiver-connect") {
     const connection = await receiverStart(parsed, {
       openBrowser: parsed.openBrowser,
@@ -311,7 +356,9 @@ export async function main(
           pairingExpiresAt: connection.pairingExpiresAt,
           identity: connection.identity,
         };
-    process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ ...status, receiver: serviceStatus({ projectRoot: connection?.projectRoot }) }, null, 2)}\n`,
+    );
     return;
   }
   if (parsed.command === "receiver-disconnect") {

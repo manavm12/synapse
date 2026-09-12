@@ -5,6 +5,13 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  activateResponse,
+  initializeConversations,
+  recoverOriginBinding,
+  trackResponse,
+} from "./conversation-store.mjs";
+
+import {
   formatDeliveryMarker,
   formatLegacyDeliveryMarker,
 } from "./markers.mjs";
@@ -14,7 +21,7 @@ const ACTIVE_STATUSES = "'routing', 'accepted', 'uncertain'";
 const MAX_TASK_BYTES = 64 * 1024;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export function inboxPath(env = process.env) {
   return resolve(
@@ -59,7 +66,7 @@ function secureDatabaseFiles(path) {
   }
 }
 
-function openInbox(path) {
+export function openInbox(path = inboxPath()) {
   const directory = dirname(path);
   const directoryExisted = existsSync(directory);
   mkdirSync(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
@@ -72,6 +79,20 @@ function openInbox(path) {
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
     PRAGMA busy_timeout = 5000;
+  `);
+  const version = database.prepare("PRAGMA user_version").get().user_version;
+  if (version === SCHEMA_VERSION) {
+    secureDatabaseFiles(path);
+    return database;
+  }
+  if (version > SCHEMA_VERSION) {
+    database.close();
+    throw new Error(
+      "Inbox schema is newer than this plugin; update Synapse before continuing",
+    );
+  }
+  try {
+    database.exec(`BEGIN IMMEDIATE;
     CREATE TABLE IF NOT EXISTS channels (
       id TEXT PRIMARY KEY,
       project_root TEXT NOT NULL,
@@ -134,51 +155,74 @@ function openInbox(path) {
       ON jobs(project_root, status, created_at);
   `);
 
-  for (const [name, definition] of [
-    ["binding_state", "TEXT NOT NULL DEFAULT 'unbound'"],
-    ["client_thread_id", "TEXT"],
-    ["provisioning_job_id", "TEXT"],
-    ["provisioning_delivery_id", "TEXT"],
-    ["provisioning_started_at", "INTEGER"],
-    ["resolved_at", "INTEGER"],
-    ["reconcile_attempts", "INTEGER NOT NULL DEFAULT 0"],
-    ["next_reconcile_at", "INTEGER"],
-    ["reconcile_lease_owner", "TEXT"],
-    ["reconcile_lease_expires_at", "INTEGER"],
-    ["last_reconcile_error", "TEXT"],
-    ["cloud_conversation_id", "TEXT"],
-    ["receiver_installation_id", "TEXT"],
-    ["receiver_user_id", "TEXT"],
-    ["receiver_project_id", "TEXT"],
-  ])
-    ensureColumn(database, "channels", name, definition);
-  for (const [name, definition] of [
-    ["owner_session_id", "TEXT"],
-    ["client_thread_id", "TEXT"],
-    ["observed_thread_id", "TEXT"],
-    ["accepted_at", "INTEGER"],
-    ["observed_at", "INTEGER"],
-    ["updated_at", "INTEGER"],
-    ["last_error", "TEXT"],
-    ["marker_version", "INTEGER NOT NULL DEFAULT 1"],
-    ["previous_delivery_marker", "TEXT"],
-    ["source", "TEXT NOT NULL DEFAULT 'local'"],
-    ["cloud_conversation_id", "TEXT"],
-    ["cloud_sequence", "INTEGER"],
-    ["content_hash", "TEXT"],
-    ["sender_user_id", "TEXT"],
-    ["sender_username", "TEXT"],
-    ["recipient_user_id", "TEXT"],
-    ["recipient_project_id", "TEXT"],
-    ["receiver_installation_id", "TEXT"],
-    ["cloud_import_state", "TEXT"],
-    ["claim_token", "TEXT"],
-    ["cloud_lease_expires_at", "TEXT"],
-    ["native_mutation_state", "TEXT"],
-  ])
-    ensureColumn(database, "jobs", name, definition);
+    for (const [name, definition] of [
+      ["binding_state", "TEXT NOT NULL DEFAULT 'unbound'"],
+      ["client_thread_id", "TEXT"],
+      ["provisioning_job_id", "TEXT"],
+      ["provisioning_delivery_id", "TEXT"],
+      ["provisioning_started_at", "INTEGER"],
+      ["resolved_at", "INTEGER"],
+      ["reconcile_attempts", "INTEGER NOT NULL DEFAULT 0"],
+      ["next_reconcile_at", "INTEGER"],
+      ["reconcile_lease_owner", "TEXT"],
+      ["reconcile_lease_expires_at", "INTEGER"],
+      ["last_reconcile_error", "TEXT"],
+      ["cloud_conversation_id", "TEXT"],
+      ["receiver_installation_id", "TEXT"],
+      ["receiver_user_id", "TEXT"],
+      ["receiver_project_id", "TEXT"],
+      ["binding_role", "TEXT NOT NULL DEFAULT 'recipient'"],
+      ["pause_reason", "TEXT"],
+    ])
+      ensureColumn(database, "channels", name, definition);
+    for (const [name, definition] of [
+      ["owner_session_id", "TEXT"],
+      ["client_thread_id", "TEXT"],
+      ["observed_thread_id", "TEXT"],
+      ["accepted_at", "INTEGER"],
+      ["observed_at", "INTEGER"],
+      ["updated_at", "INTEGER"],
+      ["last_error", "TEXT"],
+      ["marker_version", "INTEGER NOT NULL DEFAULT 1"],
+      ["previous_delivery_marker", "TEXT"],
+      ["source", "TEXT NOT NULL DEFAULT 'local'"],
+      ["cloud_conversation_id", "TEXT"],
+      ["cloud_sequence", "INTEGER"],
+      ["content_hash", "TEXT"],
+      ["sender_user_id", "TEXT"],
+      ["sender_username", "TEXT"],
+      ["recipient_user_id", "TEXT"],
+      ["recipient_project_id", "TEXT"],
+      ["receiver_installation_id", "TEXT"],
+      ["cloud_import_state", "TEXT"],
+      ["claim_token", "TEXT"],
+      ["cloud_lease_expires_at", "TEXT"],
+      ["native_mutation_state", "TEXT"],
+      ["protocol_version", "INTEGER NOT NULL DEFAULT 1"],
+      ["disposition", "TEXT NOT NULL DEFAULT 'continue'"],
+      ["in_reply_to_message_id", "TEXT"],
+      ["recipient_origin_request_id", "TEXT"],
+    ])
+      ensureColumn(database, "jobs", name, definition);
 
-  database.exec(`
+    if (database.prepare("PRAGMA user_version").get().user_version < 4) {
+      database.exec(`DROP INDEX IF EXISTS channels_thread_unique;
+      ALTER TABLE receiver_event_outbox RENAME TO receiver_event_outbox_v3;
+      CREATE TABLE receiver_event_outbox (
+        event_id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES jobs(id),
+        kind TEXT NOT NULL, occurred_at TEXT NOT NULL, error_code TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, created_at INTEGER NOT NULL
+      );
+      INSERT INTO receiver_event_outbox SELECT * FROM receiver_event_outbox_v3;
+      DROP TABLE receiver_event_outbox_v3;
+      CREATE UNIQUE INDEX receiver_event_outbox_kind ON receiver_event_outbox(message_id,kind,COALESCE(error_code,''));
+      UPDATE channels SET binding_state='missing', last_reconcile_error='reply_route_missing'
+        WHERE cloud_conversation_id IS NOT NULL AND thread_id IS NULL AND client_thread_id IS NULL
+          AND (SELECT min(cloud_sequence) FROM jobs WHERE jobs.channel_id=channels.id)>1;
+    `);
+    }
+    initializeConversations(database);
+    database.exec(`
     UPDATE channels
     SET binding_state = CASE WHEN thread_id IS NULL THEN 'unbound' ELSE 'ready' END
     WHERE binding_state IS NULL OR (thread_id IS NOT NULL AND binding_state = 'unbound');
@@ -189,7 +233,8 @@ function openInbox(path) {
     CREATE UNIQUE INDEX IF NOT EXISTS channels_client_thread_unique
       ON channels(client_thread_id) WHERE client_thread_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS channels_thread_unique
-      ON channels(thread_id) WHERE thread_id IS NOT NULL;
+      ON channels(thread_id) WHERE thread_id IS NOT NULL AND cloud_conversation_id IS NULL;
+    CREATE INDEX IF NOT EXISTS channels_cloud_thread ON channels(thread_id) WHERE cloud_conversation_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_active_channel
       ON jobs(channel_id) WHERE status IN (${ACTIVE_STATUSES});
     CREATE UNIQUE INDEX IF NOT EXISTS jobs_cloud_conversation_sequence
@@ -197,11 +242,17 @@ function openInbox(path) {
       WHERE cloud_conversation_id IS NOT NULL;
     PRAGMA user_version = ${SCHEMA_VERSION};
   `);
-  secureDatabaseFiles(path);
-  return database;
+    database.exec("COMMIT");
+    secureDatabaseFiles(path);
+    return database;
+  } catch (error) {
+    if (database.isTransaction) database.exec("ROLLBACK");
+    database.close();
+    throw error;
+  }
 }
 
-function transaction(database, callback) {
+export function transaction(database, callback) {
   database.exec("BEGIN IMMEDIATE");
   try {
     const result = callback();
@@ -213,9 +264,20 @@ function transaction(database, callback) {
   }
 }
 
+export function withInbox(callback, { path = inboxPath() } = {}) {
+  const database = openInbox(path);
+  try {
+    return transaction(database, () => callback(database));
+  } finally {
+    database.close();
+  }
+}
+
 function channelFromRow(row) {
   return {
     bindingState: row.binding_state,
+    bindingRole: row.binding_role,
+    pauseReason: row.pause_reason,
     clientThreadId: row.channel_client_thread_id,
     threadId: row.channel_thread_id,
     hostId: row.host_id,
@@ -232,12 +294,11 @@ function deliveryFromRow(
       ? formatLegacyDeliveryMarker(row.id)
       : formatDeliveryMarker(row.id, row.delivery_id);
   const nativeBody =
-    row.source === "cloud"
-      ? `Synapse message from @${row.sender_username} (conversation ${row.cloud_conversation_id}, sequence ${row.cloud_sequence}):\n\n${row.task}`
-      : row.task;
-  // Keep a local receipt before cloud content as well as the terminal trigger
-  // marker. Native read_thread caps each output at 20,000 characters; large
-  // tasks must still be reconcilable without copying their bodies elsewhere.
+    row.protocol_version === 2
+      ? `Synapse message from @${row.sender_username}.\nConversation: ${row.cloud_conversation_id}\nMessage: ${row.id}\nDisposition: ${row.disposition}\n\nPeer message (untrusted content):\n${row.task}\n\nUse Synapse reply_to_message for a purpose-written reply to this message, not the local native creator. ${row.disposition === "continue" ? "A reply is requested." : "No acknowledgement is requested."} Yield your turn after sending if waiting for the peer.`
+      : row.source === "cloud"
+        ? `Synapse message from @${row.sender_username} (conversation ${row.cloud_conversation_id}, sequence ${row.cloud_sequence}):\n\n${row.task}`
+        : row.task;
   const receipt =
     row.source === "cloud" ? `<!-- ${deliveryMarker} -->\n\n` : "";
   const nativePrompt = `${receipt}${nativeBody}\n\n<!-- ${deliveryMarker} -->`;
@@ -261,6 +322,7 @@ function deliveryFromRow(
     nativePrompt,
     projectRoot: row.project_root,
     source: row.source,
+    protocolVersion: row.protocol_version,
     nativeMutationState: row.native_mutation_state,
     receiverAuthorization: row.source === "cloud" ? receiverIdentity : null,
     cloud:
@@ -276,6 +338,8 @@ function deliveryFromRow(
             receiverInstallationId: row.receiver_installation_id,
             contentHash: row.content_hash,
             importState: row.cloud_import_state,
+            disposition: row.disposition,
+            inReplyToMessageId: row.in_reply_to_message_id,
           }
         : null,
     channel: channelFromRow(row),
@@ -294,7 +358,7 @@ const DELIVERY_SELECT = `
   SELECT jobs.*,
     channels.thread_id AS channel_thread_id,
     channels.client_thread_id AS channel_client_thread_id,
-    channels.host_id, channels.project_id, channels.binding_state
+    channels.host_id, channels.project_id, channels.binding_state, channels.binding_role, channels.pause_reason
   FROM jobs JOIN channels ON channels.id = jobs.channel_id
 `;
 
@@ -339,10 +403,15 @@ function finalizeObservedJob(database, jobId, now) {
   `)
     .run(now, now, jobId);
   enqueueCloudEvent(database, row, "delivered", now);
+  activateResponse(
+    database,
+    { messageId: row.id, sessionId: row.observed_thread_id },
+    now,
+  );
   return database.prepare(`${DELIVERY_SELECT} WHERE jobs.id = ?`).get(jobId);
 }
 
-function enqueueCloudEvent(
+export function enqueueCloudEvent(
   database,
   job,
   kind,
@@ -406,6 +475,31 @@ export function queueMessage(
   }
 }
 
+function storeConversationMetadata(database, message, channel) {
+  database
+    .prepare(`UPDATE jobs SET protocol_version=?, disposition=?, in_reply_to_message_id=?,
+      recipient_origin_request_id=? WHERE id=?`)
+    .run(
+      message.version ?? 1,
+      message.disposition ?? "continue",
+      message.inReplyToMessageId ?? null,
+      message.recipientOriginRequestId ?? null,
+      message.messageId,
+    );
+  if (
+    message.version === 2 &&
+    message.sequence !== 1 &&
+    !channel.thread_id &&
+    !channel.client_thread_id
+  ) {
+    database
+      .prepare(
+        "UPDATE channels SET binding_state='missing', last_reconcile_error='reply_route_missing' WHERE id=?",
+      )
+      .run(channel.id);
+  }
+}
+
 export function stageCloudMessage(
   { message, identity, projectRoot, channelId },
   { path = inboxPath(), now = Date.now } = {},
@@ -419,6 +513,8 @@ export function stageCloudMessage(
   try {
     return transaction(database, () => {
       const timestamp = now();
+      if (message.version === 2)
+        recoverOriginBinding(database, { identity, message }, timestamp);
       database
         .prepare(`INSERT INTO channels (
           id, project_root, cloud_conversation_id, receiver_installation_id,
@@ -448,7 +544,7 @@ export function stageCloudMessage(
         .prepare("SELECT * FROM jobs WHERE id = ?")
         .get(message.messageId);
       if (existing) {
-        const exact =
+        const exactPayload =
           existing.source === "cloud" &&
           existing.channel_id === channelId &&
           existing.project_root === projectRoot &&
@@ -461,8 +557,26 @@ export function stageCloudMessage(
           existing.recipient_user_id === message.recipientUserId &&
           existing.recipient_project_id === message.recipientProjectId &&
           existing.receiver_installation_id === identity.installationId;
-        if (!exact)
+        // A restarted, upgraded receiver may reclaim an unconfirmed v1 import
+        // as v2. Enrich only untouched staged work, preserving exact payload
+        // and tenant checks and refusing downgrades or changes after routing.
+        const upgrade =
+          existing.protocol_version === 1 &&
+          message.version === 2 &&
+          existing.cloud_import_state === "staged" &&
+          existing.status === "staged" &&
+          existing.delivery_id === null &&
+          existing.native_mutation_state === null;
+        const exactProtocol =
+          existing.protocol_version === (message.version ?? 1) &&
+          existing.disposition === (message.disposition ?? "continue") &&
+          existing.in_reply_to_message_id ===
+            (message.inReplyToMessageId ?? null) &&
+          existing.recipient_origin_request_id ===
+            (message.recipientOriginRequestId ?? null);
+        if (!exactPayload || (!upgrade && !exactProtocol))
           throw new Error(`Conflicting cloud payload for ${message.messageId}`);
+        if (upgrade) storeConversationMetadata(database, message, channel);
         if (existing.cloud_import_state === "staged") {
           database
             .prepare(`UPDATE jobs SET claim_token = ?, cloud_lease_expires_at = ?,
@@ -511,6 +625,7 @@ export function stageCloudMessage(
           timestamp,
           timestamp,
         );
+      storeConversationMetadata(database, message, channel);
       database
         .prepare(`INSERT INTO receiver_import_outbox (
           message_id, claim_token, created_at, updated_at
@@ -585,6 +700,13 @@ export function confirmCloudImport(
       database
         .prepare("DELETE FROM receiver_import_outbox WHERE message_id = ?")
         .run(messageId);
+      const channel = database
+        .prepare("SELECT binding_state FROM channels WHERE id=?")
+        .get(job.channel_id);
+      if (channel.binding_state === "missing")
+        enqueueCloudEvent(database, job, "needs_attention", now(), {
+          errorCode: "reply_route_missing",
+        });
       return { messageId, status: "pending", duplicate: false };
     });
   } finally {
@@ -736,6 +858,8 @@ export function reserveNextMessage(
         WHERE jobs.project_root = ? AND jobs.owner_session_id = ?
           AND (? IS NULL OR jobs.source = ?)
           AND jobs.status = 'routing' AND jobs.lease_expires_at <= ?
+          AND channels.pause_reason IS NULL AND channels.binding_state NOT IN ('missing','uncertain')
+            AND NOT EXISTS (SELECT 1 FROM conversation_sessions session WHERE session.session_id=channels.thread_id AND session.auto_paused=1)
           AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
             AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
             AND jobs.recipient_project_id = ?))
@@ -758,11 +882,21 @@ export function reserveNextMessage(
           .prepare(`${DELIVERY_SELECT}
           WHERE jobs.project_root = ? AND jobs.status = 'pending'
             AND (? IS NULL OR jobs.source = ?)
+            AND channels.pause_reason IS NULL AND channels.binding_state NOT IN ('missing','uncertain')
+            AND NOT EXISTS (SELECT 1 FROM conversation_sessions session WHERE session.session_id=channels.thread_id AND session.auto_paused=1)
             AND (jobs.source = 'local' OR (jobs.cloud_import_state = 'confirmed'
               AND jobs.receiver_installation_id = ? AND jobs.recipient_user_id = ?
               AND jobs.recipient_project_id = ?))
             AND NOT EXISTS (SELECT 1 FROM jobs AS active
               WHERE active.channel_id = jobs.channel_id AND active.status IN (${ACTIVE_STATUSES}))
+            AND NOT EXISTS (SELECT 1 FROM jobs active JOIN channels busy ON busy.id=active.channel_id
+              WHERE channels.thread_id IS NOT NULL AND busy.thread_id=channels.thread_id
+                AND active.status IN (${ACTIVE_STATUSES}))
+            AND NOT EXISTS (SELECT 1 FROM conversation_responses response
+              JOIN jobs response_job ON response_job.id=response.message_id
+              JOIN channels response_channel ON response_channel.id=response_job.channel_id
+              WHERE response.session_id=channels.thread_id AND response_channel.pause_reason IS NULL
+                AND response.status IN ('queued','active','repair','resume_pending','resume_queued','resume_uncertain'))
             AND NOT EXISTS (SELECT 1 FROM jobs AS earlier
               WHERE jobs.source = 'cloud' AND earlier.source = 'cloud'
                 AND earlier.channel_id = jobs.channel_id
@@ -833,7 +967,9 @@ export function acceptProvisioning(
       if (job.client_thread_id && job.client_thread_id !== clientThreadId) {
         throw new Error(`Conflicting client task for job ${jobId}`);
       }
-      if (!["routing", "accepted", "completed"].includes(job.status)) {
+      if (
+        !["routing", "accepted", "completed", "uncertain"].includes(job.status)
+      ) {
         throw new Error(
           `Job ${jobId} cannot accept provisioning from ${job.status}`,
         );
@@ -910,7 +1046,9 @@ export function observeProvisionedThread(
       if (!job) throw new Error(`Unknown job: ${jobId}`);
       if (job.delivery_id !== deliveryId)
         throw new Error(`Stale delivery for job ${jobId}`);
-      if (!["routing", "accepted", "completed"].includes(job.status)) {
+      if (
+        !["routing", "accepted", "completed", "uncertain"].includes(job.status)
+      ) {
         throw new Error(
           `Job ${jobId} cannot observe provisioning from ${job.status}`,
         );
@@ -1054,6 +1192,11 @@ export function acknowledgeMessage(
         lease_expires_at = NULL, completed_at = COALESCE(completed_at, ?), updated_at = ?,
         last_error = NULL WHERE id = ?`)
         .run(threadId, threadId, timestamp, timestamp, timestamp, jobId);
+      database
+        .prepare(
+          "UPDATE conversation_responses SET session_id=COALESCE(session_id, ?) WHERE message_id=?",
+        )
+        .run(threadId, jobId);
       enqueueCloudEvent(database, job, "delivered", timestamp);
       return {
         jobId,
@@ -1215,6 +1358,18 @@ export function markNativeMutationIssued(
           `Cloud job ${jobId} has no durable native mutation intent`,
         );
       }
+      const channel = database
+        .prepare("SELECT * FROM channels WHERE id=?")
+        .get(job.channel_id);
+      if (
+        channel.pause_reason ||
+        ["missing", "uncertain"].includes(channel.binding_state)
+      ) {
+        throw new Error(
+          "Conversation delivery is paused or its binding needs repair.",
+        );
+      }
+      trackResponse(database, job, channel.thread_id, now());
       database
         .prepare(`UPDATE jobs SET native_mutation_state = 'issued', updated_at = ?
           WHERE id = ?`)

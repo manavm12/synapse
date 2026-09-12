@@ -266,6 +266,8 @@ test("acceptance followed by child observation finalizes and releases the channe
   assert.equal(followUp.jobId, "job-2");
   assert.deepEqual(followUp.channel, {
     bindingState: "ready",
+    bindingRole: "recipient",
+    pauseReason: null,
     clientThreadId: "client-1",
     threadId: "thread-1",
     hostId: "local",

@@ -56,7 +56,7 @@ export function validateCloudMessage(value, identity) {
     !value ||
     Array.isArray(value) ||
     typeof value !== "object" ||
-    value.version !== 1
+    ![1, 2].includes(value.version)
   ) {
     throw new Error("Invalid cloud message version");
   }
@@ -92,8 +92,28 @@ export function validateCloudMessage(value, identity) {
       "Cloud message recipient does not match the receiver identity",
     );
   }
+  let conversation = {};
+  if (value.version === 2) {
+    if (!["continue", "complete", "needs_user"].includes(value.disposition))
+      throw new Error("Invalid message disposition");
+    conversation = {
+      disposition: value.disposition,
+      inReplyToMessageId:
+        value.in_reply_to_message_id === null
+          ? null
+          : requiredUuid(value.in_reply_to_message_id, "reply ID"),
+      recipientOriginRequestId:
+        value.recipient_origin_request_id === null
+          ? null
+          : requiredUuid(
+              value.recipient_origin_request_id,
+              "origin request ID",
+            ),
+    };
+  }
   return {
-    version: 1,
+    version: value.version,
+    ...conversation,
     messageId: requiredUuid(value.message_id, "message ID"),
     conversationId: requiredUuid(value.conversation_id, "conversation ID"),
     sequence,
