@@ -3,9 +3,9 @@
 - Branch: `codex/conversational-messaging`
 - Human owner: `Manav Mehta`
 - Active agent: `Codex` in `Review Synapse functionality`
-- Base reviewed: `bf48aec` (current main at takeover)
+- Base reviewed: `a50f2222336e650418a9531cdd51e2ba03e2bb9b` (latest main integrated for merge)
 - Tested and deployed source: `6c7800ca1cf547100b2f65bcc2a41b2852559695`
-- Status: `waiting for live acceptance`
+- Status: `user authorized merge; combined local checks passed, CI pending`
 
 ## Goal
 
@@ -60,8 +60,35 @@ test when controlled accounts and native queue access are available.
 
 ## Remaining work
 
-1. Complete the required live two-account desktop smoke test when prerequisites
-   are available. Do not merge based solely on automated fixture results.
+1. Pass the combined local/CI gates and merge PR13, as explicitly instructed by
+   the user after discussing the still-unverified live routing.
+2. Complete the live two-account desktop smoke test as a separate follow-up.
+   Merge authorization does not establish that this test passed.
+
+## Final integration for merge — 12 September 2026
+
+- User explicitly instructed: resolve PR13 conflicts and merge. GitHub reported
+  the PR mergeable; merging latest main `a50f222` into the PR branch applied
+  cleanly with no conflict markers or manual conflict resolutions required.
+- Retained main's PR20 organizer implementation without edits, and retained
+  PR13's reviewed conversation implementation and regression fixes.
+- Combined release check: 300 passed, zero failed, zero skipped against a fresh
+  disposable PostgreSQL 17 database. Coverage: 96.05% lines, 87.42% branches,
+  94.39% functions. Audit: zero vulnerabilities. Plugin validation and production
+  Docker build passed. The disposable database was removed after validation.
+- Verified the later local recipient task called `reply_to_message` and its
+  local send receipt was `sent`; the inbound response obligation was `replied`.
+  Reply `a241fc65-05f1-448c-b7c1-34249f49321f` remained queued in the cloud at
+  the last read. The verified local binding points to the original recipient
+  task; remote return delivery and busy-task ordering remain unverified.
+- Main's automatic HTTP deployment at `2026-09-12T07:52:33.608Z`, deployment
+  `274ba239-7cc1-4ac2-8ecf-4d3461d6081f`, replaced the manual PR13 upload with
+  `a50f222`, which lacks v2 claims and conversation tools. Merging the combined
+  PR restores those APIs to the tracked main source instead of another upload.
+- The separate organizer workstream subsequently enabled its continuous
+  worker with the user's approval. Preserve its configuration and PR20 code.
+  Main merges can trigger the existing normal deployments; this workstream
+  does not change worker settings, model, credentials, or queue history.
 
 ## Authorized rollout — 12 September 2026
 
