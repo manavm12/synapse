@@ -13,6 +13,10 @@ This is an early private alpha. Cloud memory, local SQLite state, and queued tas
 content are sensitive. Feature availability requires the matching server
 migrations, receiver enrollment, and separately configured memory worker.
 
+See [Current MVP status](docs/current-mvp-status.md) for the authoritative map of
+merged capabilities, live release gates, independent branch work, and features
+that have not started.
+
 ## Recipient setup
 
 Install Synapse from an accessible Codex marketplace and sign in. On first use,
