@@ -2,53 +2,61 @@
 
 - Branch: `shobhit/windows-test-fixes`
 - Human owner: `Shobhit Goel`
-- Active agent: `unassigned` -- Codex checkpointed and pushed; Claude may take
-  ownership after fetching this branch.
+- Active agent: `unassigned`
 - Base reviewed: `fa57da5`
-- Last checkpoint: commit `8e5fcbb`
-- Status: `ready for next agent` -- Windows/macOS/Linux implementation is
-  checkpointed below; finish review, docs, and full verification before merge.
+- Last checkpoint: `e356cc8`
+- Status: `ready for next agent` -- Claude independently verified Codex's
+  Phase 3 work, fixed a real regression it introduced via the `main` merge,
+  and completed the docs cleanup. See "Phase 4" below before doing anything
+  else; do not re-verify what it already covers.
 
 ## START HERE for the next agent
 
-Fetch origin and check out `shobhit/windows-test-fixes`. The previous Codex
-checkpoint added native cross-platform credential stores, browser launching,
-background receiver service adapters, Windows command overrides for every
-merged conversation hook, and a Windows Git-path normalization fix. Read the
-diff and run the focused tests before changing anything. The work is committed
-and pushed, but the user asked for a continuation checkpoint rather than a
-finished MVP claim.
+Fetch origin and check out `shobhit/windows-test-fixes` at `e356cc8`. Two
+things happened after Codex's Phase 3 checkpoint (commit `3ad2c13`), covered
+in full under "Phase 4" below -- read that section, don't re-derive it:
 
-Important review items:
+1. Claude independently reviewed Codex's cross-platform work (credential
+   stores, receiver service, hook launcher, path fix) line by line and found
+   it sound. Verified, not assumed.
+2. Merging `main` into this branch left one real regression: a stale
+   `scripts/validate-plugin.mjs` assertion still expecting the pre-fix
+   `/bin/sh` literal on hooks brought in from `main`'s conversational-
+   messaging feature. Fixed, plus 8 files of formatting drift (cosmetic only,
+   verified with a whitespace-insensitive diff).
+3. The docs cleanup Codex flagged as outstanding is now done: README,
+   `docs/setup.md`, `docs/receiver.md`, `docs/architecture.md`,
+   `docs/conversations.md`, `docs/cloud-memory-architecture.md`, and the
+   setup skill no longer say Mac-only. One of those was a real functional
+   fix, not just prose: the setup skill's own manual-invocation instructions
+   still told an agent to run bare `sh <run-node.sh>` unconditionally on any
+   platform -- the exact PATH problem just fixed for `hooks.json` -- now
+   branches to the PowerShell launcher on Windows. Deliberately left
+   untouched: `docs/cloud-memory-operations.md`,
+   `docs/cloud-messaging-plan.md`, `docs/implementation-coordination.md`,
+   `docs/integration-validation.md`, `docs/plugin-setup-validation.md` --
+   these are dated validation/planning logs of what was actually tested and
+   when; rewriting them would misrepresent history, not fix stale prose.
 
-- `receiver-secrets.mjs`: macOS Keychain remains unchanged in behavior;
-  Windows uses DPAPI-protected files via `windows-secret.ps1`; Linux uses
-  `secret-tool`. There is no plaintext fallback. Add/verify platform-specific
-  integration coverage as available.
-- `receiver-service.mjs`: macOS LaunchAgent remains; Windows uses a per-user
-  Task Scheduler task through `manage-receiver-task.ps1`; Linux uses a systemd
-  user unit. Review quoting and test behavior on native OSes.
-- `hooks/hooks.json`: all conversation and wake hooks now have
-  `commandWindows` PowerShell overrides. Validate the manifest and installed
-  plugin.
-- `dispatch.mjs`: `localQueueRoot` now normalizes Git's slash-form absolute
-  Windows paths with `resolve`, fixing a real skipped-routing failure.
+Current accurate test count: **284 pass / 0 fail / 12 skipped** (296 total).
+The handoff's earlier "219/0/16" and "65/65 focused suite" figures both
+predate the `main` merge and are stale -- don't cite them.
+
+Important review items still open (Codex's original list, still accurate):
+
 - `test/client/hook.test.mjs` and `test/plugin/setup.test.mjs`: former
   hardcoded `/bin/sh` skips are now platform-aware; genuine POSIX signal,
   shebang, and permission-bit skips may remain and should be reviewed
-  individually.
-- `docs/setup.md`, `docs/receiver.md`, README, architecture, and the setup
-  skill still contain current Mac-only wording and need updating before merge.
+  individually (see "Remaining work" item 2 below -- unchanged from before).
+- `receiver-secrets.mjs` / `receiver-service.mjs`: reviewed and sound (see
+  Phase 4), but only exercised via mocked `spawnImpl`/`run` in tests plus the
+  one live hook-execution marker test -- a real DPAPI round-trip and a real
+  Task Scheduler registration on a genuine Windows session have not been
+  independently exercised end-to-end.
 
 Do not run metered live `codex exec` tests without fresh user approval. Do not
 share this worktree with another agent while working; claim it by changing the
 Active agent line, then unassign it again before handing off.
-
-Checkpoint verification: the focused cross-platform suite passed 65/65:
-`node --test test/client/open-url.test.mjs test/client/receiver-service.test.mjs
-test/client/receiver.test.mjs test/client/hook.test.mjs test/plugin/setup.test.mjs`.
-The repository-wide coverage gate was not rerun at this checkpoint. The docs
-and setup-skill Mac-only wording remain intentionally listed as next work.
 
 **The Windows hook blocker is resolved.** Do not repeat the metered live
 reproduction unless a regression appears. The conclusive findings were:
@@ -263,6 +271,60 @@ Followed the Appendix reproduction literally with the unconditional marker:
   removed from `prompt-memory.mjs`, and both external diagnostic marker files
   were deleted.
 
+### Phase 4 (Claude, independent review + docs cleanup)
+
+Did not repeat Codex's live testing (no reason to -- treated `hook-executed-
+marker.txt` proof as settled). Instead verified everything else and did the
+work Codex's own handoff had explicitly left open:
+
+- Reinstalled dependencies (`npm ci --ignore-scripts`) and ran the full
+  suite fresh. Found **295 tests, 1 real failure**, not the "219/0/16" or
+  "65/65 focused" figures either checkpoint had cited -- both predate the
+  `origin/main` merge Codex did in this branch, which brought in unrelated
+  organizer/conversational-messaging commits with their own new tests.
+- The one failure: `test/plugin/validator.test.mjs`, "PreToolUse must run
+  synchronous conversation tracking." Root cause: `scripts/validate-plugin.mjs`
+  still asserted the literal pre-fix string
+  `` `/bin/sh "${PLUGIN_ROOT}/scripts/run-node.sh" "${PLUGIN_ROOT}/hooks/conversation.mjs"` ``
+  for the `PreToolUse`/`PostToolUse`/`SessionStart`/`UserPromptSubmit`/`Stop`/
+  `Interrupt` conversation-tracking hooks that came in from `main`. The actual
+  `hooks.json` was already correct (uses `sh` + has `commandWindows`
+  everywhere) -- this was purely a stale assertion, not a real hook bug.
+  Fixed the string and added the missing `commandWindows` assertion,
+  consistent with every other check in that file.
+- `npm run format:check` also failed: 8 files (`open-url.mjs`,
+  `plugin-setup.mjs`, `receiver-secrets.mjs`, `receiver-service.mjs`, plus
+  test files) had accumulated dense, minified-looking code (multiple
+  statements per line) that doesn't match this repo's Biome style. Ran
+  `npm run format` and verified with `git diff -w` plus a full test rerun
+  (identical 284/0/12 before and after) that this was purely cosmetic
+  reflow, zero logic change.
+- Read `receiver-secrets.mjs` (all three credential stores),
+  `windows-secret.ps1`, `manage-receiver-task.ps1`, `receiver-service.mjs`
+  (all three service backends), `run-node.ps1`, `check-runtime.mjs`, and the
+  `dispatch.mjs` path fix line by line. Assessment: sound. Specifically
+  checked `windows-secret.ps1` uses `ProtectedData`/DPAPI with
+  `DataProtectionScope.CurrentUser` (matches Keychain's per-user trust model)
+  and per-service/account entropy (prevents cross-account blob reuse) --
+  correct, idiomatic usage. Confirmed `createReceiverSecretStore()` is
+  actually wired into every call site that used to hardcode
+  `MacOsKeychainStore` (`native-router.mjs`, `plugin-setup.mjs`,
+  `receiver-enrollment.mjs` x3, `receiver-sync.mjs`), not just defined and
+  unused. Confirmed real (mocked-spawn) tests exist for the new stores,
+  including "never puts credentials in argv" checks.
+- Completed the docs cleanup (see the new commit and "START HERE" above for
+  the full list and the one real functional fix inside it, not just prose,
+  in the setup skill).
+- Full final verification after all of the above: `npm run lint`,
+  `npm run format:check`, `npm run validate:plugin`, and `npm test` all
+  pass -- 284 pass / 0 fail / 12 skipped.
+
+What Phase 4 did **not** do, and is still open: no new live `codex exec`
+testing (the hook-execution question is settled; the *separate* native
+app-tools-pipe/native-task-creation question is not -- see "Remaining work"
+item 4), no real DPAPI/Task-Scheduler/systemd exercise on an actual second
+machine, no un-skipping of the 6 `needsPosix*`/`0o600` tests.
+
 ## Decisions and invariants
 
 - Fix path/URL/IPC-address/shell-invocation handling to be genuinely
@@ -291,12 +353,14 @@ Followed the Appendix reproduction literally with the unconditional marker:
 
 ## Remaining work
 
-1. **Review and merge the proven Windows hook fix.** Recheck PR #18's Linux
-   CI after this checkpoint. The registered throwaway project remains at
+1. **Review and merge.** Recheck PR #18's CI after this checkpoint (`e356cc8`).
+   Docs are now done (see "Phase 4"/"START HERE"); nothing blocks merge on
+   that front anymore. The registered throwaway project remains at
    `C:\Users\DELL\AppData\Local\Temp\synapse-native-test-repo` under alias
-   `synapselivetest`; it is harmless to leave for a future regression test.
+   `synapselivetest`; harmless to leave for a future regression test.
 2. **Un-skip the 6 `needsPosix*`/`0o600` test scenarios individually now
-   that a real `sh` fix exists** -- not a blanket find/replace:
+   that a real `sh` fix exists** -- not a blanket find/replace. Unchanged
+   from Codex's original assessment, still accurate:
    - The `/bin/sh`-hardcoded test harnesses (`setup.test.mjs` x4,
      `hook.test.mjs` x1) invoke `/bin/sh` directly rather than through
      `hooks.json`; changing them to bare `sh` is usually right, but one
@@ -316,28 +380,46 @@ Followed the Appendix reproduction literally with the unconditional marker:
      Synapse-side fix; revisit only if Windows-side equivalents (ACL-based
      file protection, `taskkill`-based termination) become an actual
      project goal.
-3. **The credential-storage question is still fully open**: `MacOsKeychainStore`
-   (`plugins/synapse/lib/receiver-secrets.mjs`) explicitly throws on any
-   non-darwin platform with "no plaintext fallback is available." A Windows
-   equivalent (Credential Manager/DPAPI via a native module or `cmdkey`, or
-   Linux Secret Service/libsecret) has not been designed or started.
+3. **Credential storage is implemented (Phase 3, reviewed sound in Phase 4)
+   but not independently live-verified.** `createReceiverSecretStore()`
+   selects `WindowsDpapiStore`/`LinuxSecretServiceStore`/`MacOsKeychainStore`
+   per platform and is wired into every real call site. What's proven: the
+   code is correct on inspection (proper DPAPI API usage, per-account
+   entropy, atomic writes) and unit-tested with a mocked `spawnImpl`. What's
+   not proven: an actual `set`/`get`/`delete` round-trip through the real
+   `windows-secret.ps1` on a genuine Windows session, or the real
+   `manage-receiver-task.ps1` Task Scheduler registration/start/stop cycle.
+   Neither was exercised live in Phase 3 or 4 -- only hook execution was.
 4. **Whether the native app-tools pipe itself works cross-platform is still
-   unverified** -- distinct from the `sh` question. GitHub issues found
-   during research describe Windows-specific flakiness in Codex's
-   "Computer Use" native pipe subsystem; whether that affects the different
-   `codex_app` project/task-management namespace this plugin uses (vs.
-   screen-automation) is unknown. Needs the conclusive live test in item 1.
+   unverified** -- distinct from the `sh`/hook-execution question, which
+   *is* resolved. This is specifically about native task creation/delivery
+   (`codex_app` namespace: `list_projects`, `create_thread`,
+   `send_message_to_thread`), not about whether a hook process can launch.
+   GitHub issues found during earlier research describe Windows-specific
+   flakiness in Codex's separate "Computer Use" native pipe subsystem;
+   whether that affects this different namespace is unknown. Needs a live
+   test analogous to the hook-execution one: queue a real message, trigger
+   dispatch, and verify an actual native task gets created on Windows.
 
 ## Verification
 
+Current (Phase 4, `e356cc8`), reproduced independently after the `main` merge:
+
 - `npm run lint` -- passed
 - `npm run format:check` -- passed
-- `npm run validate:plugin` -- passed (this validator itself needed 3 of the
-  fixes in this commit, since it hardcoded `/bin/sh` in its own checks)
-- `npm test` (no `TEST_DATABASE_URL`) -- 219 pass / 0 fail / 16 skipped
-  (unchanged from the Phase-1 checkpoint; this phase's fixes touch
-  real-Windows-Codex behavior the fixture suite can't exercise, so it
-  correctly shows no change in local test counts)
+- `npm run validate:plugin` -- passed
+- `npm test` (no `TEST_DATABASE_URL`) -- **284 pass / 0 fail / 12 skipped**
+  (296 total). This is the current accurate count. Earlier figures in this
+  handoff's history ("219/0/16", "65/65 focused suite") predate the `main`
+  merge and are stale -- don't cite them.
+- `npm run check`'s repository-wide coverage gate was not rerun in Phase 4
+  (it needs `TEST_DATABASE_URL` for the SQL suites, not configured here);
+  Phase 3 recorded it exiting nonzero on coverage (77.47% vs. 85%) with no
+  database configured, which is expected in that state, not a regression.
+
+Phase 3 live verification (Codex), not repeated in Phase 4 since it's
+settled -- see "Decisions and invariants" for why:
+
 - Live: `npm run install:plugin` succeeded against the real installed
   Windows Codex app after both install-script fixes; `codex plugin list
   --json` confirmed `installed: true, enabled: true` for the resulting
@@ -352,31 +434,37 @@ Followed the Appendix reproduction literally with the unconditional marker:
   baseline command, normal sandbox, and normal PATH. Diagnostic code/files
   were removed afterward.
 - Direct Windows launcher smoke test with Codex's bundled Node -- exit `0`.
-- `npm run check` -- formatting/lint and all 219 tests pass, but the command
-  exits nonzero on the repository-wide pre-existing coverage gate: 77.47%
-  lines versus the configured 85% threshold (largely skipped Postgres files).
+
+Phase 4 review (Claude), code-reading only, not live-executed -- see "Phase 4"
+above for what was specifically checked in `receiver-secrets.mjs`,
+`windows-secret.ps1`, `manage-receiver-task.ps1`, `receiver-service.mjs`.
 
 ## Risks or blockers
 
 - Windows hook execution now works in the tested Codex CLI/Desktop build
-  (`0.153.4`). The remaining platform work below (credential storage and
-  native app-tools delivery) is separate and still unverified end to end.
+  (`0.153.4`), verified live. Credential storage and the receiver background
+  service are implemented and reviewed sound but not independently live-
+  verified (Remaining work item 3). Native app-tools delivery (actual native
+  task creation on Windows) is separately still unverified (item 4). Do not
+  describe any of these three as "proven end to end" -- only hook execution
+  has a live proof.
 - **Each live `codex exec` test spends real, metered usage against the
   connected Codex account.** The user explicitly authorized the completed
-  follow-up after adding credits; get fresh confirmation before any new live
-  regression campaign.
-- PR #18 was already open and green on CI before commit `e79f0f9`. Recheck
-  `gh pr checks 18` after pushing further commits before merging -- CI runs
-  on Linux, so it re-validates none of these Windows-specific changes broke
-  POSIX behavior, but cannot itself validate the Windows-side claims already
-  proven on this machine.
+  Phase 3 follow-up after adding credits; get fresh confirmation before any
+  new live regression campaign (including for Remaining work items 3 and 4).
+- PR #18 was green on CI as of `e79f0f9`; several commits have landed since
+  (Phase 3's cross-platform implementation, Phase 4's regression fix and
+  docs). Recheck `gh pr checks 18` before merging -- CI runs on Linux, so it
+  re-validates none of these Windows-specific changes broke POSIX behavior,
+  but cannot itself validate the Windows-side claims already proven on this
+  machine.
 - The plugin is currently installed into the user's real, live Windows
   Codex app as `synapse@synapse-dev-81bbd29df3a5` (a disposable dev
   snapshot, not `synapse@synapse`). Harmless but leave it deliberately or
   remove it (`codex plugin remove synapse@synapse-dev-81bbd29df3a5`) --
   don't just forget it's there. Likewise a throwaway test project is
   registered in the real `~/.synapse/host.sqlite` (see item 1 above).
-- No production/live server changes were made in either phase.
+- No production/live server changes were made in any phase.
 
 ## Appendix: exact reproduction commands
 
