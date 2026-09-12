@@ -137,7 +137,6 @@ export async function handleConversationHook(
           job.receiver_installation_id === identity.installationId &&
           job.recipient_user_id === identity.userId
         ) {
-          if (job.pause_reason) return true;
           if (
             ["routing", "uncertain"].includes(job.status) &&
             ["issued", "uncertain"].includes(job.native_mutation_state)
@@ -157,6 +156,16 @@ export async function handleConversationHook(
               "UPDATE channels SET last_reconcile_error=NULL WHERE id=? AND last_reconcile_error IN ('resume_failed','resume_uncertain')",
             )
             .run(job.channel_id);
+          if (job.pause_reason) {
+            // This exact queued prompt has now been consumed and rejected.
+            // A later explicit resume may safely submit its continuation.
+            database
+              .prepare(
+                "UPDATE conversation_responses SET status='paused', updated_at=? WHERE message_id=? AND status IN ('queued','active','repair','resume_queued','resume_uncertain')",
+              )
+              .run(Date.now(), job.id);
+            return true;
+          }
           activateResponse(database, {
             messageId: marker.jobId,
             sessionId: input.session_id,

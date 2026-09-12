@@ -459,10 +459,12 @@ export function pauseConversations(
         "UPDATE channels SET pause_reason=? WHERE thread_id=? AND cloud_conversation_id IS NOT NULL",
       )
       .run(reason, sessionId);
-    // An interrupt must not cause a missing-reply hook to restart the task.
+    // Keep native submissions that have not reached UserPromptSubmit queued.
+    // The channel pause blocks them; only a hook that consumes and rejects the
+    // prompt can prove that a replacement continuation is needed on resume.
     database
       .prepare(
-        "UPDATE conversation_responses SET status='paused' WHERE session_id=? AND status IN ('queued','active','repair','resume_pending','resume_queued')",
+        "UPDATE conversation_responses SET status='paused' WHERE session_id=? AND status IN ('active','repair','resume_pending')",
       )
       .run(sessionId);
   } else {
@@ -488,7 +490,7 @@ export function pauseConversations(
     } else
       database
         .prepare(`UPDATE conversation_responses SET status='paused' WHERE message_id IN
-      (SELECT id FROM jobs WHERE channel_id=?) AND status IN ('queued','active','repair','resume_pending','resume_queued')`)
+      (SELECT id FROM jobs WHERE channel_id=?) AND status IN ('active','repair','resume_pending')`)
         .run(id);
   }
 }

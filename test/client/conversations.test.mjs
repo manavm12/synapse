@@ -87,9 +87,11 @@ async function fixture(t) {
     sequence = 1,
     origin = null,
     disposition = "continue",
+    version = 2,
+    confirm = true,
   } = {}) {
     const message = {
-      version: 2,
+      version,
       messageId: randomUUID(),
       conversationId,
       sequence,
@@ -118,10 +120,14 @@ async function fixture(t) {
       },
       inboxOptions,
     );
-    confirmCloudImport(
-      { messageId: message.messageId, installationId: identity.installationId },
-      inboxOptions,
-    );
+    if (confirm)
+      confirmCloudImport(
+        {
+          messageId: message.messageId,
+          installationId: identity.installationId,
+        },
+        inboxOptions,
+      );
     return message;
   }
   function reserve() {
@@ -733,6 +739,7 @@ test("an ambiguous resume stays fenced until its queued marker is observed", asy
   const message = f.incoming();
   const delivery = f.reserve();
   f.accept(delivery);
+  await f.hook("UserPromptSubmit", { prompt: delivery.nativePrompt });
   await f.hook("Interrupt");
   f.control("resume", message.conversationId);
   let queued;
@@ -762,6 +769,294 @@ test("an ambiguous resume stays fenced until its queued marker is observed", asy
         db.prepare("SELECT status FROM conversation_responses").get().status,
     ),
     "active",
+  );
+});
+
+test("pause and interruption retain an unconsumed native submission across resume", async (t) => {
+  for (const action of ["pause", "Interrupt"])
+    await t.test(action, async (t) => {
+      const f = await fixture(t);
+      const message = f.incoming();
+      const delivery = f.reserve();
+      f.accept(delivery);
+      const nativeQueue = [delivery.nativePrompt];
+      const worker = new ReceiverWorker({
+        inboxOptions: f.inboxOptions,
+        queueClient: () => ({
+          async prepare() {},
+          async submit(value) {
+            nativeQueue.push(value.prompt);
+          },
+          close() {},
+        }),
+      });
+      if (action === "Interrupt") await f.hook(action);
+      else f.control(action, message.conversationId);
+      // The target remains busy; its native queue has not consumed this prompt.
+      f.control("resume", message.conversationId);
+      await worker.resumeResponses(
+        f.connection,
+        { codex_path: "/fixture" },
+        () => {},
+      );
+      assert.equal(nativeQueue.length, 1);
+      assert.equal(
+        f.store(
+          (db) =>
+            db.prepare("SELECT status FROM conversation_responses").get()
+              .status,
+        ),
+        "queued",
+      );
+      const result = await f.hook("UserPromptSubmit", {
+        prompt: nativeQueue.shift(),
+      });
+      assert.match(
+        result.hookSpecificOutput.additionalContext,
+        /purpose-written reply is required/,
+      );
+      assert.equal(
+        f.store(
+          (db) =>
+            db.prepare("SELECT status FROM conversation_responses").get()
+              .status,
+        ),
+        "active",
+      );
+    });
+});
+
+test("blocked prompts resume once and later interruptions use distinct native submissions", async (t) => {
+  const f = await fixture(t);
+  const message = f.incoming();
+  const delivery = f.reserve();
+  f.accept(delivery);
+  const queued = [];
+  const worker = new ReceiverWorker({
+    inboxOptions: f.inboxOptions,
+    queueClient: () => ({
+      async prepare() {},
+      async submit(value) {
+        queued.push(value);
+      },
+      close() {},
+    }),
+  });
+  const resume = () =>
+    worker.resumeResponses(f.connection, { codex_path: "/fixture" }, () => {});
+  f.control("pause", message.conversationId);
+  assert.equal(
+    (await f.hook("UserPromptSubmit", { prompt: delivery.nativePrompt }))
+      .decision,
+    "block",
+  );
+  f.control("resume", message.conversationId);
+  await resume();
+  assert.equal(queued.length, 1);
+  // Pausing a continuation still waiting in the native queue must retain it too.
+  f.control("pause", message.conversationId);
+  f.control("resume", message.conversationId);
+  await resume();
+  assert.equal(queued.length, 1);
+  await f.hook("UserPromptSubmit", {
+    prompt: queued[0].prompt,
+    turn_id: "resumed-1",
+  });
+  await f.hook("Interrupt");
+  f.control("resume", message.conversationId);
+  await resume();
+  await resume();
+  assert.equal(queued.length, 2);
+  assert.notEqual(queued[0].deliveryId, queued[1].deliveryId);
+});
+
+test("receiver upgrade enriches only unchanged and unissued v1 staged messages", async (t) => {
+  const f = await fixture(t);
+  const message = f.incoming({ version: 1, confirm: false });
+  const stage = (value) =>
+    stageCloudMessage(
+      {
+        message: value,
+        identity: f.identity,
+        projectRoot: f.root,
+        channelId: cloudChannelId(
+          f.identity.installationId,
+          f.identity.userId,
+          value.conversationId,
+        ),
+      },
+      f.inboxOptions,
+    );
+  const upgraded = {
+    ...message,
+    version: 2,
+    disposition: "complete",
+    inReplyToMessageId: randomUUID(),
+    claimToken: "renewed-claim",
+  };
+  const before = f.store((db) => db.prepare("SELECT * FROM jobs").get());
+  for (const changes of [
+    { message: "changed", contentHash: messageContentHash("changed") },
+    { senderUserId: randomUUID() },
+    { recipientUserId: randomUUID() },
+    { recipientProjectId: randomUUID() },
+    { sequence: 7 },
+    { senderUsername: "eve" },
+  ]) {
+    assert.throws(
+      () => stage({ ...upgraded, ...changes }),
+      /Conflicting cloud payload/,
+    );
+    assert.deepEqual(
+      f.store((db) => db.prepare("SELECT * FROM jobs").get()),
+      before,
+    );
+  }
+  assert.equal(stage(upgraded).duplicate, true);
+  assert.equal(stage(upgraded).duplicate, true);
+  const row = f.store((db) => db.prepare("SELECT * FROM jobs").get());
+  assert.equal(row.protocol_version, 2);
+  assert.equal(row.disposition, "complete");
+  assert.equal(row.in_reply_to_message_id, upgraded.inReplyToMessageId);
+  assert.equal(row.claim_token, "renewed-claim");
+  assert.equal(
+    f.store(
+      (db) =>
+        db.prepare("SELECT claim_token FROM receiver_import_outbox").get()
+          .claim_token,
+    ),
+    "renewed-claim",
+  );
+  assert.equal(row.created_at, before.created_at);
+  assert.equal(
+    f.store((db) => db.prepare("SELECT count(*) AS n FROM jobs").get().n),
+    1,
+  );
+  assert.throws(() => stage(message), /Conflicting cloud payload/);
+  assert.throws(
+    () => stage({ ...upgraded, disposition: "continue" }),
+    /Conflicting cloud payload/,
+  );
+  confirmCloudImport(
+    { messageId: message.messageId, installationId: f.identity.installationId },
+    f.inboxOptions,
+  );
+  assert.equal(f.reserve().protocolVersion, 2);
+
+  const confirmed = f.incoming({ version: 1 });
+  assert.throws(
+    () => stage({ ...confirmed, version: 2 }),
+    /Conflicting cloud payload/,
+  );
+});
+
+test("background repair preserves its queued input and fences an ambiguous acknowledgement", async (t) => {
+  for (const lostReceipt of [false, true])
+    await t.test(lostReceipt ? "lost receipt" : "accepted", async (t) => {
+      const f = await fixture(t);
+      const message = f.incoming();
+      const delivery = f.reserve();
+      f.accept(delivery);
+      await f.hook("UserPromptSubmit", { prompt: delivery.nativePrompt });
+      f.store((db) =>
+        recordSession(db, {
+          sessionId: "source",
+          cwd: f.root,
+          projectRoot: f.root,
+          event: "Stop",
+        }),
+      );
+      const queued = [];
+      const worker = new ReceiverWorker({
+        inboxOptions: f.inboxOptions,
+        queueClient: () => ({
+          async prepare() {
+            return { status: { type: "idle" } };
+          },
+          async submit(value) {
+            queued.push(value);
+            if (lostReceipt) throw new Error("lost repair receipt");
+          },
+          close() {},
+        }),
+      });
+      const repairing = worker.repairIdleResponses(
+        f.connection,
+        { codex_path: "/fixture" },
+        () => {},
+      );
+      if (lostReceipt) {
+        await assert.rejects(repairing, /lost repair receipt/);
+        assert.throws(
+          () => f.control("resume", message.conversationId),
+          /uncertain outcome/,
+        );
+      } else {
+        await repairing;
+        f.control("pause", message.conversationId);
+        f.control("resume", message.conversationId);
+        await worker.resumeResponses(
+          f.connection,
+          { codex_path: "/fixture" },
+          () => {},
+        );
+      }
+      assert.equal(queued.length, 1);
+      await f.hook("UserPromptSubmit", {
+        prompt: queued[0].prompt,
+        turn_id: "repair-turn",
+      });
+      assert.equal(
+        f.store(
+          (db) =>
+            db.prepare("SELECT status FROM conversation_responses").get()
+              .status,
+        ),
+        "active",
+      );
+      await f.hook("Stop", { turn_id: "repair-turn" });
+      assert.equal(
+        f.store(
+          (db) =>
+            db.prepare("SELECT status FROM conversation_responses").get()
+              .status,
+        ),
+        "needs_attention",
+      );
+    });
+});
+
+test("upgrading an established unbound staged conversation keeps its missing-route fence", async (t) => {
+  const f = await fixture(t);
+  const message = f.incoming({ version: 1, confirm: false, sequence: 4 });
+  stageCloudMessage(
+    {
+      message: { ...message, version: 2 },
+      identity: f.identity,
+      projectRoot: f.root,
+      channelId: cloudChannelId(
+        f.identity.installationId,
+        f.identity.userId,
+        message.conversationId,
+      ),
+    },
+    f.inboxOptions,
+  );
+  confirmCloudImport(
+    { messageId: message.messageId, installationId: f.identity.installationId },
+    f.inboxOptions,
+  );
+  assert.equal(f.reserve(), null);
+  assert.equal(
+    getJob(message.messageId, f.inboxOptions).bindingState,
+    "missing",
+  );
+  assert.equal(
+    listPendingCloudEvents(
+      { installationId: f.identity.installationId },
+      f.inboxOptions,
+    )[0].error_code,
+    "reply_route_missing",
   );
 });
 

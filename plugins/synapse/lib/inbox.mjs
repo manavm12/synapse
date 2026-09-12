@@ -475,6 +475,31 @@ export function queueMessage(
   }
 }
 
+function storeConversationMetadata(database, message, channel) {
+  database
+    .prepare(`UPDATE jobs SET protocol_version=?, disposition=?, in_reply_to_message_id=?,
+      recipient_origin_request_id=? WHERE id=?`)
+    .run(
+      message.version ?? 1,
+      message.disposition ?? "continue",
+      message.inReplyToMessageId ?? null,
+      message.recipientOriginRequestId ?? null,
+      message.messageId,
+    );
+  if (
+    message.version === 2 &&
+    message.sequence !== 1 &&
+    !channel.thread_id &&
+    !channel.client_thread_id
+  ) {
+    database
+      .prepare(
+        "UPDATE channels SET binding_state='missing', last_reconcile_error='reply_route_missing' WHERE id=?",
+      )
+      .run(channel.id);
+  }
+}
+
 export function stageCloudMessage(
   { message, identity, projectRoot, channelId },
   { path = inboxPath(), now = Date.now } = {},
@@ -519,7 +544,7 @@ export function stageCloudMessage(
         .prepare("SELECT * FROM jobs WHERE id = ?")
         .get(message.messageId);
       if (existing) {
-        const exact =
+        const exactPayload =
           existing.source === "cloud" &&
           existing.channel_id === channelId &&
           existing.project_root === projectRoot &&
@@ -531,15 +556,27 @@ export function stageCloudMessage(
           existing.sender_username === message.senderUsername &&
           existing.recipient_user_id === message.recipientUserId &&
           existing.recipient_project_id === message.recipientProjectId &&
-          existing.receiver_installation_id === identity.installationId &&
+          existing.receiver_installation_id === identity.installationId;
+        // A restarted, upgraded receiver may reclaim an unconfirmed v1 import
+        // as v2. Enrich only untouched staged work, preserving exact payload
+        // and tenant checks and refusing downgrades or changes after routing.
+        const upgrade =
+          existing.protocol_version === 1 &&
+          message.version === 2 &&
+          existing.cloud_import_state === "staged" &&
+          existing.status === "staged" &&
+          existing.delivery_id === null &&
+          existing.native_mutation_state === null;
+        const exactProtocol =
           existing.protocol_version === (message.version ?? 1) &&
           existing.disposition === (message.disposition ?? "continue") &&
           existing.in_reply_to_message_id ===
             (message.inReplyToMessageId ?? null) &&
           existing.recipient_origin_request_id ===
             (message.recipientOriginRequestId ?? null);
-        if (!exact)
+        if (!exactPayload || (!upgrade && !exactProtocol))
           throw new Error(`Conflicting cloud payload for ${message.messageId}`);
+        if (upgrade) storeConversationMetadata(database, message, channel);
         if (existing.cloud_import_state === "staged") {
           database
             .prepare(`UPDATE jobs SET claim_token = ?, cloud_lease_expires_at = ?,
@@ -588,28 +625,7 @@ export function stageCloudMessage(
           timestamp,
           timestamp,
         );
-      database
-        .prepare(`UPDATE jobs SET protocol_version=?, disposition=?, in_reply_to_message_id=?,
-        recipient_origin_request_id=? WHERE id=?`)
-        .run(
-          message.version ?? 1,
-          message.disposition ?? "continue",
-          message.inReplyToMessageId ?? null,
-          message.recipientOriginRequestId ?? null,
-          message.messageId,
-        );
-      if (
-        message.version === 2 &&
-        message.sequence !== 1 &&
-        !channel.thread_id &&
-        !channel.client_thread_id
-      ) {
-        database
-          .prepare(
-            "UPDATE channels SET binding_state='missing', last_reconcile_error='reply_route_missing' WHERE id=?",
-          )
-          .run(channelId);
-      }
+      storeConversationMetadata(database, message, channel);
       database
         .prepare(`INSERT INTO receiver_import_outbox (
           message_id, claim_token, created_at, updated_at
@@ -877,7 +893,10 @@ export function reserveNextMessage(
               WHERE channels.thread_id IS NOT NULL AND busy.thread_id=channels.thread_id
                 AND active.status IN (${ACTIVE_STATUSES}))
             AND NOT EXISTS (SELECT 1 FROM conversation_responses response
-              WHERE response.session_id=channels.thread_id AND response.status IN ('queued','active','repair','resume_pending','resume_queued','resume_uncertain'))
+              JOIN jobs response_job ON response_job.id=response.message_id
+              JOIN channels response_channel ON response_channel.id=response_job.channel_id
+              WHERE response.session_id=channels.thread_id AND response_channel.pause_reason IS NULL
+                AND response.status IN ('queued','active','repair','resume_pending','resume_queued','resume_uncertain'))
             AND NOT EXISTS (SELECT 1 FROM jobs AS earlier
               WHERE jobs.source = 'cloud' AND earlier.source = 'cloud'
                 AND earlier.channel_id = jobs.channel_id

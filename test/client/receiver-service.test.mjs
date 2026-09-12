@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -170,10 +171,34 @@ test("doctor verifies signed access and queue readiness without changing inbox s
   assert.equal(offline.checks.filter((c) => c.status === "fail").length, 2);
 });
 
-test("hook inputs are bounded and runtime registration uses the primary checkout", async () => {
+test("hook inputs are bounded and runtime registration uses the primary checkout", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-runtime-checkouts-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const primary = join(directory, "primary");
+  const linked = join(directory, "linked");
+  execFileSync("git", ["init", primary], { stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-C",
+      primary,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    ],
+    { stdio: "ignore" },
+  );
+  execFileSync("git", ["-C", primary, "worktree", "add", "--detach", linked], {
+    stdio: "ignore",
+  });
   const input = {
     session_id: "task",
-    cwd: resolve("."),
+    cwd: primary,
     hook_event_name: "SessionStart",
   };
   assert.deepEqual(
@@ -188,12 +213,18 @@ test("hook inputs are bounded and runtime registration uses the primary checkout
     readHookInput(Readable.from(["x".repeat(1024 * 1024 + 1)])),
     /too large/,
   );
-  const session = sessionRegistration(input, {
-    CODEX_MCP_NODE_PATH: process.execPath,
-    CODEX_APP_TOOLS_PIPE_PATH: "/fixture/socket",
-    SYNAPSE_CODEX_PATH: "/fixture/codex",
-  });
-  assert.equal(session.projectRoot, resolve("."));
-  assert.equal(session.codexPath, "/fixture/codex");
-  assert.equal(session.event, "SessionStart");
+  for (const cwd of [primary, linked]) {
+    const session = sessionRegistration(
+      { ...input, cwd },
+      {
+        CODEX_MCP_NODE_PATH: process.execPath,
+        CODEX_APP_TOOLS_PIPE_PATH: "/fixture/socket",
+        SYNAPSE_CODEX_PATH: "/fixture/codex",
+      },
+    );
+    assert.equal(session.projectRoot, realpathSync(primary));
+    assert.equal(session.cwd, cwd);
+    assert.equal(session.codexPath, "/fixture/codex");
+    assert.equal(session.event, "SessionStart");
+  }
 });

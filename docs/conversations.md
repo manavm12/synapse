@@ -94,9 +94,19 @@ npm run synapse -- conversation resume <conversation-id>
 
 An explicit receiver stop persists across hook wakeups. An explicit task
 interruption pauses its conversations; paused queued input is rejected by the
-prompt hook without restarting the agent. Resume preserves response obligations
-and queues their continuation. Archived, deleted, and unavailable destinations
-retain local messages. Restore the destination before resuming delivery.
+prompt hook without restarting the agent. Resume preserves a submission that is
+still waiting in the native queue. A continuation is submitted only after the
+original input ran or its prompt hook consumed and rejected it while paused;
+repeated interruptions use distinct continuation IDs. Automatic reply repairs
+preserve queued input and fence uncertain acknowledgements the same way.
+Archived, deleted, and unavailable destinations retain local messages. Restore
+the destination before resuming delivery.
+
+Receiver upgrades can enrich an unchanged v1 message that was staged before its
+import was confirmed with the server's v2 conversation metadata and renewed
+claim. Payload and tenant checks still apply. Confirmed or issued messages cannot
+change protocol, and established conversations without proven routes remain
+fenced for repair.
 
 For an older conversation with an unproven origin, open the intended task once,
 then explicitly select it:

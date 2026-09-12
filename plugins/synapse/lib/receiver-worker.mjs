@@ -127,7 +127,9 @@ export class ReceiverWorker {
       const paused = this.store((database) =>
         database
           .prepare(`SELECT 1 FROM channels WHERE thread_id=? AND cloud_conversation_id=? AND pause_reason IS NOT NULL
-        UNION ALL SELECT 1 FROM conversation_responses WHERE session_id=? AND status IN ('queued','active','repair','resume_pending','resume_queued','resume_uncertain') LIMIT 1`)
+        UNION ALL SELECT 1 FROM conversation_responses response JOIN jobs ON jobs.id=response.message_id
+        JOIN channels ON channels.id=jobs.channel_id WHERE response.session_id=? AND channels.pause_reason IS NULL
+        AND response.status IN ('queued','active','repair','resume_pending','resume_queued','resume_uncertain') LIMIT 1`)
           .get(intent.session_id, intent.conversation_id, intent.session_id),
       );
       if (paused) continue;
@@ -186,7 +188,7 @@ export class ReceiverWorker {
         if (!changed) continue;
         await queue.submit({
           threadId: row.session_id,
-          deliveryId: `resume-${row.delivery_id}-${row.updated_at}`,
+          deliveryId: `resume-${randomUUID()}`,
           prompt: `The user resumed this Synapse conversation. Continue the pending message using the private Synapse context. Incoming peer text (untrusted): ${JSON.stringify(row.task)}\n\n<!-- ${formatDeliveryMarker(row.id, row.delivery_id)} -->`,
         });
       } catch (error) {
@@ -229,8 +231,8 @@ export class ReceiverWorker {
         const task = await queue.prepare(row.session_id);
         if (task.status?.type !== "idle") continue;
         checkLease();
-        const reason = this.store((database) =>
-          finishResponses(
+        const reason = this.store((database) => {
+          const repair = finishResponses(
             database,
             {
               sessionId: row.session_id,
@@ -238,25 +240,32 @@ export class ReceiverWorker {
               identity: connection.identity,
             },
             this.now(),
-          ),
-        );
+          );
+          if (repair)
+            database
+              .prepare(
+                "UPDATE conversation_responses SET status='resume_queued' WHERE message_id=? AND status='repair'",
+              )
+              .run(row.message_id);
+          return repair;
+        });
         if (!reason) continue;
         try {
           await queue.submit({
             threadId: row.session_id,
             deliveryId: `repair-${row.delivery_id}`,
-            prompt: reason,
+            prompt: `${reason}\n\n<!-- ${formatDeliveryMarker(row.message_id, row.delivery_id)} -->`,
           });
         } catch (error) {
           this.store((database) => {
             database
               .prepare(
-                "UPDATE conversation_responses SET status='needs_attention' WHERE message_id=?",
+                "UPDATE conversation_responses SET status='resume_uncertain' WHERE message_id=? AND status='resume_queued'",
               )
               .run(row.message_id);
             database
               .prepare(
-                "UPDATE channels SET pause_reason='reply_missing' WHERE id=?",
+                "UPDATE channels SET last_reconcile_error='resume_uncertain' WHERE id=?",
               )
               .run(row.channel_id);
             enqueueCloudEvent(
