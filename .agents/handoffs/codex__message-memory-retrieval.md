@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
-- Last checkpoint: `5255abb`
+- Last checkpoint: `f02ae7faccc4bed092c71245e9dd6fa7f8ad21ce` (tested implementation and reports)
 - Status: `ready-for-review`
 
 ## Goal
@@ -63,7 +63,8 @@ the later messaging integration. Production remains untouched.
 
 ## Remaining work
 
-- Push final report/boundary checkpoint and open a focused PR; record its URL.
+- Implementation and experiments are complete. PR: https://github.com/manavm12/synapse/pull/21.
+- CI verify, PostgreSQL database checks and both secret scans passed at `f02ae7f`; final documentation-only head should retain those checks.
 - Production integration is deliberately separate and owned by the active messaging
   workstream. Follow experiments/message-retrieval/INTEGRATION.md.
 
