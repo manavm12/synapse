@@ -53,6 +53,22 @@ It stores no raw prompts or model responses. Failed attempts remain pending/fail
 in the queue with bounded error text; this version does not persist detailed
 failed-call usage. Use provider usage reporting for actual billing reconciliation.
 
+Extraction restricts evidence IDs to current source segments plus earlier accepted
+context evidence, and coverage IDs to current segments only. It fails closed on
+the provider's enum-size limits rather than truncating evidence. Deterministic
+validation still enforces current-source support, unique evidence, complete
+coverage, and agreement between coverage dispositions and citations. Exhausted
+validation repairs report a fixed `validation_reason` and `inference_stage` in
+operational logs, never source text or model-supplied identifiers.
+
+Local incoming claim refs are assigned deterministically (`c1`, `c2`, ...) from
+the validated extraction array before reconciliation and review. The transport
+shape retains its `ref` string for compatibility, but the model's labels are not
+authoritative. This cannot change evidence, claim content, coverage, or previously
+committed IDs. Audit records identify this policy as
+`claimRefStrategy: "source-order-v1"`. Reconciliation is rebuilt after extraction
+repairs; no action can bind to a stale model-generated label.
+
 ## Storage/read contract
 
 All tables are in `synapse_private`, keyed/scoped by `owner_id, project_id`:

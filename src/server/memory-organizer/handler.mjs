@@ -2,7 +2,6 @@ import {
   applyMemoryChangeSet,
   currentClaims,
   evidenceContextFor,
-  extractionSchema,
   prepareMemoryChangeSet,
   reconciliationSchema,
   segmentsFor,
@@ -18,6 +17,7 @@ import {
   reviewPrompt,
   reviewSchema,
 } from "./prompts.mjs";
+import { extractionSchemaFor, validationReason } from "./validation.mjs";
 
 function catalogFor(ledger) {
   return currentClaims(ledger).map((claim) => ({
@@ -69,6 +69,7 @@ export function createMemoryOrganizerHandler({
       const segments = segmentsFor(source);
       const catalog = catalogFor(ledger);
       const contextEvidence = evidenceContextFor(ledger);
+      const sourceSchema = extractionSchemaFor(segments, contextEvidence);
       const calls = [];
       const stageCalls = { extract: 0, reconcile: 0, review: 0 };
       const request = async (stage, prompt, schema) => {
@@ -124,8 +125,18 @@ export function createMemoryOrganizerHandler({
               feedback,
               contextEvidence,
             ),
-            extractionSchema,
+            sourceSchema,
           );
+          // These are local proposal keys, not model-derived facts. Assign
+          // them before reconciliation/review sees the extraction. Repeating
+          // this on a repair is idempotent; all prior proposals are uncommitted.
+          extraction = {
+            ...extraction,
+            claims: extraction.claims.map((claim, index) => ({
+              ...claim,
+              ref: `c${index + 1}`,
+            })),
+          };
           validateExtraction(source, extraction, ledger);
           stage = "reconcile";
           if (catalog.length && extraction.claims.length) {
@@ -199,6 +210,7 @@ export function createMemoryOrganizerHandler({
             changeSet,
             audit: {
               promptVersion: PROMPT_VERSION,
+              claimRefStrategy: "source-order-v1",
               reviewStrategy,
               reviewPassed: review !== null,
               maxStageCalls,
@@ -214,7 +226,12 @@ export function createMemoryOrganizerHandler({
           )
             throw error instanceof MemoryInferenceError
               ? error
-              : new MemoryInferenceError(`${stage} validation failed`);
+              : new MemoryInferenceError(`${stage} validation failed`, {
+                  details: {
+                    inference_stage: stage,
+                    validation_reason: validationReason(error),
+                  },
+                });
           feedback = `${error.message}\nPrior extraction and reconciliation: ${JSON.stringify({ extraction, reconciliation })}`;
           if (stage === "extract") extraction = undefined;
         }

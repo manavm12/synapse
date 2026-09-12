@@ -271,6 +271,81 @@ MEMORY_MODEL=<explicit-extraction-and-reconciliation-model>
 MEMORY_REVIEW_MODEL=<explicit-review-model>
 ```
 
+Apply the settings recorded in `deploy/railway-worker.json` directly to the
+dedicated service before connecting its source repository. Keep repository root
+`/`, Dockerfile path `Dockerfile`, start command `npm run worker`, one Singapore
+(`asia-southeast1-eqsg3a`) replica, no HTTP healthcheck or cron schedule, sleeping
+disabled, restart policy `ON_FAILURE` with three retries, zero overlap seconds
+and 30 draining seconds. Leave the HTTP service on its existing configuration.
+Do not generate a public worker domain.
+
+As verified during deployment on 9 September 2026, Railway rejects new custom
+config-as-code paths as deprecated. The JSON file is a settings reference, not
+an automatically applied deployment configuration. Configure these settings in
+the service dashboard or through `serviceInstanceUpdate`, then connect
+`manavm12/synapse` on `main`. For that API, supply `dockerfilePath: "Dockerfile"`
+to select the Dockerfile build; `DOCKERFILE` is not a valid `Builder` enum value.
+Confirm the effective command, build and replica configuration after applying.
+For future declarative management, follow
+[Railway's Infrastructure as Code migration guide](https://docs.railway.com/infrastructure-as-code#migrating-from-config-as-code)
+and review the plan for changes to unrelated services before applying it.
+
+Provision the worker credential and verify schema readiness before enabling the
+continuous service. From an operator checkout or the built image, with
+`DATABASE_WORKER_URL` and verified TLS configured:
+
+```sh
+npm run memory:status -- --owner-id <owner-uuid> --project-id <project-uuid>
+```
+
+This command runs a read-only repeatable-read transaction. It checks the dedicated
+role, required table privileges and owner/project relationship, then reports
+processor-v1 counts, oldest pending work, last successful completion, expired
+leases, missing old jobs, revisions blocked by an earlier terminal failure, and
+the ledger generation. It never claims or recovers a job and needs neither an
+inference key nor `MEMORY_PROCESSING_ENABLED=true`. `ready: true` establishes
+database prerequisites, not model access, a running worker or an empty backlog.
+Exit status is 0 for database readiness and 1 for errors; diagnostics omit secrets
+and source content. Migration-version inspection still uses the operator's admin
+connection, not this worker command.
+
+With the continuous worker stopped, first verify a bounded canary using the
+worker database credential, inference key and chosen model:
+
+```sh
+MEMORY_PROCESSING_ENABLED=true npm run worker:canary -- --owner-id <owner-uuid> --project-id <project-uuid> --max-jobs 1
+```
+
+Both UUIDs and `--max-jobs` (1–1000) are required. Selection, locked eligibility
+checks and expired-job recovery are confined to that owner/project. Each claimed
+attempt counts toward the limit, including failures. A failed attempt stops the
+canary immediately; it does not poll for retries. Queue backoff/terminal-failure
+state is preserved for a later deliberate run. Internal per-stage inference
+retries still apply. A canary can recover expired leases in its own project.
+
+To retry one investigated capture, append `--revision-id <revision-uuid>` and
+use `--max-jobs 1`. This also narrows expired-job recovery and the locked claim
+recheck to that revision. It never advances to another revision, resets attempts,
+changes backoff, or bypasses an unfinished earlier revision from the same session.
+The owner/project status remains project-wide; an unavailable target can report
+`blocked` while other project work remains.
+
+The final `memory_worker_stopped` event includes the attempts and successes.
+Exit 0 with `limit_reached` means the requested attempts succeeded, not that the
+whole backlog is empty. Exit 1 indicates failure. Exit 2 means the run stopped
+early, was idle, or had remaining work but no claimable job (`blocked`); inspect
+`memory:status` to distinguish a failed predecessor, backoff, an active lease or
+missing jobs. Never run a canary under automatic restarts: invocation limits reset
+on process launch. Use an operator process or a one-shot container with restart
+policy `no`, not the continuous Railway worker configuration.
+
+Verify the first revision through job status, ledger generation and authenticated
+`memory_topics`, `search_memory` and `read_memory`, including source citations.
+Exercise a subsequent revision against existing claims to establish reconciliation
+and mandatory review. Use a separately scoped test project for synthetic sources.
+An inference key, explicit model and operating spend allowance must be supplied;
+attempt and token bounds do not establish an overall monetary cap.
+
 The selected models must support the structured Responses API requests used by
 the adapter, including medium reasoning. Review is always enabled in the
 production worker. The request uses the standard service tier with storage
@@ -282,10 +357,19 @@ without opening a database or API connection.
 | --- | --- | --- |
 | `MEMORY_MAX_STAGE_CALLS` | 2 | 1–3 per stage |
 | `MEMORY_REQUEST_TIMEOUT_MS` | 60000 | 1000–180000 |
-| `MEMORY_MAX_OUTPUT_TOKENS` | 8000 | 256–16000 |
+| `MEMORY_MAX_OUTPUT_TOKENS` | 8000 | 256–32000 |
 | `MEMORY_POLL_INTERVAL_MS` | 2000 | 100–60000 |
 | `MEMORY_ERROR_DELAY_MS` | 5000 | 100–60000 |
 | `MEMORY_LEASE_DURATION_MS` | 60000 | 3000–300000 |
+
+Incomplete responses are never committed or parsed as complete JSON. Job failure
+logs distinguish `model_output_limit`, `model_content_filter`, and other incomplete
+or failed responses, with the failing stage and available token counts. Only
+allowlisted reasons and nonnegative integer counts are logged, never partial
+output, provider error text, or credentials. Token limits include reasoning as
+well as visible output; increase the bound deliberately after inspecting a
+canary, not through unbounded automatic retries. The 8000-token default is unchanged.
+See [OpenAI's reasoning token guidance](https://developers.openai.com/api/docs/guides/reasoning).
 
 New captures commit an immutable revision and one processor-version-1 job in
 one transaction. The worker processes outside the database transaction, then
@@ -314,6 +398,21 @@ cost. Pause that worker before backfilling if inference has not been authorized.
 Repeat bounded batches until `has_more` is false. Failed older jobs still require
 separate investigation and can block later revisions of the same session.
 Exact source reads remain available without a derived ledger.
+
+Complete historical enqueue while the continuous worker is stopped, before
+draining the production backlog. Run a small scoped canary, inspect evidence and
+actual model usage, then enable the dedicated continuous service. Verify a fresh
+capture is organized automatically and monitor the status counts until old work
+is resolved. The image contains the status and worker commands under `src/`;
+backfill and migration commands need the operator checkout's `scripts/` and
+`supabase/` directories.
+
+The organizer still reads project history and refuses excessive context: source
+segmentation is limited to 160 segments and prompts to 160,000 characters for
+extraction or 200,000 for reconciliation/review. A limit failure needs source or
+context handling work; repeated restarts do not repair it. Stop/disable the worker
+to pause processing. Captures, queued jobs and already accepted memory persist;
+stopping the worker does not undo committed semantic results.
 
 ## 7. Release gate
 
@@ -355,6 +454,13 @@ bodies to them. Alert on repeated
 401/403 responses, `memory.capture_conflict`, readiness failures, and process
 restarts, a growing processing backlog, terminally failed jobs, and persistent
 `needs_attention` receipts. HTTP readiness alone is not a complete product check.
+
+Worker failures include a fixed `category` (configuration, database role/schema,
+model access/rate-limit/timeout/validation, context limit, review rejection, lease
+loss, or unknown). Job events include `duration_ms` and, on failure,
+`queue_status`: `pending` means rescheduled, `failed` means terminal, and
+`lease_lost` means this attempt could not update the job. Read durable status to
+see its current owner/outcome. No arbitrary error text is copied into these logs.
 
 ## 8. Recovery and rotation
 

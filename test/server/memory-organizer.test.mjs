@@ -6,12 +6,18 @@ import {
   emptyLedger,
   extractionSchema,
   normalizeSourceEnvelope,
+  segmentsFor,
 } from "../../src/memory/core/index.mjs";
+import { validateSchema } from "../../src/memory/core/schema.mjs";
 import {
   createMemoryInferenceAPI,
   MemoryInferenceError,
 } from "../../src/server/memory-organizer/api.mjs";
 import { createMemoryOrganizerHandler } from "../../src/server/memory-organizer/handler.mjs";
+import {
+  extractionSchemaFor,
+  validationReason,
+} from "../../src/server/memory-organizer/validation.mjs";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -108,6 +114,238 @@ test("handler extracts/reconciles/reviews and commits only when explicitly invok
   });
   assert.equal(run.ledger.version, 2);
   assert.equal(run.ledger.relations[0].type, "supersedes");
+});
+
+test("extraction constrains current and earlier evidence without mutating shared schemas", async () => {
+  const run = setup();
+  const first = await run.handler.process(fixture.steps[0].envelope);
+  await run.handler.commit({
+    source: fixture.steps[0].envelope,
+    result: first,
+  });
+  await run.handler.process(fixture.steps[1].envelope);
+  const extract = run.calls.filter((call) => call.stage === "extract")[1];
+  const properties = extract.schema.properties;
+  const current = extract.data.segments.map((segment) => segment.id);
+  const known = [
+    ...new Set([
+      ...current,
+      ...extract.data.contextEvidence.map((segment) => segment.id),
+    ]),
+  ];
+  assert.deepEqual(
+    properties.claims.items.properties.evidence.items.enum,
+    known,
+  );
+  assert.deepEqual(
+    properties.coverage.items.properties.segmentId.enum,
+    current,
+  );
+  assert.equal(properties.claims.items.properties.title.enum, undefined);
+  assert.equal(properties.coverage.items.properties.reason.enum, undefined);
+  assert.equal(
+    extractionSchema.properties.claims.items.properties.evidence.items.enum,
+    undefined,
+  );
+  assert.equal(
+    extractionSchema.properties.coverage.items.properties.segmentId.enum,
+    undefined,
+  );
+  const foreign = structuredClone(fixture.steps[1].extraction);
+  foreign.claims[0].evidence = ["foreign-segment"];
+  assert.throws(
+    () => validateSchema(foreign, extract.schema),
+    /not an allowed value/,
+  );
+  foreign.claims[0].evidence = [known[0]];
+  foreign.coverage[0].segmentId = extract.data.contextEvidence[0].id;
+  assert.throws(
+    () => validateSchema(foreign, extract.schema),
+    /not an allowed value/,
+  );
+});
+
+test("model claim labels cannot break deterministic refs, downstream actions or replay", async () => {
+  const proposals = fixture.steps.map((step) => ({
+    ...structuredClone(step.extraction),
+    claims: step.extraction.claims.map((claim) => ({
+      ...claim,
+      ref: "duplicate-invalid-model-label",
+    })),
+  }));
+  let extractionIndex = 0;
+  const run = setup({
+    respond(stage) {
+      if (stage === "extract") return proposals[extractionIndex++];
+      if (stage === "reconcile") return fixture.steps[1].reconciliation;
+      return { issues: [] };
+    },
+  });
+  const first = await run.handler.process(fixture.steps[0].envelope);
+  assert.deepEqual(
+    first.changeSet.proposal.extraction,
+    fixture.steps[0].extraction,
+  );
+  assert.equal(first.audit.claimRefStrategy, "source-order-v1");
+  assert.deepEqual(
+    run.calls
+      .find((call) => call.stage === "review")
+      .data.extraction.claims.map((claim) => claim.ref),
+    ["c1", "c2"],
+  );
+  await run.handler.commit({
+    source: fixture.steps[0].envelope,
+    result: first,
+  });
+  const committedClaims = structuredClone(run.ledger.claims);
+  const second = await run.handler.process(fixture.steps[1].envelope);
+  const reconcile = run.calls.find((call) => call.stage === "reconcile");
+  assert.deepEqual(
+    reconcile.data.incoming.map((claim) => claim.ref),
+    fixture.steps[1].extraction.claims.map((_, index) => `c${index + 1}`),
+  );
+  assert.ok(
+    !JSON.stringify(second.changeSet).includes("duplicate-invalid-model-label"),
+  );
+  await run.handler.commit({
+    source: fixture.steps[1].envelope,
+    result: second,
+  });
+  assert.deepEqual(
+    run.ledger.claims.slice(0, committedClaims.length),
+    committedClaims,
+  );
+  assert.equal(run.ledger.relations[0].type, "supersedes");
+  assert.ok(
+    proposals.every((proposal) =>
+      proposal.claims.every(
+        (claim) => claim.ref === "duplicate-invalid-model-label",
+      ),
+    ),
+  );
+});
+
+test("deterministic labels do not repair invalid evidence or authorize stale action labels", async () => {
+  const unsupported = setup({
+    maxStageCalls: 1,
+    respond() {
+      const value = structuredClone(fixture.steps[0].extraction);
+      value.claims[0].ref = "bad model label";
+      value.claims[0].evidence = [];
+      return value;
+    },
+  });
+  await assert.rejects(
+    unsupported.handler.process(fixture.steps[0].envelope),
+    (error) => error.details.validation_reason === "evidence_unique",
+  );
+  assert.equal(unsupported.commits, 0);
+  let committed = false;
+  const stale = setup({
+    maxStageCalls: 1,
+    respond(stage) {
+      if (stage === "review") return { issues: [] };
+      if (stage === "reconcile")
+        return {
+          actions: fixture.steps[1].reconciliation.actions.map((action) => ({
+            ...action,
+            ref: "stale-model-label",
+          })),
+        };
+      const value = structuredClone(
+        fixture.steps[committed ? 1 : 0].extraction,
+      );
+      value.claims.forEach((claim) => {
+        claim.ref = "stale-model-label";
+      });
+      return value;
+    },
+  });
+  const first = await stale.handler.process(fixture.steps[0].envelope);
+  await stale.handler.commit({
+    source: fixture.steps[0].envelope,
+    result: first,
+  });
+  committed = true;
+  await assert.rejects(
+    stale.handler.process(fixture.steps[1].envelope),
+    /reconcile validation failed/,
+  );
+  assert.equal(stale.commits, 1);
+});
+
+test("source-specific extraction schema handles empty and bounded catalogs without truncation", () => {
+  assert.deepEqual(extractionSchemaFor([], []), extractionSchema);
+  const segments = segmentsFor({
+    ...fixture.steps[0].envelope,
+    markdown: "# First\nAlpha.\n\n# Second\nBeta.\n\nGamma.",
+  });
+  const schema = extractionSchemaFor(segments, [segments[0]]);
+  assert.equal(
+    schema.properties.coverage.items.properties.segmentId.enum.length,
+    3,
+  );
+  assert.equal(
+    schema.properties.claims.items.properties.evidence.items.enum.length,
+    3,
+  );
+  const catalog = (n, length = 24) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: String(i).padStart(length, "x"),
+    }));
+  assert.doesNotThrow(() => extractionSchemaFor([], catalog(625)));
+  assert.throws(() => extractionSchemaFor([], catalog(626)), /context limit/);
+  assert.throws(
+    () => extractionSchemaFor(catalog(160, 4), catalog(828, 5)),
+    /context limit/,
+  );
+});
+
+test("validation diagnostics expose only fixed reasons and preserve failure fencing", async () => {
+  const messages = [
+    ["Claim refs must be unique c1, c2, etc", "claim_refs"],
+    ["Each claim needs unique evidence segment IDs", "evidence_unique"],
+    ["Unknown evidence segment private source text", "evidence_unknown"],
+    [
+      "A new claim must cite its current source, not only previous context",
+      "current_evidence_required",
+    ],
+    ["Unknown or duplicate coverage segment", "coverage_segments"],
+    ["Coverage disposition disagrees with claim evidence", "coverage_evidence"],
+    [
+      "Every source segment requires a coverage disposition",
+      "coverage_missing",
+    ],
+    ["subject must not be empty", "required_text"],
+    ["private arbitrary error", "invalid_proposal"],
+  ];
+  for (const [message, reason] of messages)
+    assert.equal(validationReason(new Error(message)), reason);
+  assert.equal(validationReason(null), "invalid_proposal");
+  const unsafe = new MemoryInferenceError("invalid response", {
+    details: { validation_reason: "private text" },
+  });
+  assert.deepEqual(unsafe.details, {});
+  const run = setup({
+    maxStageCalls: 2,
+    respond() {
+      return { ...fixture.steps[0].extraction, coverage: [] };
+    },
+  });
+  await assert.rejects(
+    run.handler.process(fixture.steps[0].envelope),
+    (error) => {
+      assert.deepEqual(error.details, {
+        inference_stage: "extract",
+        validation_reason: "coverage_missing",
+      });
+      assert.equal(error.code, "extract validation failed");
+      assert.doesNotMatch(JSON.stringify(error), /private/);
+      return true;
+    },
+  );
+  assert.equal(run.calls.length, 2);
+  assert.equal(run.commits, 0);
 });
 
 test("review rejection and structural repairs stay inside per-stage budgets", async () => {
@@ -316,6 +554,68 @@ test("API refuses malformed, incomplete, refused, oversized and error responses 
   await assert.rejects(
     limited.structured("extract", "too long", extractionSchema),
     /prompt size/,
+  );
+});
+
+test("incomplete responses retain only safe stage, reason and token diagnostics", async () => {
+  for (const [status, reason, expected] of [
+    ["incomplete", "max_output_tokens", "output token limit reached"],
+    ["incomplete", "content_filter", "content filtered"],
+    ["incomplete", "private provider secret", "incomplete response"],
+    ["failed", undefined, "provider response failed"],
+    ["private provider status", undefined, "incomplete response"],
+  ]) {
+    const api = createMemoryInferenceAPI({
+      ...apiOptions,
+      maxOutputTokens: 32_000,
+      fetcher: async () =>
+        Response.json({
+          status,
+          incomplete_details: { reason },
+          output: [{ text: "private partial output" }],
+          error: { message: "private provider secret" },
+          usage: {
+            input_tokens: 120,
+            output_tokens: 32000,
+            output_tokens_details: { reasoning_tokens: 31000 },
+          },
+        }),
+    });
+    await assert.rejects(
+      api.structured("extract", "prompt", extractionSchema),
+      (error) => {
+        assert.equal(error.code, expected);
+        assert.equal(error.details.inference_stage, "extract");
+        assert.equal(error.details.input_tokens, 120);
+        assert.equal(error.details.output_tokens, 32000);
+        assert.equal(error.details.reasoning_tokens, 31000);
+        assert.equal(error.details.max_output_tokens, 32000);
+        assert.equal(error.retryable, false);
+        assert.equal(error.transport, false);
+        assert.doesNotMatch(JSON.stringify(error), /private/);
+        assert.ok(Object.isFrozen(error.details));
+        assert.throws(() => {
+          error.details = { secret: "private" };
+        });
+        return true;
+      },
+    );
+  }
+  const error = new MemoryInferenceError("incomplete response", {
+    details: {
+      inference_stage: "private",
+      response_status: "private",
+      incomplete_reason: "private",
+      input_tokens: -1,
+      output_tokens: "private",
+      reasoning_tokens: Number.MAX_SAFE_INTEGER + 1,
+      arbitrary: "private",
+    },
+  });
+  assert.deepEqual(error.details, {});
+  assert.throws(
+    () => createMemoryInferenceAPI({ ...apiOptions, maxOutputTokens: 32001 }),
+    /maxOutputTokens/,
   );
 });
 
