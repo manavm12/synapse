@@ -1,5 +1,5 @@
 import { access, readdir, readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -117,8 +117,11 @@ for (const file of await readdir(pluginRoot, { recursive: true })) {
     /(?:from\s*|import\s*\(\s*)["'](\.[^"']+)["']/g,
   )) {
     const target = resolve(dirname(resolve(pluginRoot, file)), match[1]);
+    const relativeToPluginRoot = relative(pluginRoot, target);
     assert(
-      target.startsWith(`${pluginRoot}/`),
+      relativeToPluginRoot !== "" &&
+        !relativeToPluginRoot.startsWith("..") &&
+        !isAbsolute(relativeToPluginRoot),
       `${file} imports outside the installed plugin`,
     );
     await access(target);

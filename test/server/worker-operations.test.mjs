@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { MemoryInferenceError } from "../../src/server/memory-organizer/api.mjs";
 import { createMemoryProcessingRunner } from "../../src/server/memory-processing/runner.mjs";
 import {
@@ -316,14 +317,16 @@ test("status works with processing disabled and no inference credential, and san
 });
 
 test("worker executable help, disabled startup and invalid canary cannot invoke inference", () => {
-  const entry = new URL("../../src/server/worker/index.mjs", import.meta.url);
+  const entry = fileURLToPath(
+    new URL("../../src/server/worker/index.mjs", import.meta.url),
+  );
   for (const [args, expected] of [
     [[], 0],
     [["--help"], 0],
     [["--canary", ...scopeArgs, "--max-jobs", "1"], 1],
     [["--bogus", "private-secret"], 1],
   ]) {
-    const result = spawnSync(process.execPath, [entry.pathname, ...args], {
+    const result = spawnSync(process.execPath, [entry, ...args], {
       encoding: "utf8",
       env: { PATH: process.env.PATH, MEMORY_PROCESSING_ENABLED: "false" },
     });

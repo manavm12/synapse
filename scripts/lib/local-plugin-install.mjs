@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
@@ -24,7 +24,10 @@ async function bundleFiles(root, prefix = "") {
   for (const entry of (
     await readdir(join(root, prefix), { withFileTypes: true })
   ).sort((a, b) => a.name.localeCompare(b.name))) {
-    const path = join(prefix, entry.name);
+    // Bundle keys are compared against POSIX-style literals elsewhere in this
+    // module, so keep them forward-slash regardless of host OS; join(root, path)
+    // below still resolves correctly on Windows since it accepts "/" segments.
+    const path = posix.join(prefix, entry.name);
     if (entry.isDirectory()) files.push(...(await bundleFiles(root, path)));
     else if (entry.isFile())
       files.push([path, await readFile(join(root, path))]);
@@ -106,7 +109,12 @@ export async function stageLocalPlugin(
     marketplaceName,
     contentHash,
   );
-  if (buildRoot === source || buildRoot.startsWith(`${source}/`))
+  const buildRootRelativeToSource = relative(source, buildRoot);
+  if (
+    buildRootRelativeToSource === "" ||
+    (!buildRootRelativeToSource.startsWith("..") &&
+      !isAbsolute(buildRootRelativeToSource))
+  )
     throw new Error("Plugin snapshots must be outside the source checkout");
   const pluginRoot = join(buildRoot, "plugins/synapse");
   const receiptPath = join(buildRoot, "synapse-build.json");

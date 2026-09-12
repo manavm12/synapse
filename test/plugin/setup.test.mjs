@@ -1225,7 +1225,9 @@ test("local stop after live authorization but before issue prevents native mutat
 
 test("concurrent fresh registry opens serialize additive schema migration", async (t) => {
   const f = await fixture(t);
-  const modulePath = resolve("plugins/synapse/lib/receiver-registry.mjs");
+  const modulePath = pathToFileURL(
+    resolve("plugins/synapse/lib/receiver-registry.mjs"),
+  ).href;
   await Promise.all(
     Array.from({ length: 24 }, async () => {
       const child = spawn(

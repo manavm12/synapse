@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout as pause } from "node:timers/promises";
@@ -102,7 +103,12 @@ function toolResult(value) {
 }
 
 async function fakeAppTools(directory, projectRoot) {
-  const path = join(directory, "app-tools.sock");
+  // Windows IPC has no Unix-domain-socket files; it addresses a named pipe
+  // in the \\.\pipe\ namespace instead of a filesystem path.
+  const path =
+    platform() === "win32"
+      ? `\\\\.\\pipe\\synapse-app-tools-${randomBytes(8).toString("hex")}`
+      : join(directory, "app-tools.sock");
   const received = [];
   const sockets = new Set();
   const server = createServer((socket) => {
