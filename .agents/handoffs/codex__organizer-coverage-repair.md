@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
-- Last checkpoint: `181619a4cfe3131462229ba2965cb8683b1e353d` (tested exclusive source groups)
+- Last checkpoint: `3077f9ecf7798b1edfd745ff5724b196ede6e17f` (tested nonblank source groups)
 - Status: `active`
 
 ## Goal
@@ -82,6 +82,10 @@ then resume the authorized production organizer rollout.
   after three calls. Required claim text and exclusion reasons are now nonempty
   provider patterns, matching the core validator; repair feedback names empty
   fields. Full final validation is being rerun before another no-write test.
+- Nonblank-schema final check: 260 passed, zero skipped; coverage 95.76% lines,
+  86.61% branches, 94.39% functions. Docker build and disabled startup passed.
+- CodeRabbit accepted the corrected handoff and withdrew its foreign-evidence
+  repair finding after verifying schema rejection and regression coverage.
 
 ## Remaining work
 
