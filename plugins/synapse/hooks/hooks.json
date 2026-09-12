@@ -8,6 +8,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/bind-child.mjs\"",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/bind-child.mjs\"",
             "timeout": 15,
             "async": true,
             "statusMessage": "Binding Synapse child task"
@@ -20,6 +21,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/compact-memory.mjs\"",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/compact-memory.mjs\"",
             "timeout": 10,
             "statusMessage": "Preparing Synapse memory checkpoint"
           }
@@ -32,6 +34,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run-dispatch.sh\"",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/dispatch.mjs\"",
             "timeout": 30,
             "async": true,
             "statusMessage": "Routing Synapse task"
@@ -39,12 +42,14 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/prompt-memory.mjs\"",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/prompt-memory.mjs\"",
             "timeout": 10,
             "statusMessage": "Saving Synapse memory"
           },
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/offer-setup.mjs\"",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/offer-setup.mjs\"",
             "timeout": 10,
             "statusMessage": "Checking Synapse setup"
           }
@@ -57,6 +62,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs\"",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs\"",
             "timeout": 10,
             "statusMessage": "Checking Synapse memory checkpoint"
           }

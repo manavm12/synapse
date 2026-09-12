@@ -2,74 +2,39 @@
 
 - Branch: `shobhit/windows-test-fixes`
 - Human owner: `Shobhit Goel`
-- Active agent: `unassigned` -- Claude has stopped; ready for Codex (or any
-  agent) to resume immediately. Usage/credits have been added to the
-  connected Codex account, so the live-testing budget concern below is
-  cleared -- proceed with live `codex exec` testing.
+- Active agent: `unassigned` -- Codex completed the Windows hook investigation
+  and stopped after pushing the checkpoint.
 - Base reviewed: `0aad6a1`
-- Last checkpoint: `9245aae`
-- Status: `blocked` -- PR #18 (the parts already fixed) is open and was green
-  on CI as of `e79f0f9`; the specific open problem is below in
-  "START HERE for the next agent."
+- Last checkpoint: branch `HEAD`
+- Status: `ready_for_review` -- the Windows hook blocker was reproduced,
+  isolated, fixed, and verified live. PR #18 remains the review surface.
 
 ## START HERE for the next agent
 
-**The problem, precisely**: Synapse's plugin hooks (`plugins/synapse/hooks/hooks.json`)
-do not execute successfully when Codex triggers them on Windows, even after
-fixing the hardcoded absolute path `/bin/sh` to the bare command `sh` (which
-is the technically correct fix -- verified that `sh` resolves correctly via
-Node's real process spawn on this Windows machine, and it matches Codex's
-own documented Windows plugin support via Git Bash). The `sh` fix is real
-and already committed (`e79f0f9`), but it was proven, not assumed, to be
-insufficient by itself: see "Follow-up in the same session: a conclusive
-negative result" below for the exact reproduction.
+**The Windows hook blocker is resolved.** Do not repeat the metered live
+reproduction unless a regression appears. The conclusive findings were:
 
-**What to actually do**:
-1. Read this entire handoff before touching anything -- especially the
-   "Completed" section below, so you don't repeat the same dead-end
-   experiments (e.g. don't rely on `prompt-memory.mjs`'s own checkpoint
-   write as a success signal; it requires a registered project AND an
-   already-existing checkpoint file, so it can't prove success or failure
-   on its own -- that's why the unconditional-marker-write technique below
-   was needed instead).
-2. Reproduce the negative result first, to confirm the starting state:
-   register a throwaway git repo as a Synapse project via `connectProject()`
-   (pure local SQLite write, no OAuth needed -- see the exact code below),
-   then run `codex exec --dangerously-bypass-hook-trust --json "<prompt>"`
-   against it, with a temporary unconditional diagnostic write added to the
-   top of a hook script (e.g. `prompt-memory.mjs`) to remove all ambiguity.
-   Confirm the marker still doesn't appear before investigating further.
-3. Test hypotheses in this order (cheapest/most informative first), **now
-   that usage is available**:
-   a. Add `--dangerously-bypass-approvals-and-sandbox` to the same repro.
-      `codex doctor` reports command execution is sandboxed by default
-      ("restricted fs + restricted network... sandbox backend: elevated").
-      If the marker appears with this flag, the sandbox is wrapping hook
-      subprocess execution and blocking `sh.exe` (or restricting its
-      filesystem/network access) independently of the shell-invocation fix.
-      That would mean the real fix is either an explicit sandbox exemption
-      for hook commands, or documenting that hooks need
-      `-s danger-full-access` on Windows, or something Codex-side to report
-      upstream.
-   b. If sandbox bypass doesn't change the result, test whether `codex exec`
-      (a non-interactive, single-shot command) processes plugin hooks at
-      all on this platform -- try the same scenario through the interactive
-      `codex` TUI instead (a real prompt in a real interactive session, in
-      the registered repo), since hooks may be an interactive/desktop-app-only
-      surface regardless of platform. This wasn't tested yet.
-   c. If neither explains it, this may be a genuine Codex-side Windows gap
-      outside this repo's control -- consider checking
-      https://github.com/openai/codex/issues (found real, relevant Windows
-      native-pipe issues there during earlier research) or filing a new one.
-4. Once you find the actual fix, **verify it conclusively** the same way
-   the negative result was proven: an unconditional diagnostic write that
-   bypasses all of Synapse's own gating logic, not just "no visible error."
-   Then **remove the diagnostic code** (`git diff` must be clean of it)
-   before committing the real fix.
-5. Update this handoff's "Completed"/"Verification" sections with the
-   result -- positive or still-negative -- and push before stopping.
-   `npm run lint`, `npm run format:check`, and `npm test` must still pass
-   (219 pass / 0 fail / 16 skipped baseline; see "Verification" below).
+1. The original bare-`sh` build fails both with and without
+   `--dangerously-bypass-approvals-and-sandbox`; sandboxing is not the cause.
+2. The interactive TUI reports explicit hook attempts/failures, so hooks are
+   not an interactive-only feature.
+3. Adding `C:\Program Files\Git\bin` to `PATH` makes the original build's
+   unconditional marker appear under `codex exec`. Therefore `codex exec`
+   does support plugin hooks on Windows; normal Git for Windows installs put
+   `git.exe` on `...\Git\cmd`, not `sh.exe` from `...\Git\bin`.
+4. Official Codex hook configuration supports `commandWindows`. Every hook
+   now retains its POSIX `command` and has a Windows PowerShell override that
+   invokes the Codex-supplied signed Node runtime through `run-node.ps1`.
+5. Windows PowerShell 5.1 mangled the original inline JavaScript SQLite
+   preflight passed with `-e`. Moving the preflight to `check-runtime.mjs`
+   fixed that final quoting issue.
+6. With the final build installed, the exact baseline `codex exec` command
+   created the unconditional marker on `win32` without a Git-Bash PATH edit
+   or sandbox bypass. All diagnostic writes and marker files were removed.
+
+Next agent: review PR #18, recheck CI after this checkpoint, and continue the
+remaining cross-platform items below without reopening the resolved hook
+execution hypothesis unless new evidence warrants it.
 
 ## Goal
 
@@ -86,6 +51,8 @@ by inspecting code alone. This handoff covers both phases.
 - `plugins/synapse/lib/app-tools-client.mjs`
 - `plugins/synapse/hooks/hooks.json`
 - `plugins/synapse/hooks/run-dispatch.sh`
+- `plugins/synapse/scripts/check-runtime.mjs`
+- `plugins/synapse/scripts/run-node.ps1`
 - `plugins/synapse/skills/setup-synapse/SKILL.md`
 - `scripts/lib/local-plugin-install.mjs`
 - `scripts/validate-plugin.mjs`
@@ -229,6 +196,34 @@ platform -- untested whether hooks fire differently through the interactive
 TUI or the real desktop app GUI, which were not exercised, (c) some other
 Windows-specific Codex hook-execution gap not yet identified.
 
+### Phase 3 (Codex follow-up) -- actual blocker isolated and fixed
+
+Followed the Appendix reproduction literally with the unconditional marker:
+
+- Baseline bare-`sh` run: model returned `PING_OK`; marker absent.
+- Same run with `--dangerously-bypass-approvals-and-sandbox`: model returned
+  `PING_OK`; marker absent. This ruled out the sandbox hypothesis.
+- Interactive TUI: emitted explicit `Hook failed` events, proving the TUI
+  attempts plugin hooks.
+- `where.exe sh` returned no executable. This machine's normal PATH contains
+  `C:\Program Files\Git\cmd` for `git.exe`, while `sh.exe` is under
+  `C:\Program Files\Git\bin`. Prepending the latter and rerunning the exact
+  `codex exec` command made the marker appear. This proved that `codex exec`
+  supports hooks and that bare `sh` PATH resolution was the blocker.
+- The official Codex Hooks documentation documents `commandWindows` as the
+  Windows-only command override. Added it to all six handlers, backed by a
+  new `scripts/run-node.ps1` launcher. The normal `command` stays POSIX.
+- A launcher-level trace then showed all Windows handlers were selected and
+  received both `CODEX_MCP_NODE_PATH` and expanded plugin paths, but the
+  SQLite preflight returned `1`. The cause was Windows PowerShell 5.1 native
+  argument quoting mangling the JavaScript supplied through `node -e`.
+  Replaced that inline program with `scripts/check-runtime.mjs`.
+- Final live run: the exact baseline command (normal sandbox, no Git `bin`
+  PATH injection) created `hook-executed-marker.txt` with
+  `ran at 2026-09-12T08:07:18.905Z on win32`. The marker code was then
+  removed from `prompt-memory.mjs`, and both external diagnostic marker files
+  were deleted.
+
 ## Decisions and invariants
 
 - Fix path/URL/IPC-address/shell-invocation handling to be genuinely
@@ -236,13 +231,10 @@ Windows-specific Codex hook-execution gap not yet identified.
   rather than papering over failures with skips, except where a capability
   is genuinely OS-gated (Windows symlink privilege, POSIX permission bits,
   POSIX signals) -- there, skip explicitly with a stated reason.
-- The `/bin/sh` -> `sh` fix is justified on its own technical merits (matches
-  Codex's documented Windows behavior; verified correct PATH resolution via
-  Node's real spawn) but is **conclusively proven insufficient on its own**
-  to make hooks execute via `codex exec` on Windows -- see the "conclusive
-  negative result" note above. Do not describe it as fixing Windows hook
-  execution; describe it as "a necessary but not sufficient fix, with the
-  actual blocker still unidentified."
+- Bare `sh` remains the portable POSIX command, but it is not a sufficient
+  Windows strategy because a normal Git for Windows PATH exposes `git.exe`
+  from `Git\cmd`, not `sh.exe` from `Git\bin`. Use Codex's documented
+  `commandWindows` override and the signed runtime launcher instead.
 - `--dangerously-bypass-hook-trust` is safe to use for automation that has
   actually read the hook source, per the flag's own documentation. Used
   here deliberately, not as a workaround.
@@ -260,26 +252,10 @@ Windows-specific Codex hook-execution gap not yet identified.
 
 ## Remaining work
 
-1. **Find the actual blocker.** Hooks conclusively do not execute via
-   `codex exec` on Windows even after the `sh` fix and with a registered
-   project (see "conclusive negative result" above). Get explicit user
-   sign-off before spending more Codex usage, then investigate in this
-   order (cheapest/most informative first):
-   - Retry with `--dangerously-bypass-approvals-and-sandbox` (the run that
-     would test this hit the account's usage limit before finishing --
-     rerun once usage resets) to isolate whether the command sandbox blocks
-     hook subprocess spawning independently of the shell fix.
-   - If sandbox bypass doesn't fix it, test via the interactive `codex` TUI
-     or the real desktop app GUI directly (not `codex exec`), since plugin
-     hooks may be processed differently -- or not at all -- by the
-     non-interactive single-shot exec path.
-   - Consider asking in the Codex/OpenAI developer community or filing an
-     issue if neither explains it; this may be a genuine Codex-side Windows
-     gap rather than anything fixable in this repo.
-   - A registered throwaway test project already exists locally for this:
-     `C:\Users\DELL\AppData\Local\Temp\synapse-native-test-repo`, registered
-     under alias `synapselivetest` in the real `~/.synapse/host.sqlite`.
-     Harmless to leave; remove via direct SQL/CLI if a clean slate is wanted.
+1. **Review and merge the proven Windows hook fix.** Recheck PR #18's Linux
+   CI after this checkpoint. The registered throwaway project remains at
+   `C:\Users\DELL\AppData\Local\Temp\synapse-native-test-repo` under alias
+   `synapselivetest`; it is harmless to leave for a future regression test.
 2. **Un-skip the 6 `needsPosix*`/`0o600` test scenarios individually now
    that a real `sh` fix exists** -- not a blanket find/replace:
    - The `/bin/sh`-hardcoded test harnesses (`setup.test.mjs` x4,
@@ -327,34 +303,34 @@ Windows-specific Codex hook-execution gap not yet identified.
   Windows Codex app after both install-script fixes; `codex plugin list
   --json` confirmed `installed: true, enabled: true` for the resulting
   `synapse@synapse-dev-*` plugin.
-- Live: `codex exec --dangerously-bypass-hook-trust` completed successfully
-  (the model turn itself) in every run. Hook execution specifically was
-  tested with an **unconditional** diagnostic file write added temporarily
-  to `prompt-memory.mjs`, against a real registered project -- the marker
-  never appeared. **Conclusive negative result** for hook execution via
-  `codex exec` on Windows post-fix; not merged, fully reverted (`git diff`
-  clean).
-- Live: a follow-up test adding `--dangerously-bypass-approvals-and-sandbox`
-  (to isolate whether Codex's command sandbox also blocks hook subprocess
-  spawning) hit the account's Codex usage limit before the turn completed --
-  untested, not failed.
+- Live: both the normal-sandbox and sandbox-bypass runs remained negative
+  with bare `sh`; adding Git's `bin` directory made the same exec run create
+  the marker, proving `codex exec` hook support and isolating PATH resolution.
+- Live: interactive TUI emitted `Hook failed`, independently proving that
+  interactive Codex attempts the same plugin hooks.
+- Live: the final `commandWindows` + PowerShell launcher + file-based runtime
+  preflight build created the unconditional marker on `win32` using the exact
+  baseline command, normal sandbox, and normal PATH. Diagnostic code/files
+  were removed afterward.
+- Direct Windows launcher smoke test with Codex's bundled Node -- exit `0`.
+- `npm run check` -- formatting/lint and all 219 tests pass, but the command
+  exits nonzero on the repository-wide pre-existing coverage gate: 77.47%
+  lines versus the configured 85% threshold (largely skipped Postgres files).
 
 ## Risks or blockers
 
-- **Hook execution on Windows is still broken after this fix.** The `sh`
-  change is real and correct but not sufficient by itself; do not report or
-  merge-describe this as "Windows hook execution now works." See "Remaining
-  work" item 1 for the next diagnostic steps.
+- Windows hook execution now works in the tested Codex CLI/Desktop build
+  (`0.153.4`). The remaining platform work below (credential storage and
+  native app-tools delivery) is separate and still unverified end to end.
 - **Each live `codex exec` test spends real, metered usage against the
-  connected Codex account.** This investigation's repeated tests hit the
-  account's usage limit. Get explicit user confirmation before running more
-  live tests, and expect a real wait/cost to continue this investigation.
+  connected Codex account.** The user explicitly authorized the completed
+  follow-up after adding credits; get fresh confirmation before any new live
+  regression campaign.
 - PR #18 was already open and green on CI before commit `e79f0f9`. Recheck
   `gh pr checks 18` after pushing further commits before merging -- CI runs
   on Linux, so it re-validates none of these Windows-specific changes broke
-  POSIX behavior, but cannot itself validate the Windows-side claims in this
-  handoff (which, per above, are currently a mix of "fixed" and "still
-  broken, cause unknown").
+  POSIX behavior, but cannot itself validate the Windows-side claims already
+  proven on this machine.
 - The plugin is currently installed into the user's real, live Windows
   Codex app as `synapse@synapse-dev-81bbd29df3a5` (a disposable dev
   snapshot, not `synapse@synapse`). Harmless but leave it deliberately or

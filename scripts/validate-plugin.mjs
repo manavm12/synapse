@@ -135,6 +135,8 @@ await access(resolve(pluginRoot, "skills/setup-synapse/SKILL.md"));
 await access(resolve(pluginRoot, "scripts/setup.mjs"));
 
 const hooks = (await readJson(resolve(pluginRoot, "hooks/hooks.json"))).hooks;
+const windowsNodeCommand = (script) =>
+  `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "\${PLUGIN_ROOT}/scripts/run-node.ps1" "\${PLUGIN_ROOT}/hooks/${script}"`;
 assert(
   hooks?.Stop?.[0]?.hooks?.[0]?.type === "command",
   "Stop must use the local scheduler",
@@ -143,6 +145,11 @@ assert(
   hooks.Stop[0].hooks[0].command ===
     `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs"`,
   "Stop must launch the dependency-free checkpoint scheduler",
+);
+assert(
+  hooks.Stop[0].hooks[0].commandWindows ===
+    windowsNodeCommand("checkpoint-memory.mjs"),
+  "Stop must use the Windows-native runtime launcher on Windows",
 );
 await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
 assert(
@@ -153,6 +160,14 @@ assert(
       hook.async !== true,
   ),
   "UserPromptSubmit must inject due memory saves privately",
+);
+assert(
+  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
+    (hook) =>
+      hook.commandWindows === windowsNodeCommand("prompt-memory.mjs") &&
+      hook.async !== true,
+  ),
+  "UserPromptSubmit must inject memory through the Windows-native launcher",
 );
 await access(resolve(pluginRoot, "hooks/prompt-memory.mjs"));
 assert(
@@ -169,6 +184,18 @@ assert(
   "SessionStart must bind delegated permanent task IDs in the child",
 );
 assert(
+  hooks?.SessionStart?.some(
+    (entry) =>
+      entry.matcher === "^startup$" &&
+      entry.hooks?.some(
+        (hook) =>
+          hook.commandWindows === windowsNodeCommand("bind-child.mjs") &&
+          hook.async === true,
+      ),
+  ),
+  "SessionStart must bind child tasks through the Windows-native launcher",
+);
+assert(
   hooks?.UserPromptSubmit?.[0]?.hooks?.some(
     (hook) =>
       hook.command === `sh "\${PLUGIN_ROOT}/hooks/run-dispatch.sh"` &&
@@ -176,6 +203,16 @@ assert(
   ),
   "UserPromptSubmit must route Synapse tasks asynchronously through the signed desktop runtime",
 );
+assert(
+  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
+    (hook) =>
+      hook.commandWindows === windowsNodeCommand("dispatch.mjs") &&
+      hook.async === true,
+  ),
+  "UserPromptSubmit must route tasks through the Windows-native launcher",
+);
+await access(resolve(pluginRoot, "scripts/run-node.ps1"));
+await access(resolve(pluginRoot, "scripts/check-runtime.mjs"));
 assert(
   hooks?.SessionStart?.some((entry) => entry.matcher === "^compact$"),
   "SessionStart must restore memory after compaction",
