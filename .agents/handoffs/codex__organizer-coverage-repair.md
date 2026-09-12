@@ -78,6 +78,10 @@ then resume the authorized production organizer rollout.
 - Current read-only verification permits the library's bounded maximum of three
   calls per stage (initial call, repair, transient retry); actual production
   settings remain two until this experiment is verified. Queue history unchanged.
+- Exclusive-group dry run reached 19 extracted claims but failed `required_text`
+  after three calls. Required claim text and exclusion reasons are now nonempty
+  provider patterns, matching the core validator; repair feedback names empty
+  fields. Full final validation is being rerun before another no-write test.
 
 ## Remaining work
 

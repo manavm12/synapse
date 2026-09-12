@@ -70,7 +70,8 @@ evidence. Grouping never authorizes unsupported claims or changes earlier
 committed IDs. Audits identify the format as `source-groups-v1` (`flat-v1` for
 injected adapters that do not implement the grouped wire format).
 
-Core validation independently enforces current-source support, unique evidence,
+Provider patterns require nonblank claim metadata/assertions and exclusion reasons,
+matching the core's nonempty-text checks. Core validation independently enforces current-source support, unique evidence,
 complete coverage, and total claim bounds. Inputs fail closed on provider enum
 limits rather than truncating evidence. Flat proposal repairs identify all
 evidence and coverage inconsistencies together within the existing call budget.

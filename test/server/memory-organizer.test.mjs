@@ -130,6 +130,21 @@ test("extraction constrains current and earlier evidence without mutating shared
   const extract = run.calls.filter((call) => call.stage === "extract")[1];
   const properties = extract.schema.properties;
   assert.equal(properties.claims.items.properties.evidence.minItems, 1);
+  for (const key of [
+    "subject",
+    "aspect",
+    "scope",
+    "title",
+    "assertion",
+    "topic",
+  ]) {
+    assert.equal(properties.claims.items.properties[key].pattern, "\\S");
+    assert.equal(
+      extractionSchema.properties.claims.items.properties[key].pattern,
+      undefined,
+    );
+  }
+  assert.equal(properties.claims.items.properties.subtopic.pattern, undefined);
   const current = extract.data.segments.map((segment) => segment.id);
   const known = [
     ...new Set([
@@ -475,6 +490,37 @@ test("one repair identifies empty, duplicate, and context-only claim evidence al
   ]);
   assert.match(feedback, /Coverage consistency issues:/);
   assert.doesNotMatch(feedback, /earlier-context/);
+});
+
+test("required-text repair names empty metadata fields and incomplete coverage reasons", () => {
+  const bad = structuredClone(fixture.steps[0].extraction);
+  bad.claims[0].scope = " ";
+  bad.claims[1].topic = "";
+  bad.claims[1].title = "";
+  bad.coverage[0].reason = "";
+  const feedback = extractionRepairFeedback(
+    new Error("scope must not be empty"),
+    bad,
+    segmentsFor(fixture.steps[0].envelope),
+  );
+  const issues = JSON.parse(
+    feedback.split("Required text issues: ")[1].split("\n")[0],
+  );
+  assert.deepEqual(issues, [
+    { ref: "c1", fields: ["scope"] },
+    { ref: "c2", fields: ["title", "topic"] },
+  ]);
+  assert.ok(feedback.includes(bad.coverage[0].segmentId));
+  assert.match(feedback, /Use unqualified/);
+  assert.throws(
+    () =>
+      validateExtraction(
+        fixture.steps[0].envelope,
+        bad,
+        emptyLedger(fixture.identity),
+      ),
+    /scope must not be empty/,
+  );
 });
 
 test("review rejection and structural repairs stay inside per-stage budgets", async () => {

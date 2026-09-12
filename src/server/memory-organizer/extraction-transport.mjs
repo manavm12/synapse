@@ -1,9 +1,4 @@
-import {
-  choice,
-  object,
-  text,
-  validateSchema,
-} from "../../memory/core/schema.mjs";
+import { choice, object, validateSchema } from "../../memory/core/schema.mjs";
 
 // The public handler/core contract stays flat. On the provider wire, every
 // current segment is a required object key. A claim's group is its primary
@@ -29,7 +24,7 @@ export function extractionTransport(flatSchema) {
   });
   const excludedGroup = object({
     nonClaimDisposition: choice("context", "untrusted", "boilerplate"),
-    nonClaimReason: text,
+    nonClaimReason: { type: "string", pattern: "\\S" },
   });
   const providerSchema = object({
     segments: object(

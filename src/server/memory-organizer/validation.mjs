@@ -1,6 +1,15 @@
 import { extractionSchema } from "../../memory/core/index.mjs";
 import { MemoryInferenceError } from "./api.mjs";
 
+const requiredClaimText = [
+  "subject",
+  "aspect",
+  "scope",
+  "title",
+  "assertion",
+  "topic",
+];
+
 export function extractionSchemaFor(segments, contextEvidence) {
   const schema = structuredClone(extractionSchema);
   const current = [...new Set(segments.map((segment) => segment.id))];
@@ -25,11 +34,17 @@ export function extractionSchemaFor(segments, contextEvidence) {
       minItems: 1,
       items: { type: "string", enum: known },
     };
-  if (current.length)
+  if (current.length) {
+    for (const key of requiredClaimText)
+      schema.properties.claims.items.properties[key] = {
+        type: "string",
+        pattern: "\\S",
+      };
     schema.properties.coverage.items.properties.segmentId = {
       type: "string",
       enum: current,
     };
+  }
   return schema;
 }
 
@@ -70,10 +85,15 @@ export function extractionRepairFeedback(error, extraction, segments) {
     !extraction ||
     (!reason.startsWith("coverage_") &&
       reason !== "evidence_unique" &&
-      reason !== "current_evidence_required")
+      reason !== "current_evidence_required" &&
+      reason !== "required_text")
   )
     return error.message;
   const currentIds = new Set(segments.map((segment) => segment.id));
+  const textIssues = extraction.claims.flatMap((claim) => {
+    const fields = requiredClaimText.filter((key) => !claim[key].trim());
+    return fields.length ? [{ ref: claim.ref, fields }] : [];
+  });
   const evidenceIssues = extraction.claims.flatMap((claim) => {
     const empty = claim.evidence.length === 0;
     const duplicate = new Set(claim.evidence).size !== claim.evidence.length;
@@ -91,7 +111,8 @@ export function extractionRepairFeedback(error, extraction, segments) {
       .map((claim) => claim.ref);
     if (
       entries.length === 1 &&
-      (entries[0].disposition === "claims") === citingRefs.length > 0
+      (entries[0].disposition === "claims") === citingRefs.length > 0 &&
+      entries[0].reason.trim()
     )
       return [];
     return [
@@ -103,9 +124,12 @@ export function extractionRepairFeedback(error, extraction, segments) {
       },
     ];
   });
-  return `${error.message}. Evidence consistency issues: ${JSON.stringify(evidenceIssues)}
+  return `${error.message}. Required text issues: ${JSON.stringify(textIssues)}
+Evidence consistency issues: ${JSON.stringify(evidenceIssues)}
 Coverage consistency issues: ${JSON.stringify(issues)}
 Every claim requires nonempty unique evidence IDs and at least one current source citation.
+Every claim subject/aspect/scope/title/assertion/topic and every non-claim reason must be
+nonempty. Use unqualified for an unspecified environment scope; do not invent missing facts.
 Give each current segment exactly one entry; remove unknown or duplicate coverage entries.
 A cited segment MUST have disposition claims, including contextual evidence cited by a claim.
 An uncited segment CANNOT have disposition claims. Extract any missing durable assertions with
