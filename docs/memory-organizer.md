@@ -54,7 +54,8 @@ in the queue with bounded error text; this version does not persist detailed
 failed-call usage. Use provider usage reporting for actual billing reconciliation.
 
 The provider wire format groups claims under exact current source segment keys.
-Every current segment is a required object property. A claim's group is its
+Every current segment is a required object property, containing either a nonempty
+claims array or a non-claim disposition and reason (never both). A claim's group is its
 model-selected primary evidence; `additionalEvidence` may cite other current
 segments or earlier accepted context. Shared schema definitions keep evidence
 enums single-copy. The adapter validates the grouped response, flattens it in

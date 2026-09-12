@@ -623,8 +623,6 @@ function groupedFixture() {
               ...claim,
               additionalEvidence: evidence.slice(1),
             })),
-          nonClaimDisposition: "context",
-          nonClaimReason: "",
         },
       ]),
     ),
@@ -671,16 +669,19 @@ test("cross-segment context and repeated evidence cannot contradict derived cove
     second,
     "earlier",
   ];
-  grouped.segments[second].claims = [];
-  grouped.segments[second].nonClaimReason = "Context for the first group";
+  grouped.segments[second] = {
+    nonClaimDisposition: "context",
+    nonClaimReason: "Context for the first group",
+  };
   const before = structuredClone(grouped);
   const flat = transport.decode(grouped);
   assert.deepEqual(flat.claims[0].evidence, [first, second, "earlier"]);
   assert.ok(flat.coverage.every((entry) => entry.disposition === "claims"));
   assert.deepEqual(grouped, before);
-  grouped.segments[first].claims = [];
-  grouped.segments[first].nonClaimDisposition = "boilerplate";
-  grouped.segments[first].nonClaimReason = "No assertions";
+  grouped.segments[first] = {
+    nonClaimDisposition: "boilerplate",
+    nonClaimReason: "No assertions",
+  };
   const empty = transport.decode(grouped);
   assert.equal(empty.claims.length, 0);
   assert.deepEqual(
@@ -707,6 +708,9 @@ test("grouped transport rejects missing/foreign groups, foreign evidence and exc
     },
     (value) => {
       value.segments[first].nonClaimDisposition = "claims";
+    },
+    (value) => {
+      value.segments[first].claims = [];
     },
     (value) => {
       value.segments[first].claims[0].additionalEvidence = null;
@@ -760,9 +764,10 @@ test("derived coverage does not bypass semantic review for omitted or unsupporte
     const grouped = groupedFixture();
     const first = Object.keys(grouped.segments)[0];
     if (omit) {
-      grouped.segments[first].claims = [];
-      grouped.segments[first].nonClaimReason =
-        "Model incorrectly judged no durable facts";
+      grouped.segments[first] = {
+        nonClaimDisposition: "context",
+        nonClaimReason: "Model incorrectly judged no durable facts",
+      };
     } else
       grouped.segments[first].claims[0].assertion =
         "Unsupported synthetic assertion";

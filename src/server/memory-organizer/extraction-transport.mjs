@@ -24,13 +24,12 @@ export function extractionTransport(flatSchema) {
       items: structuredClone(properties.evidence.items),
     },
   });
-  const group = object({
-    claims: { type: "array", items: claim },
+  const claimGroup = object({
+    claims: { type: "array", minItems: 1, items: claim },
+  });
+  const excludedGroup = object({
     nonClaimDisposition: choice("context", "untrusted", "boilerplate"),
     nonClaimReason: text,
-  });
-  const localSchema = object({
-    segments: object(Object.fromEntries(ids.map((id) => [id, group]))),
   });
   const providerSchema = object({
     segments: object(
@@ -40,22 +39,42 @@ export function extractionTransport(flatSchema) {
   // Definitions keep enums single-copy regardless of source segment count.
   providerSchema.$defs = {
     group: {
-      ...group,
-      properties: {
-        ...group.properties,
-        claims: { type: "array", items: { $ref: "#/$defs/claim" } },
-      },
+      anyOf: [
+        object({
+          claims: {
+            type: "array",
+            minItems: 1,
+            items: { $ref: "#/$defs/claim" },
+          },
+        }),
+        excludedGroup,
+      ],
     },
     claim,
   };
   return {
     schema: providerSchema,
     decode(value) {
+      const localSchema = object({
+        segments: object(
+          Object.fromEntries(
+            ids.map((id) => [
+              id,
+              Object.hasOwn(value?.segments?.[id] ?? {}, "claims")
+                ? claimGroup
+                : excludedGroup,
+            ]),
+          ),
+        ),
+      });
       validateSchema(value, localSchema);
       const claims = [];
       for (const id of ids) {
-        for (const { additionalEvidence, ...assertion } of value.segments[id]
-          .claims) {
+        const entries = value.segments[id].claims;
+        // The small core schema validator does not implement minItems.
+        if (entries?.length === 0)
+          throw new Error("Empty claim group requires an explicit exclusion");
+        for (const { additionalEvidence, ...assertion } of entries ?? []) {
           claims.push({
             ref: `c${claims.length + 1}`,
             ...assertion,

@@ -45,6 +45,13 @@ then resume the authorized production organizer rollout.
   local validation, deterministic flattening and citation/coverage derivation.
   Empty uncited groups still need justified non-claim classifications; omission
   and unsupported assertions remain subject to independent semantic review.
+- Grouped read-only run on `55c6976` passed structural validation but needed
+  semantic extraction repair, then hit HTTP 429 at review. No commit or queue
+  attempt occurred. A subsequent minimal API probe succeeded (200), not a
+  persistent credential/quota failure.
+- Simplified each group to an exclusive schema choice: nonempty claims OR a
+  justified non-claim classification. Claims no longer carry irrelevant
+  non-claim metadata. Current edits require another verified full dry run.
 
 ## Decisions and invariants
 
