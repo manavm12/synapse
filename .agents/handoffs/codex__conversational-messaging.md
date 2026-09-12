@@ -4,8 +4,8 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex` in `Review Synapse functionality`
 - Base reviewed: `bf48aec` (current main at takeover)
-- Last checkpoint: `12096fe` (main merged before review fixes)
-- Status: `active`
+- Last checkpoint: `83ad453da81bafca3819a15ebd48f3c99cff797d` (tested and pushed implementation)
+- Status: `waiting for live acceptance`
 
 ## Goal
 
@@ -60,7 +60,7 @@ test when controlled accounts and native queue access are available.
 
 ## Remaining work
 
-1. Push the fixes and verify required CI on the published head.
+1. Verify required CI on the published head (queued at this checkpoint).
 2. Complete the required live two-account desktop smoke test when prerequisites
    are available. Do not merge based solely on automated fixture results.
 
