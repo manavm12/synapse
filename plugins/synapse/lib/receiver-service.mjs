@@ -16,6 +16,23 @@ const label = "com.synapse.receiver";
 const executable = fileURLToPath(
   new URL("../server/receiver.mjs", import.meta.url),
 );
+const windowsManager = fileURLToPath(
+  new URL("../scripts/manage-receiver-task.ps1", import.meta.url),
+);
+const ENVIRONMENT_KEYS = [
+  "CODEX_HOME",
+  "SYNAPSE_HOME",
+  "SYNAPSE_HOST_DB",
+  "SYNAPSE_INBOX_PATH",
+  "SYNAPSE_CODEX_SOCKET",
+  "SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP",
+];
+
+function serviceEnvironment(env) {
+  return Object.fromEntries(
+    ENVIRONMENT_KEYS.filter((key) => env[key]).map((key) => [key, env[key]]),
+  );
+}
 
 function xml(value) {
   return String(value)
@@ -35,18 +52,7 @@ export function receiverServicePlist({
   // copy credentials or the parent's complete process environment into a plist.
   const variables = {
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    ...Object.fromEntries(
-      [
-        "CODEX_HOME",
-        "SYNAPSE_HOME",
-        "SYNAPSE_HOST_DB",
-        "SYNAPSE_INBOX_PATH",
-        "SYNAPSE_CODEX_SOCKET",
-        "SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP",
-      ]
-        .filter((key) => env[key])
-        .map((key) => [key, env[key]]),
-    ),
+    ...serviceEnvironment(env),
   };
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -64,6 +70,24 @@ export function receiverServicePlist({
 </dict></plist>\n`;
 }
 
+function systemdEscape(value) {
+  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+export function receiverServiceSystemd({ nodePath, script = executable, stateDirectory, env = {} }) {
+  const variables = serviceEnvironment(env);
+  return `[Unit]\nDescription=Synapse incoming task receiver\nAfter=default.target\n\n[Service]\nType=simple\nExecStart="${systemdEscape(nodePath)}" "${systemdEscape(script)}"\nRestart=always\nRestartSec=10\n${Object.entries(variables).map(([key, value]) => `Environment="${key}=${systemdEscape(value)}"`).join("\n")}\nStandardOutput=append:${systemdEscape(join(stateDirectory, "receiver.log"))}\nStandardError=append:${systemdEscape(join(stateDirectory, "receiver-error.log"))}\n\n[Install]\nWantedBy=default.target\n`;
+}
+
+function powershellLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+export function receiverServicePowerShell({ nodePath, script = executable, stateDirectory, env = {} }) {
+  const variables = serviceEnvironment(env);
+  return `$ErrorActionPreference = "Stop"\n${Object.entries(variables).map(([key, value]) => `$env:${key} = ${powershellLiteral(value)}`).join("\n")}\n& ${powershellLiteral(nodePath)} ${powershellLiteral(script)} 1>> ${powershellLiteral(join(stateDirectory, "receiver.log"))} 2>> ${powershellLiteral(join(stateDirectory, "receiver-error.log"))}\nexit $LASTEXITCODE\n`;
+}
+
 async function startService(
   { automatic = false } = {},
   {
@@ -76,8 +100,8 @@ async function startService(
     inboxOptions = { path: inboxPath(env) },
   } = {},
 ) {
-  if (platform !== "darwin")
-    throw new Error("Background receiving currently requires macOS.");
+  if (!["darwin", "win32", "linux"].includes(platform))
+    throw new Error(`Background receiving is not supported on ${platform}.`);
   const runtime = withInbox((database) => {
     const worker = database
       .prepare("SELECT stopped FROM receiver_workers WHERE name='receiver'")
@@ -100,6 +124,34 @@ async function startService(
       "Open a Synapse-enabled Codex task once to register the signed desktop runtime.",
     );
   const stateDirectory = resolve(dirname(inboxOptions.path));
+  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+  if (platform === "win32") {
+    const path = join(stateDirectory, "receiver-service.ps1");
+    const body = receiverServicePowerShell({ nodePath: selectedNode, stateDirectory, env });
+    const existing = await readFile(path, "utf8").catch(() => null);
+    let loaded = false;
+    try {
+      await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windowsManager, "status", path], { timeout: 3000, windowsHide: true });
+      loaded = true;
+    } catch { /* Task is not registered. */ }
+    if (loaded && existing === body) return { started: true, unchanged: true };
+    await writeFile(path, body, { mode: 0o600 });
+    await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windowsManager, "start", path], { timeout: 5000, windowsHide: true });
+    return { started: true };
+  }
+  if (platform === "linux") {
+    const path = join(userHome, ".config", "systemd", "user", "synapse-receiver.service");
+    const body = receiverServiceSystemd({ nodePath: selectedNode, stateDirectory, env });
+    const existing = await readFile(path, "utf8").catch(() => null);
+    let loaded = false;
+    try { await run("systemctl", ["--user", "is-active", "synapse-receiver.service"], { timeout: 3000 }); loaded = true; } catch { /* Unit is inactive. */ }
+    if (loaded && existing === body) return { started: true, unchanged: true };
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await writeFile(path, body, { mode: 0o600 });
+    await run("systemctl", ["--user", "daemon-reload"], { timeout: 5000 });
+    await run("systemctl", ["--user", "enable", "--now", "synapse-receiver.service"], { timeout: 5000 });
+    return { started: true };
+  }
   const path = join(userHome, "Library", "LaunchAgents", `${label}.plist`);
   const body = receiverServicePlist({
     nodePath: selectedNode,
@@ -127,7 +179,6 @@ async function startService(
       timeout: 5000,
     });
   await mkdir(dirname(path), { recursive: true });
-  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
   await writeFile(path, body, { mode: 0o600 });
   await run("/bin/launchctl", ["bootstrap", `gui/${uid}`, path], {
     timeout: 5000,
@@ -162,6 +213,7 @@ export async function stopReceiverService(
   _input = {},
   {
     env = process.env,
+    platform = process.platform,
     userHome = homedir(),
     uid = process.getuid?.(),
     run = execAsync,
@@ -180,6 +232,19 @@ export async function stopReceiverService(
       )
       .run();
   }, inboxOptions);
+  if (platform === "win32") {
+    await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windowsManager, "stop", join(dirname(inboxOptions.path), "receiver-service.ps1")], { timeout: 5000, windowsHide: true });
+    await rm(join(dirname(inboxOptions.path), "receiver-service.ps1"), { force: true });
+    return { stopped: true };
+  }
+  if (platform === "linux") {
+    const path = join(userHome, ".config", "systemd", "user", "synapse-receiver.service");
+    await run("systemctl", ["--user", "disable", "--now", "synapse-receiver.service"], { timeout: 5000 }).catch(() => {});
+    await rm(path, { force: true });
+    await run("systemctl", ["--user", "daemon-reload"], { timeout: 5000 }).catch(() => {});
+    return { stopped: true };
+  }
+  if (platform !== "darwin") throw new Error(`Background receiving is not supported on ${platform}.`);
   try {
     await run("/bin/launchctl", ["bootout", `gui/${uid}/${label}`], {
       timeout: 5000,

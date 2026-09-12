@@ -2,14 +2,53 @@
 
 - Branch: `shobhit/windows-test-fixes`
 - Human owner: `Shobhit Goel`
-- Active agent: `Codex` -- implementing the user-authorized cross-platform MVP
-  completion pass; do not share this branch/worktree until it is unassigned.
+- Active agent: `unassigned` -- Codex checkpointed and pushed; Claude may take
+  ownership after fetching this branch.
 - Base reviewed: `fa57da5`
-- Last checkpoint: branch `HEAD`
-- Status: `active` -- current main is merged; auditing and implementing the
-  remaining Windows/macOS/Linux MVP gates after the verified hook fix.
+- Last checkpoint: commit `8e5fcbb`
+- Status: `ready for next agent` -- Windows/macOS/Linux implementation is
+  checkpointed below; finish review, docs, and full verification before merge.
 
 ## START HERE for the next agent
+
+Fetch origin and check out `shobhit/windows-test-fixes`. The previous Codex
+checkpoint added native cross-platform credential stores, browser launching,
+background receiver service adapters, Windows command overrides for every
+merged conversation hook, and a Windows Git-path normalization fix. Read the
+diff and run the focused tests before changing anything. The work is committed
+and pushed, but the user asked for a continuation checkpoint rather than a
+finished MVP claim.
+
+Important review items:
+
+- `receiver-secrets.mjs`: macOS Keychain remains unchanged in behavior;
+  Windows uses DPAPI-protected files via `windows-secret.ps1`; Linux uses
+  `secret-tool`. There is no plaintext fallback. Add/verify platform-specific
+  integration coverage as available.
+- `receiver-service.mjs`: macOS LaunchAgent remains; Windows uses a per-user
+  Task Scheduler task through `manage-receiver-task.ps1`; Linux uses a systemd
+  user unit. Review quoting and test behavior on native OSes.
+- `hooks/hooks.json`: all conversation and wake hooks now have
+  `commandWindows` PowerShell overrides. Validate the manifest and installed
+  plugin.
+- `dispatch.mjs`: `localQueueRoot` now normalizes Git's slash-form absolute
+  Windows paths with `resolve`, fixing a real skipped-routing failure.
+- `test/client/hook.test.mjs` and `test/plugin/setup.test.mjs`: former
+  hardcoded `/bin/sh` skips are now platform-aware; genuine POSIX signal,
+  shebang, and permission-bit skips may remain and should be reviewed
+  individually.
+- `docs/setup.md`, `docs/receiver.md`, README, architecture, and the setup
+  skill still contain current Mac-only wording and need updating before merge.
+
+Do not run metered live `codex exec` tests without fresh user approval. Do not
+share this worktree with another agent while working; claim it by changing the
+Active agent line, then unassign it again before handing off.
+
+Checkpoint verification: the focused cross-platform suite passed 65/65:
+`node --test test/client/open-url.test.mjs test/client/receiver-service.test.mjs
+test/client/receiver.test.mjs test/client/hook.test.mjs test/plugin/setup.test.mjs`.
+The repository-wide coverage gate was not rerun at this checkpoint. The docs
+and setup-skill Mac-only wording remain intentionally listed as next work.
 
 **The Windows hook blocker is resolved.** Do not repeat the metered live
 reproduction unless a regression appears. The conclusive findings were:

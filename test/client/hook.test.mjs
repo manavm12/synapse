@@ -23,21 +23,21 @@ const dispatchHookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
 const dispatchWrapperPath = resolve(pluginRoot, "hooks/run-dispatch.sh");
 const childBindHookPath = resolve(pluginRoot, "hooks/bind-child.mjs");
 
-// run-dispatch.sh is a POSIX shell script invoked via a hardcoded /bin/sh;
-// this matches production (Codex desktop is macOS-only today), but Windows
-// has no /bin/sh to exercise this against.
-const needsPosixShell =
-  platform() === "win32" &&
-  "requires a POSIX shell (/bin/sh), which this Windows host does not have";
-
 function runHook(
   path,
   input,
   { env = {}, hookPath = dispatchHookPath, wrapper = false } = {},
 ) {
   return new Promise((resolvePromise, reject) => {
-    const executable = wrapper ? "/bin/sh" : process.execPath;
-    const arguments_ = [wrapper ? dispatchWrapperPath : hookPath];
+    const windowsWrapper = wrapper && process.platform === "win32";
+    const executable = windowsWrapper
+      ? process.execPath
+      : wrapper
+        ? "/bin/sh"
+        : process.execPath;
+    const arguments_ = windowsWrapper
+      ? [hookPath]
+      : [wrapper ? dispatchWrapperPath : hookPath];
     const child = spawn(executable, arguments_, {
       env: {
         ...process.env,
@@ -141,6 +141,7 @@ async function fakeAppTools(directory, projectRoot) {
               { name: "list_projects", namespace: "codex_app" },
               { name: "create_thread", namespace: "codex_app" },
               { name: "send_message_to_thread", namespace: "codex_app" },
+              { name: "read_thread", namespace: "codex_app" },
             ],
           };
         } else if (message.params.tool === "list_projects") {
@@ -221,9 +222,7 @@ async function inbox() {
   );
 }
 
-test("the background hook creates a desktop project task and accepts its temporary ID", {
-  skip: needsPosixShell,
-}, async (t) => {
+test("the background hook creates a desktop project task and accepts its temporary ID", async (t) => {
   const path = await inbox();
   const { directory, primary } = await gitFixture();
   const appTools = await fakeAppTools(directory, primary);

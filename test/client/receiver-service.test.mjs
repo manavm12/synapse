@@ -15,7 +15,9 @@ import {
 import { withInbox } from "../../plugins/synapse/lib/inbox.mjs";
 import {
   receiverServicePlist,
+  receiverServicePowerShell,
   receiverServiceStatus,
+  receiverServiceSystemd,
   startReceiverService,
   stopReceiverService,
 } from "../../plugins/synapse/lib/receiver-service.mjs";
@@ -52,7 +54,7 @@ test("LaunchAgent lifecycle is scoped, idempotent, private and fenced against au
   assert.equal((await startReceiverService({}, f.options)).unchanged, true);
   const path = join(f.root, "Library/LaunchAgents/com.synapse.receiver.plist");
   const plist = await readFile(path, "utf8");
-  assert.match(plist, /server\/receiver.mjs/);
+  assert.match(plist, /server[\\/]receiver\.mjs/);
   assert.match(plist, /KeepAlive/);
   assert.equal(calls.filter((c) => c[0] === "bootstrap").length, 1);
   await writeFile(path, "older version");
@@ -79,8 +81,8 @@ test("LaunchAgent lifecycle is scoped, idempotent, private and fenced against au
 test("supervisor rejects unsupported runtimes, serializes concurrent starts, and stops absent jobs", async (t) => {
   const f = await fixture(t);
   await assert.rejects(
-    startReceiverService({}, { ...f.options, platform: "linux" }),
-    /macOS/,
+    startReceiverService({}, { ...f.options, platform: "aix" }),
+    /not supported/,
   );
   await assert.rejects(
     startReceiverService({}, { ...f.options, nodePath: "/missing" }),
@@ -126,6 +128,45 @@ test("supervisor rejects unsupported runtimes, serializes concurrent starts, and
     ),
     /denied/,
   );
+});
+
+test("Windows Task Scheduler and Linux systemd user services are generated safely", async (t) => {
+  const f = await fixture(t);
+  const windowsCalls = [];
+  const windows = {
+    ...f.options,
+    platform: "win32",
+    run: async (_command, args) => {
+      windowsCalls.push(args);
+      if (args.includes("status")) throw new Error("missing");
+    },
+  };
+  assert.equal((await startReceiverService({}, windows)).started, true);
+  const launcher = join(f.root, "receiver-service.ps1");
+  assert.match(await readFile(launcher, "utf8"), /server\\receiver\.mjs/);
+  assert.equal(windowsCalls.some((args) => args.includes("start")), true);
+  assert.equal((await stopReceiverService({}, windows)).stopped, true);
+  assert.equal(existsSync(launcher), false);
+
+  const linuxCalls = [];
+  const linux = {
+    ...f.options,
+    platform: "linux",
+    run: async (_command, args) => {
+      linuxCalls.push(args);
+      if (args.includes("is-active")) throw new Error("inactive");
+    },
+  };
+  assert.equal((await startReceiverService({}, linux)).started, true);
+  const unit = join(f.root, ".config/systemd/user/synapse-receiver.service");
+  assert.match(await readFile(unit, "utf8"), /Restart=always/);
+  assert.equal(linuxCalls.some((args) => args.includes("enable")), true);
+  assert.equal((await stopReceiverService({}, linux)).stopped, true);
+  assert.equal(existsSync(unit), false);
+
+  const safeWindows = receiverServicePowerShell({ nodePath: "C:\\A'B\\node.exe", stateDirectory: f.root, env: { SYNAPSE_HOME: "C:\\private", SECRET_TOKEN: "never-copy" } });
+  const safeLinux = receiverServiceSystemd({ nodePath: "/A B/node", stateDirectory: f.root, env: { SYNAPSE_HOME: "/private", SECRET_TOKEN: "never-copy" } });
+  assert.doesNotMatch(`${safeWindows}${safeLinux}`, /SECRET_TOKEN|never-copy/);
 });
 
 test("doctor verifies signed access and queue readiness without changing inbox state", async (t) => {

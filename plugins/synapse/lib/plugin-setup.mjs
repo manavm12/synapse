@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { AppToolsClient, appToolJson } from "./app-tools-client.mjs";
 import { waitForApproval, withDeadline } from "./deadline.mjs";
 import { promptHookHealth } from "./hook-health.mjs";
+import { openExternalUrl } from "./open-url.mjs";
 import {
   activateDestination,
   activeDestinations,
@@ -31,7 +32,7 @@ import {
   recordReceiverPairing,
   removeReceiverConnection,
 } from "./receiver-registry.mjs";
-import { MacOsKeychainStore } from "./receiver-secrets.mjs";
+import { createReceiverSecretStore } from "./receiver-secrets.mjs";
 
 const exec = promisify(execFile);
 const UUID =
@@ -183,7 +184,7 @@ function optionsFor(options = {}) {
   return {
     env,
     registryPath: receiverRegistryPath(env),
-    secretStore: options.secretStore ?? new MacOsKeychainStore(),
+    secretStore: options.secretStore ?? createReceiverSecretStore({ env }),
     createClient: (input) => new ReceiverClient(input),
     resolveRoot: savedProject,
     hookHealth: promptHookHealth,
@@ -466,7 +467,7 @@ export async function completeSetup(input, dependencies = {}) {
           try {
             await (
               options.openUrl ??
-              ((value) => exec("/usr/bin/open", [value], { signal }))
+              ((value) => openExternalUrl(value, { signal }))
             )(url, { signal });
           } catch {
             signal.throwIfAborted();
