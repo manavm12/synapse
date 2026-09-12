@@ -5,7 +5,12 @@
 - Active agent: `Codex`
 - Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
 - Last checkpoint: `50c375c5720680ec8801a0bc2057eeb2ad21e48e` (tested repair budgets and prompt clarifications)
-- Status: `waiting for model choice`
+- Status: `merged; user authorized activation with known quality limitations`
+
+PR20 is merged. The user subsequently instructed that the continuous worker be
+enabled without changing models. See `codex__organizer-enabled.md` on branch
+`codex/organizer-enabled` for the verified activation record. The historical
+diagnostic findings below are not a semantic-quality certification.
 
 ## Goal
 
