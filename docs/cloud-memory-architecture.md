@@ -122,10 +122,12 @@ an explicit backfill plan. Semantic recall is not guaranteed by deterministic
 engineering tests.
 
 Local mocks and disposable Postgres tests are distinct from live OAuth/email,
-installed macOS/native compatibility, and paid inference validation. This
+installed native compatibility (macOS or Windows), and paid inference
+validation. This
 architecture documents the assembled code; it does not certify deployment or
 live-native compatibility.
 
 Conversational messaging extends the original owner-prompt delivery path with
-scoped sender bindings, explicit replies, and a supervised macOS receiver. See
+scoped sender bindings, explicit replies, and a supervised background receiver
+(macOS, Windows, or Linux). See
 [Conversations](conversations.md) for its transport and response state model.

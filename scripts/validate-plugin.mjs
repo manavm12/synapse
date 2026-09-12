@@ -1,5 +1,5 @@
 import { access, readdir, readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -117,8 +117,11 @@ for (const file of await readdir(pluginRoot, { recursive: true })) {
     /(?:from\s*|import\s*\(\s*)["'](\.[^"']+)["']/g,
   )) {
     const target = resolve(dirname(resolve(pluginRoot, file)), match[1]);
+    const relativeToPluginRoot = relative(pluginRoot, target);
     assert(
-      target.startsWith(`${pluginRoot}/`),
+      relativeToPluginRoot !== "" &&
+        !relativeToPluginRoot.startsWith("..") &&
+        !isAbsolute(relativeToPluginRoot),
       `${file} imports outside the installed plugin`,
     );
     await access(target);
@@ -132,24 +135,39 @@ await access(resolve(pluginRoot, "skills/setup-synapse/SKILL.md"));
 await access(resolve(pluginRoot, "scripts/setup.mjs"));
 
 const hooks = (await readJson(resolve(pluginRoot, "hooks/hooks.json"))).hooks;
+const windowsNodeCommand = (script) =>
+  `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "\${PLUGIN_ROOT}/scripts/run-node.ps1" "\${PLUGIN_ROOT}/hooks/${script}"`;
 assert(
   hooks?.Stop?.[0]?.hooks?.[0]?.type === "command",
   "Stop must use the local scheduler",
 );
 assert(
   hooks.Stop[0].hooks[0].command ===
-    `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs"`,
+    `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs"`,
   "Stop must launch the dependency-free checkpoint scheduler",
+);
+assert(
+  hooks.Stop[0].hooks[0].commandWindows ===
+    windowsNodeCommand("checkpoint-memory.mjs"),
+  "Stop must use the Windows-native runtime launcher on Windows",
 );
 await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
 assert(
   hooks?.UserPromptSubmit?.[0]?.hooks?.some(
     (hook) =>
       hook.command ===
-        `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/prompt-memory.mjs"` &&
+        `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/prompt-memory.mjs"` &&
       hook.async !== true,
   ),
   "UserPromptSubmit must inject due memory saves privately",
+);
+assert(
+  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
+    (hook) =>
+      hook.commandWindows === windowsNodeCommand("prompt-memory.mjs") &&
+      hook.async !== true,
+  ),
+  "UserPromptSubmit must inject memory through the Windows-native launcher",
 );
 await access(resolve(pluginRoot, "hooks/prompt-memory.mjs"));
 assert(
@@ -159,20 +177,42 @@ assert(
       entry.hooks?.some(
         (hook) =>
           hook.command ===
-            `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/bind-child.mjs"` &&
+            `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/bind-child.mjs"` &&
           hook.async === true,
       ),
   ),
   "SessionStart must bind delegated permanent task IDs in the child",
 );
 assert(
+  hooks?.SessionStart?.some(
+    (entry) =>
+      entry.matcher === "^startup$" &&
+      entry.hooks?.some(
+        (hook) =>
+          hook.commandWindows === windowsNodeCommand("bind-child.mjs") &&
+          hook.async === true,
+      ),
+  ),
+  "SessionStart must bind child tasks through the Windows-native launcher",
+);
+assert(
   hooks?.UserPromptSubmit?.[0]?.hooks?.some(
     (hook) =>
-      hook.command === `/bin/sh "\${PLUGIN_ROOT}/hooks/run-dispatch.sh"` &&
+      hook.command === `sh "\${PLUGIN_ROOT}/hooks/run-dispatch.sh"` &&
       hook.async === true,
   ),
   "UserPromptSubmit must route Synapse tasks asynchronously through the signed desktop runtime",
 );
+assert(
+  hooks?.UserPromptSubmit?.[0]?.hooks?.some(
+    (hook) =>
+      hook.commandWindows === windowsNodeCommand("dispatch.mjs") &&
+      hook.async === true,
+  ),
+  "UserPromptSubmit must route tasks through the Windows-native launcher",
+);
+await access(resolve(pluginRoot, "scripts/run-node.ps1"));
+await access(resolve(pluginRoot, "scripts/check-runtime.mjs"));
 assert(
   hooks?.SessionStart?.some((entry) => entry.matcher === "^compact$"),
   "SessionStart must restore memory after compaction",
@@ -195,11 +235,21 @@ for (const event of [
       entry.hooks?.some(
         (hook) =>
           hook.command ===
-            `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/conversation.mjs"` &&
+            `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/conversation.mjs"` &&
           hook.async !== true,
       ),
     ),
     `${event} must run synchronous conversation tracking`,
+  );
+  assert(
+    hooks[event]?.some((entry) =>
+      entry.hooks?.some(
+        (hook) =>
+          hook.commandWindows === windowsNodeCommand("conversation.mjs") &&
+          hook.async !== true,
+      ),
+    ),
+    `${event} must run conversation tracking through the Windows-native launcher`,
   );
 }
 for (const event of ["SessionStart", "UserPromptSubmit"]) {

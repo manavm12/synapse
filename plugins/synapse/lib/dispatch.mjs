@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { withDeadline } from "./deadline.mjs";
 import { safeSessionId } from "./hook-input.mjs";
@@ -38,7 +38,7 @@ async function localQueueRoot(cwd, signal) {
             { signal },
           );
           const value = stdout.trim();
-          return isAbsolute(value) ? value : resolve(cwd, value);
+          return resolve(cwd, value);
         },
       ),
     );

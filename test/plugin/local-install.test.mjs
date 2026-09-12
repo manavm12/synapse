@@ -103,10 +103,23 @@ test("staging rejects source symlinks, mutable in-checkout snapshots and modifie
     stageLocalPlugin(f.repository, f),
     /snapshot has changed/,
   );
-  await symlink(
-    join(f.repository, "plugins/synapse/hooks/hooks.json"),
-    join(f.repository, "plugins/synapse/link"),
-  );
+  try {
+    await symlink(
+      join(f.repository, "plugins/synapse/hooks/hooks.json"),
+      join(f.repository, "plugins/synapse/link"),
+    );
+  } catch (error) {
+    // Creating a symlink requires an elevated/Developer Mode privilege on
+    // Windows that an ordinary checkout may lack; the code path itself is
+    // still covered on any OS where the fixture can create one.
+    if (process.platform === "win32" && error.code === "EPERM") {
+      t.skip(
+        "symlink creation requires elevated privilege on this Windows host",
+      );
+      return;
+    }
+    throw error;
+  }
   await assert.rejects(stageLocalPlugin(f.repository, f), /regular files/);
 });
 

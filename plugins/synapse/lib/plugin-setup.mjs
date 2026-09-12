@@ -12,6 +12,7 @@ import {
   deactivateDestination,
   withReceiverLease,
 } from "./onboarding-state.mjs";
+import { openExternalUrl } from "./open-url.mjs";
 import { connectProject, resolveProjectRoot } from "./project-registry.mjs";
 import { ReceiverClient, ReceiverHttpError } from "./receiver-client.mjs";
 import {
@@ -31,7 +32,7 @@ import {
   recordReceiverPairing,
   removeReceiverConnection,
 } from "./receiver-registry.mjs";
-import { MacOsKeychainStore } from "./receiver-secrets.mjs";
+import { createReceiverSecretStore } from "./receiver-secrets.mjs";
 
 const exec = promisify(execFile);
 const UUID =
@@ -183,7 +184,7 @@ function optionsFor(options = {}) {
   return {
     env,
     registryPath: receiverRegistryPath(env),
-    secretStore: options.secretStore ?? new MacOsKeychainStore(),
+    secretStore: options.secretStore ?? createReceiverSecretStore({ env }),
     createClient: (input) => new ReceiverClient(input),
     resolveRoot: savedProject,
     hookHealth: promptHookHealth,
@@ -465,8 +466,7 @@ export async function completeSetup(input, dependencies = {}) {
           );
           try {
             await (
-              options.openUrl ??
-              ((value) => exec("/usr/bin/open", [value], { signal }))
+              options.openUrl ?? ((value) => openExternalUrl(value, { signal }))
             )(url, { signal });
           } catch {
             signal.throwIfAborted();

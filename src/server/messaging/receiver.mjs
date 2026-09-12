@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import * as z from "zod/v4";
 
@@ -174,13 +175,13 @@ export function installReceiverRoutes(
   app.get("/assets/receiver-pairing.js", (_req, res) => {
     res.set("Cache-Control", "public, max-age=3600");
     res.sendFile(
-      new URL("../public/receiver-pairing.js", import.meta.url).pathname,
+      fileURLToPath(new URL("../public/receiver-pairing.js", import.meta.url)),
     );
   });
   app.get("/assets/receiver-pairing.css", (_req, res) => {
     res.set("Cache-Control", "public, max-age=3600");
     res.sendFile(
-      new URL("../public/receiver-pairing.css", import.meta.url).pathname,
+      fileURLToPath(new URL("../public/receiver-pairing.css", import.meta.url)),
     );
   });
 

@@ -1,6 +1,5 @@
-import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { promisify } from "node:util";
+import { openExternalUrl } from "./open-url.mjs";
 import { resolveProjectRoot } from "./project-registry.mjs";
 import { ReceiverClient, ReceiverHttpError } from "./receiver-client.mjs";
 import {
@@ -19,18 +18,10 @@ import {
   recordReceiverPairing,
   removeReceiverConnection,
 } from "./receiver-registry.mjs";
-import { MacOsKeychainStore } from "./receiver-secrets.mjs";
-
-const execFileAsync = promisify(execFile);
+import { createReceiverSecretStore } from "./receiver-secrets.mjs";
 
 function allowInsecure(env) {
   return env.SYNAPSE_ALLOW_INSECURE_RECEIVER_HTTP === "1";
-}
-
-async function openVerificationUrl(url, { runCommand = execFileAsync } = {}) {
-  await runCommand("/usr/bin/open", [url], {
-    stdio: "ignore",
-  });
 }
 
 function receiverCredential(createBytes = randomBytes) {
@@ -96,12 +87,12 @@ export async function startReceiverConnection(
     env = process.env,
     resolveRoot = resolveProjectRoot,
     registryPath = receiverRegistryPath(env),
-    secretStore = new MacOsKeychainStore(),
+    secretStore = createReceiverSecretStore({ env }),
     createClient = (options) => new ReceiverClient(options),
     createId = randomUUID,
     createBytes = randomBytes,
     now = Date.now,
-    openUrl = openVerificationUrl,
+    openUrl = openExternalUrl,
     openBrowser = true,
   } = {},
 ) {
@@ -208,7 +199,7 @@ export async function finishReceiverConnection(
     env = process.env,
     resolveRoot = resolveProjectRoot,
     registryPath = receiverRegistryPath(env),
-    secretStore = new MacOsKeychainStore(),
+    secretStore = createReceiverSecretStore({ env }),
     createClient = (options) => new ReceiverClient(options),
   } = {},
 ) {
@@ -255,7 +246,7 @@ export async function disconnectReceiver(
     env = process.env,
     resolveRoot = resolveProjectRoot,
     registryPath = receiverRegistryPath(env),
-    secretStore = new MacOsKeychainStore(),
+    secretStore = createReceiverSecretStore({ env }),
     createClient = (options) => new ReceiverClient(options),
     signal,
   } = {},

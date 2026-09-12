@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout as pause } from "node:timers/promises";
@@ -28,8 +29,15 @@ function runHook(
   { env = {}, hookPath = dispatchHookPath, wrapper = false } = {},
 ) {
   return new Promise((resolvePromise, reject) => {
-    const executable = wrapper ? "/bin/sh" : process.execPath;
-    const arguments_ = [wrapper ? dispatchWrapperPath : hookPath];
+    const windowsWrapper = wrapper && process.platform === "win32";
+    const executable = windowsWrapper
+      ? process.execPath
+      : wrapper
+        ? "/bin/sh"
+        : process.execPath;
+    const arguments_ = windowsWrapper
+      ? [hookPath]
+      : [wrapper ? dispatchWrapperPath : hookPath];
     const child = spawn(executable, arguments_, {
       env: {
         ...process.env,
@@ -104,7 +112,12 @@ function toolResult(value) {
 }
 
 async function fakeAppTools(directory, projectRoot) {
-  const path = join(directory, "app-tools.sock");
+  // Windows IPC has no Unix-domain-socket files; it addresses a named pipe
+  // in the \\.\pipe\ namespace instead of a filesystem path.
+  const path =
+    platform() === "win32"
+      ? `\\\\.\\pipe\\synapse-app-tools-${randomBytes(8).toString("hex")}`
+      : join(directory, "app-tools.sock");
   const received = [];
   const sockets = new Set();
   const server = createServer((socket) => {
@@ -128,6 +141,7 @@ async function fakeAppTools(directory, projectRoot) {
               { name: "list_projects", namespace: "codex_app" },
               { name: "create_thread", namespace: "codex_app" },
               { name: "send_message_to_thread", namespace: "codex_app" },
+              { name: "read_thread", namespace: "codex_app" },
             ],
           };
         } else if (message.params.tool === "list_projects") {

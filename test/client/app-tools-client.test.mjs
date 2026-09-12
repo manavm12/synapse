@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -21,7 +22,12 @@ function frame(value) {
 
 async function fakePipe({ failCall = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "synapse-app-tools-"));
-  const path = join(directory, "tools.sock");
+  // Windows IPC has no Unix-domain-socket files; it addresses a named pipe
+  // in the \\.\pipe\ namespace instead of a filesystem path.
+  const path =
+    platform() === "win32"
+      ? `\\\\.\\pipe\\synapse-app-tools-${randomBytes(8).toString("hex")}`
+      : join(directory, "tools.sock");
   const received = [];
   const sockets = new Set();
   const server = createServer((socket) => {

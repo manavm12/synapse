@@ -15,7 +15,7 @@ import {
   receiverRegistryPath,
   withReceiverAuthorization,
 } from "./receiver-registry.mjs";
-import { MacOsKeychainStore } from "./receiver-secrets.mjs";
+import { createReceiverSecretStore } from "./receiver-secrets.mjs";
 
 function sameReceiverIdentity(expected, actual) {
   return (
@@ -57,7 +57,7 @@ export async function authorizeCloudDelivery(
   if (!expected || !connectionAuthorizes(connection, expected, now())) {
     throw new Error("Cloud receiver authorization is no longer current");
   }
-  const credentials = secretStore ?? new MacOsKeychainStore();
+  const credentials = secretStore ?? createReceiverSecretStore({ env });
   const credential = await credentials.get(connection.credentialAccount, {
     signal,
   });

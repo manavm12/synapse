@@ -17,7 +17,7 @@ import {
   getReceiverConnection,
   receiverRegistryPath,
 } from "./receiver-registry.mjs";
-import { MacOsKeychainStore } from "./receiver-secrets.mjs";
+import { createReceiverSecretStore } from "./receiver-secrets.mjs";
 
 function sameIdentity(expected, actual) {
   return (
@@ -135,7 +135,7 @@ export async function syncReceiver(
   if (connection?.status !== "connected" || !connection.identity) {
     return { authorized: false, connected: false, claimed: 0, activated: 0 };
   }
-  const credentials = secretStore ?? new MacOsKeychainStore();
+  const credentials = secretStore ?? createReceiverSecretStore({ env });
   const credential = await credentials.get(connection.credentialAccount, {
     signal,
   });

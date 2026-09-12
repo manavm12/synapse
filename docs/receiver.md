@@ -9,7 +9,9 @@ There is no separately installed runner. See [Setup](setup.md).
 
 The skill calls `get_identity` through the existing OAuth connection and records
 the exact account/cloud-project IDs locally. The helper creates a receiver
-credential in macOS Keychain, returning only its SHA-256 hash.
+credential in the platform's own secure credential store (macOS Keychain,
+Windows DPAPI-protected local storage, or Linux Secret Service), returning
+only its SHA-256 hash.
 Authenticated `begin_receiver_setup` derives the expected identity from the
 server's OAuth context and returns a pairing ID, consent URL, expiry, and identity.
 
@@ -21,7 +23,7 @@ enrollment is reused after live validation. Unbound legacy pending pairings are
 retired by explicit setup, never silently adopted as account-bound pairings.
 
 Approval progress is visible. One five-minute deadline covers browser opening,
-network requests, sleeps, and Keychain operations; interruption retains resumable
+network requests, sleeps, and credential-store operations; interruption retains resumable
 state. Status and reconnect are available through the skill. Raw receiver
 credentials and OAuth tokens never enter command arguments or conversation
 history. Local paths and native task IDs never go to the cloud.
@@ -59,12 +61,14 @@ from the current chat and exact installed build is required for `ready`; stale
 builds and missing hooks yield `hooks_pending`. The first-use guidance points to
 the installed skill even before the current task's skill catalog has refreshed.
 
-The supervised macOS LaunchAgent checks receiver authorization, flushes durable
-receipts, claims batches of ten messages, and stages each message and its import
-acknowledgement in one SQLite transaction. It polls every two seconds while
-Codex is available and backs off to sixty seconds during outages. A staged
-message cannot be sent to Codex until the server confirms ownership by this
-installation. Session hooks register the signed runtime and wake the service.
+The supervised background receiver service (a macOS LaunchAgent, a Windows
+Scheduled Task, or a Linux systemd user unit, selected automatically per
+platform) checks receiver authorization, flushes durable receipts, claims
+batches of ten messages, and stages each message and its import acknowledgement
+in one SQLite transaction. It polls every two seconds while Codex is available
+and backs off to sixty seconds during outages. A staged message cannot be sent
+to Codex until the server confirms ownership by this installation. Session
+hooks register the signed runtime and wake the service.
 
 ```sh
 npm run synapse -- receiver start

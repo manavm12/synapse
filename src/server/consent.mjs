@@ -4,6 +4,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import { AuthorizationStateCooldownError } from "./database.mjs";
 
@@ -173,21 +174,27 @@ export function installConsentRoutes(
     res.sendFile(supabaseBrowserPath, { dotfiles: "allow" });
   });
   app.get("/assets/consent.js", (_req, res) => {
-    res.sendFile(new URL("./public/consent.js", import.meta.url).pathname, {
-      dotfiles: "allow",
-    });
+    res.sendFile(
+      fileURLToPath(new URL("./public/consent.js", import.meta.url)),
+      {
+        dotfiles: "allow",
+      },
+    );
   });
   app.get("/assets/email-submission.js", (_req, res) => {
     res.set("Cache-Control", "public, max-age=3600");
     res.sendFile(
-      new URL("./public/email-submission.js", import.meta.url).pathname,
+      fileURLToPath(new URL("./public/email-submission.js", import.meta.url)),
       { dotfiles: "allow" },
     );
   });
   app.get("/assets/consent.css", (_req, res) => {
-    res.sendFile(new URL("./public/consent.css", import.meta.url).pathname, {
-      dotfiles: "allow",
-    });
+    res.sendFile(
+      fileURLToPath(new URL("./public/consent.css", import.meta.url)),
+      {
+        dotfiles: "allow",
+      },
+    );
   });
 
   app.get("/authorize", (req, res) => {

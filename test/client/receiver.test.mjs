@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -37,8 +37,11 @@ import {
   recordReceiverPairing,
 } from "../../plugins/synapse/lib/receiver-registry.mjs";
 import {
+  createReceiverSecretStore,
+  LinuxSecretServiceStore,
   MacOsKeychainStore,
   RECEIVER_KEYCHAIN_SERVICE,
+  WindowsDpapiStore,
 } from "../../plugins/synapse/lib/receiver-secrets.mjs";
 import { syncReceiver } from "../../plugins/synapse/lib/receiver-sync.mjs";
 import {
@@ -1154,6 +1157,122 @@ test("Keychain deletion treats only the absent-item exit as idempotent", async (
   await assert.rejects(
     store.delete("receiver:one"),
     /Keychain operation failed/,
+  );
+});
+
+function secretProcess(output, { input, exitCode = 0 } = {}) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => {};
+  child.stdin = input
+    ? new Writable({
+        write(chunk, _encoding, callback) {
+          input(chunk.toString("utf8"));
+          callback();
+        },
+        final(callback) {
+          callback();
+          queueMicrotask(finish);
+        },
+      })
+    : null;
+  function finish() {
+    if (output) child.stdout.write(output);
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", exitCode);
+  }
+  if (!input) queueMicrotask(finish);
+  return child;
+}
+
+test("receiver credential factory selects each supported OS vault", () => {
+  assert.ok(
+    createReceiverSecretStore({ platform: "darwin" }) instanceof
+      MacOsKeychainStore,
+  );
+  assert.ok(
+    createReceiverSecretStore({ platform: "win32" }) instanceof
+      WindowsDpapiStore,
+  );
+  assert.ok(
+    createReceiverSecretStore({ platform: "linux" }) instanceof
+      LinuxSecretServiceStore,
+  );
+  assert.throws(
+    () => createReceiverSecretStore({ platform: "aix" }),
+    /not supported/,
+  );
+});
+
+test("Windows DPAPI stores only protected data and never puts credentials in argv", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "synapse-dpapi-test-"));
+  const secret = `syn_recv_${"C".repeat(43)}`;
+  const invocations = [];
+  let stdin = "";
+  const store = new WindowsDpapiStore({
+    platform: "win32",
+    directory,
+    spawnImpl(command, arguments_) {
+      invocations.push({ command, arguments_ });
+      const operation = arguments_.at(-3);
+      return secretProcess(operation === "protect" ? "Y2lwaGVy" : secret, {
+        input: (value) => {
+          stdin += value;
+        },
+      });
+    },
+  });
+  await store.set("receiver:windows", secret);
+  assert.equal(await store.get("receiver:windows"), secret);
+  assert.equal(
+    invocations.every(({ arguments_ }) => !arguments_.includes(secret)),
+    true,
+  );
+  assert.match(stdin, new RegExp(secret));
+  assert.doesNotMatch(
+    await readFile(store.path("receiver:windows"), "utf8"),
+    /syn_recv_/,
+  );
+  await store.delete("receiver:windows");
+  await store.delete("receiver:windows");
+});
+
+test("Linux Secret Service sends credentials through stdin and uses stable attributes", async () => {
+  const secret = `syn_recv_${"D".repeat(43)}`;
+  const invocations = [];
+  let written = "";
+  const store = new LinuxSecretServiceStore({
+    platform: "linux",
+    spawnImpl(command, arguments_) {
+      invocations.push({ command, arguments_ });
+      return secretProcess(arguments_[0] === "lookup" ? secret : "", {
+        input:
+          arguments_[0] === "store"
+            ? (value) => {
+                written += value;
+              }
+            : undefined,
+      });
+    },
+  });
+  await store.set("receiver:linux", secret);
+  await store.delete("receiver:linux");
+  assert.equal(written, secret);
+  assert.equal(
+    invocations.every(({ command }) => command === "secret-tool"),
+    true,
+  );
+  assert.equal(
+    invocations.every(({ arguments_ }) => !arguments_.includes(secret)),
+    true,
+  );
+  assert.equal(
+    invocations.every(({ arguments_ }) =>
+      arguments_.includes(RECEIVER_KEYCHAIN_SERVICE),
+    ),
+    true,
   );
 });
 
