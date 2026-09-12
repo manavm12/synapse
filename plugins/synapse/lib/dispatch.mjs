@@ -3,12 +3,13 @@ import { isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import { withDeadline } from "./deadline.mjs";
 import { safeSessionId } from "./hook-input.mjs";
-import { getJob, reserveNextMessage } from "./inbox.mjs";
+import { getJob, inboxPath, reserveNextMessage } from "./inbox.mjs";
 import { parseDeliveryMarker } from "./markers.mjs";
 import { reconcileNativeBindings } from "./native-reconcile.mjs";
 import { runReservedDelivery } from "./native-router.mjs";
 import { activeDestinations, withReceiverLease } from "./onboarding-state.mjs";
 import { receiverRegistryPath } from "./receiver-registry.mjs";
+import { receiverServiceStatus } from "./receiver-service.mjs";
 import { syncReceiver } from "./receiver-sync.mjs";
 
 const exec = promisify(execFile);
@@ -86,7 +87,13 @@ export async function dispatchPrompt(
         );
         return { attempted: true };
       };
-      for (const destination of activeDestinations({ path: registryPath })) {
+      const stopped = receiverServiceStatus(
+        {},
+        { inboxOptions: { path: inboxOptions?.path ?? inboxPath(env) } },
+      ).stopped;
+      for (const destination of stopped
+        ? []
+        : activeDestinations({ path: registryPath })) {
         signal.throwIfAborted();
         try {
           const result = await withReceiverLease(

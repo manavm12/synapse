@@ -26,6 +26,22 @@
             "statusMessage": "Preparing Synapse memory checkpoint"
           }
         ]
+      },
+      {
+        "matcher": "^(startup|resume|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/conversation.mjs\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/wake-receiver.mjs\"",
+            "timeout": 20,
+            "async": true
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -52,6 +68,17 @@
             "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/offer-setup.mjs\"",
             "timeout": 10,
             "statusMessage": "Checking Synapse setup"
+          },
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/conversation.mjs\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/wake-receiver.mjs\"",
+            "timeout": 20,
+            "async": true
           }
         ]
       }
@@ -65,6 +92,46 @@
             "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-node.ps1\" \"${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs\"",
             "timeout": 10,
             "statusMessage": "Checking Synapse memory checkpoint"
+          },
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/conversation.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__synapse[-_]memory__(send_message|reply_to_message)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/conversation.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__synapse[-_]memory__(send_message|reply_to_message)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/conversation.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/conversation.mjs\"",
+            "timeout": 2
           }
         ]
       }

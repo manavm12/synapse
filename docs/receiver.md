@@ -43,7 +43,7 @@ authorization. A missing or ambiguous response becomes `needs_attention`;
 automatic replay is forbidden.
 
 The child startup hook is a fast binding path, not the only one. After creation
-and on subsequent owner prompts, the installed plugin can resolve an accepted
+and during background receiver cycles, the installed plugin can resolve an accepted
 temporary ID using Codex's local client-ID map, then independently verify the
 native `read_thread` delegation, source task, local delivery marker, host, and
 Git worktree ancestry. The local map is read-only compatibility data, never proof
@@ -51,25 +51,45 @@ of delivery. Unknown formats, duplicate aliases, mismatches, and unavailable
 native APIs preserve the existing fence; no second task is created. New cloud
 prompts carry the local receipt before their body as well as the terminal marker,
 so the native API's 20,000-character output cap does not prevent large messages
-from being reconciled. Receipts flush during the same bounded check without
-claiming another batch or starting a polling process.
+from being reconciled. Receipts flush during the same bounded check and the supervised receiver retries
+independently of owner prompts.
 
 Setup separates connected enrollment from verified prompt hooks. A recent receipt
 from the current chat and exact installed build is required for `ready`; stale
 builds and missing hooks yield `hooks_pending`. The first-use guidance points to
 the installed skill even before the current task's skill catalog has refreshed.
 
-The selected destination and incoming content never enter unrelated triggering
-chats. Legacy local-only queue messages remain scoped to prompts in their own
-primary checkout. Ten-turn memory capture remains independent of receiving.
+The supervised macOS LaunchAgent checks receiver authorization, flushes durable
+receipts, claims batches of ten messages, and stages each message and its import
+acknowledgement in one SQLite transaction. It polls every two seconds while
+Codex is available and backs off to sixty seconds during outages. A staged
+message cannot be sent to Codex until the server confirms ownership by this
+installation. Session hooks register the signed runtime and wake the service.
 
-Disable removes the local destination and revokes future receiver access; it
-cannot cancel tasks already accepted by Codex. The revoke-only endpoint accepts
-a matching expired credential, so expiration does not prevent disconnect.
-Network/Keychain cleanup failures preserve recoverable local state. Queued work,
-memory databases, credentials not explicitly revoked, and native task bindings
-are preserved across plugin reinstalls. A replacement installation does not
-silently inherit old assigned messages or channels.
+```sh
+npm run synapse -- receiver start
+npm run synapse -- receiver stop
+npm run synapse -- receiver status .
+```
+
+An explicit stop persists across hook wakeups until `receiver start`. The service
+uses the signed runtime for desktop task creation and the existing app-server's
+queue API for continuations. It never starts a competing app-server or extracts
+Codex OAuth credentials. `doctor` checks both interfaces; an unavailable queue
+keeps the message locally pending. See [Conversations](conversations.md) for
+reply behavior, pause/resume, recovery, and rollout requirements.
+
+Native task creation and continuation are fenced on disk before the mutation.
+Immediately before issuing either mutation, routing checks the current local
+binding and fresh cloud authorization, then rechecks the local binding after
+the network response. Disconnecting or rebinding during that check denies the
+stale reservation. Revocation after the final check cannot atomically undo a
+native mutation that is already being issued.
+If Codex may have accepted a mutation but its response is lost or malformed,
+the job becomes `needs_attention`; Synapse does not automatically repeat it.
+Receipt upload failures remain in a local outbox for the next receiver cycle. A cloud
+failure never prevents legacy local messages from routing and the background
+hook never blocks the foreground prompt.
 
 ## Compatibility and release
 
@@ -78,7 +98,7 @@ or Node built-ins. Setup and every hook share the Codex-supplied runtime launche
 which checks SQLite capability and has no system-Node fallback. Hooks require
 Codex trust; the setup skill/starter remains independently accessible.
 
-Apply `202609090001_bound_receiver_setup.sql` and deploy endpoint/tool support
+Apply migrations through `202609090003_conversations.sql` and deploy endpoint/tool support
 before releasing the updated plugin. Existing connected receivers and v1
 transport endpoints remain compatible. Repository receiver CLI commands remain
 developer/recovery wrappers, not a recipient prerequisite.

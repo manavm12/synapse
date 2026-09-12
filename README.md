@@ -4,10 +4,11 @@ Synapse connects a user's cloud memory and username to their local Codex
 projects. It captures concise session memories, organizes source-backed claims,
 and lets signed-in users send tasks to one another by username.
 
-Cloud messages wait in the recipient's inbox. After the recipient explicitly
-enables incoming tasks and selects a saved project, any local user prompt
-can route a message into a separate native Codex task. Message text never runs
-inside the owner's existing task. Local paths and native task IDs stay local.
+After both participants enable upgraded receivers, a request creates one recipient
+task and replies return to the sender's original task. The supervised local
+receiver continues the exchange while Codex is open, queuing messages behind
+active turns. Local paths and native task IDs stay local. See
+[Conversations](docs/conversations.md) for compatibility and the live rollout gate.
 
 This is an early private alpha. Cloud memory, local SQLite state, and queued task
 content are sensitive. Feature availability requires the matching server
@@ -27,8 +28,9 @@ marketplace is for development; publishing to a recipient-accessible marketplace
 is a separate rollout step.
 
 Trust Synapse's hooks in Codex to enable background checks. A prompt in any local
-chat can wake delivery into the selected receiving project; idle Codex does not
-poll. Incoming content stays out of unrelated triggering chats. Ask Synapse for
+chat registers the desktop connection and wakes the supervised receiver. It
+polls while Codex is available. Incoming requests go to the selected project;
+deliberate replies return to their originating task. Ask Synapse for
 setup status, reconnect, or disable. Existing enrollment and queued work survive
 plugin reinstalls.
 
@@ -51,6 +53,10 @@ See [Setup](docs/setup.md), [Receiver](docs/receiver.md), and
   silently presented as organized results.
 - `send_message` accepts a recipient username, task text, and a stable UUID
   `request_id`. Reuse that ID only when retrying the exact same request.
+- `reply_to_message` derives the recipient and conversation from an inbound
+  message. Use `continue`, `complete`, or `needs_user` to specify the next action.
+- `list_conversations` and `get_conversation` find existing exchanges by name,
+  preview, outstanding replies, and ordered history.
 - `get_message_status` and `list_inbox` expose transport progress. `delivered`
   means accepted into the recipient's native task, not that the work is finished.
 - `begin_receiver_setup` binds a locally generated credential hash to the

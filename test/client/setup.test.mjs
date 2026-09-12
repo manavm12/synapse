@@ -455,6 +455,9 @@ test("doctor reads installation, OAuth receipt, and project binding without writ
       ["plugin", "pass"],
       ["oauth", "pass"],
       ["project", "pass"],
+      ["conversation-hooks", "pass"],
+      ["receiver", "warn"],
+      ["desktop-conversations", "warn"],
     ],
   );
   assert.match(formatDoctorReport(report), /Synapse setup is ready/);

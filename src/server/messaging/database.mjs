@@ -26,6 +26,17 @@ function date(value) {
   return value ? new Date(value) : null;
 }
 
+const responseStateSql = `case
+  when exists (select 1 from public.message_jobs reply where reply.in_reply_to_message_id = job.id) then 'replied'
+  when job.response_error_code is not null then 'needs_attention'
+  when job.disposition = 'complete' then 'complete'
+  when job.disposition = 'needs_user' then 'needs_user'
+  else 'awaiting_reply' end`;
+
+function participants(row) {
+  return row.participants;
+}
+
 export function createMessagingDatabase(pool, withUser) {
   async function translated(operation) {
     try {
@@ -40,12 +51,14 @@ export function createMessagingDatabase(pool, withUser) {
       return translated(() =>
         withUser(sender.userId, async (client) => {
           const result = await client.query(
-            `select * from synapse_private.enqueue_message($1, $2, $3, $4)`,
+            `select * from synapse_private.enqueue_conversation_message($1, $2, $3, $4, $5, $6)`,
             [
               input.toUsername,
               input.message,
               input.requestId,
               input.conversationId ?? null,
+              input.replyTo ?? null,
+              input.disposition ?? "continue",
             ],
           );
           const row = result.rows[0];
@@ -71,9 +84,10 @@ export function createMessagingDatabase(pool, withUser) {
           const result = await client.query(
             `select id, conversation_id, sequence, status::text,
                     queued_at, imported_at, provisioning_at, delivered_at,
-                    needs_attention_at, safe_error_code,
-                    (status in ('queued', 'needs_attention')) as receiver_action_needed
-             from public.message_jobs where id = $1`,
+                    needs_attention_at, safe_error_code, response_error_code,
+                    (status in ('queued', 'needs_attention') or response_error_code is not null) as receiver_action_needed,
+                    ${responseStateSql} as response_state
+             from public.message_jobs job where id = $1`,
             [messageId],
           );
           if (result.rowCount !== 1) return null;
@@ -88,8 +102,102 @@ export function createMessagingDatabase(pool, withUser) {
             provisioningAt: date(row.provisioning_at),
             deliveredAt: date(row.delivered_at),
             needsAttentionAt: date(row.needs_attention_at),
-            failureReason: row.safe_error_code,
-            receiverActionNeeded: row.receiver_action_needed,
+            failureReason:
+              row.response_state === "replied"
+                ? row.safe_error_code
+                : (row.response_error_code ?? row.safe_error_code),
+            receiverActionNeeded:
+              row.status === "delivered" && row.response_state === "replied"
+                ? false
+                : row.receiver_action_needed,
+            responseState: row.response_state,
+          };
+        }),
+      );
+    },
+
+    async listConversations(user, { limit, before }) {
+      return translated(() =>
+        withUser(user.userId, async (client) => {
+          const result = await client.query(
+            `
+          select conversation.*, synapse_private.conversation_participants(conversation.id) as participants,
+            latest.message, latest.queued_at, latest.disposition, latest.status, latest.response_error_code,
+            (select count(*)::integer from public.message_jobs job
+             where job.conversation_id = conversation.id and job.disposition = 'continue'
+               and not exists (select 1 from public.message_jobs reply where reply.in_reply_to_message_id = job.id)) as outstanding
+          from public.message_conversations conversation
+          join lateral (select * from public.message_jobs job where job.conversation_id = conversation.id
+            order by sequence desc limit 1) latest on true
+          where ($2::timestamptz is null or (latest.queued_at, conversation.id) < ($2, $3::uuid))
+          order by latest.queued_at desc, conversation.id desc limit $1`,
+            [limit + 1, before?.queuedAt ?? null, before?.messageId ?? null],
+          );
+          const rows = result.rows.slice(0, limit);
+          return {
+            conversations: rows.map((row) => ({
+              conversation_id: row.id,
+              participants: participants(row),
+              preview: row.message.slice(0, 240),
+              updated_at: new Date(row.queued_at).toISOString(),
+              disposition: row.disposition,
+              outstanding_replies: row.outstanding,
+              activity_state:
+                row.response_error_code || row.status === "needs_attention"
+                  ? "needs_attention"
+                  : row.disposition === "needs_user"
+                    ? "needs_user"
+                    : row.outstanding > 0
+                      ? "awaiting_reply"
+                      : "complete",
+            })),
+            next:
+              result.rows.length > limit
+                ? { queuedAt: rows.at(-1).queued_at, messageId: rows.at(-1).id }
+                : null,
+          };
+        }),
+      );
+    },
+
+    async getConversation(user, { conversationId, afterSequence, limit }) {
+      return translated(() =>
+        withUser(user.userId, async (client) => {
+          const conversation = await client.query(
+            `select conversation.*,
+          synapse_private.conversation_participants(conversation.id) as participants
+          from public.message_conversations conversation
+          where conversation.id = $1`,
+            [conversationId],
+          );
+          if (!conversation.rowCount)
+            throw Object.assign(new Error("conversation unavailable"), {
+              code: "P0002",
+            });
+          const result = await client.query(
+            `select job.*, ${responseStateSql} as response_state
+          from public.message_jobs job where conversation_id = $1 and sequence > $2
+          order by sequence limit $3`,
+            [conversationId, afterSequence, limit + 1],
+          );
+          const rows = result.rows.slice(0, limit);
+          return {
+            conversation_id: conversationId,
+            participants: participants(conversation.rows[0]),
+            messages: rows.map((row) => ({
+              message_id: row.id,
+              sequence: Number(row.sequence),
+              sender_id: row.sender_id,
+              recipient_id: row.recipient_id,
+              message: row.message,
+              disposition: row.disposition,
+              in_reply_to_message_id: row.in_reply_to_message_id,
+              status: row.status,
+              queued_at: new Date(row.queued_at).toISOString(),
+              response_state: row.response_state,
+            })),
+            next_sequence:
+              result.rows.length > limit ? Number(rows.at(-1).sequence) : null,
           };
         }),
       );
@@ -208,17 +316,19 @@ export function createMessagingDatabase(pool, withUser) {
       });
     },
 
-    async claimReceiverMessages(credential, limit) {
+    async claimReceiverMessages(credential, limit, version = 1) {
       return translated(async () => {
         const result = await pool.query(
-          `select * from synapse_private.claim_receiver_messages($1, $2)`,
+          version === 2
+            ? `select * from synapse_private.claim_receiver_messages_v2($1, $2)`
+            : `select * from synapse_private.claim_receiver_messages($1, $2)`,
           [credentialHash(credential), limit],
         );
         const receiver = result.rows[0] ? identity(result.rows[0]) : null;
         return {
           identity: receiver,
           messages: result.rows.map((row) => ({
-            version: 1,
+            version,
             messageId: row.message_id,
             conversationId: row.conversation_id,
             sequence: Number(row.message_sequence),
@@ -228,6 +338,9 @@ export function createMessagingDatabase(pool, withUser) {
             contentHash: row.content_hash,
             claimToken: row.claim_token,
             leaseExpiresAt: date(row.lease_expires_at),
+            disposition: row.disposition ?? "continue",
+            inReplyToMessageId: row.in_reply_to_message_id ?? null,
+            recipientOriginRequestId: row.recipient_origin_request_id ?? null,
           })),
         };
       });

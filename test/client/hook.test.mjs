@@ -2,19 +2,21 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout as pause } from "node:timers/promises";
-
+import { recordSession } from "../../plugins/synapse/lib/conversation-store.mjs";
 import {
   acceptProvisioning,
   getJob,
   queueMessage,
   reserveNextMessage,
+  withInbox,
 } from "../../plugins/synapse/lib/inbox.mjs";
+import { ReceiverWorker } from "../../plugins/synapse/lib/receiver-worker.mjs";
 
 const pluginRoot = resolve("plugins/synapse");
 const dispatchHookPath = resolve(pluginRoot, "hooks/dispatch.mjs");
@@ -423,4 +425,59 @@ test("malformed hook input is ignored", async () => {
     hook_event_name: "UserPromptSubmit",
   });
   assert.deepEqual(result, { stdout: "", stderr: "" });
+});
+
+test("the receiver reconciles durable child evidence after startup timeout without an owner prompt", async (t) => {
+  const { directory, primary, child } = await gitFixture({ worktree: true });
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const inboxOptions = { path: join(directory, "inbox.sqlite") };
+  const queued = queueMessage(
+    { channelId: "delayed-worker", projectRoot: primary, task: "Review" },
+    inboxOptions,
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: primary, ownerSessionId: "owner" },
+    inboxOptions,
+  );
+  acceptProvisioning(
+    {
+      jobId: queued.jobId,
+      deliveryId: delivery.deliveryId,
+      clientThreadId: "temporary",
+      hostId: "local",
+      projectId: "project",
+    },
+    inboxOptions,
+  );
+  const transcript = join(directory, "late.jsonl");
+  withInbox(
+    (db) =>
+      recordSession(db, {
+        sessionId: "permanent",
+        cwd: child,
+        projectRoot: primary,
+        transcriptPath: transcript,
+        event: "Stop",
+      }),
+    inboxOptions,
+  );
+  const worker = new ReceiverWorker({ inboxOptions });
+  await worker.reconcile(primary);
+  assert.equal(getJob(queued.jobId, inboxOptions).status, "accepted");
+  await writeFile(
+    transcript,
+    `${JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        namespace: "codex_app",
+        name: "create_thread",
+        output: `<codex_delegation><source_thread_id>owner</source_thread_id><input>${delivery.nativePrompt.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</input></codex_delegation>`,
+      },
+    })}\n`,
+  );
+  await worker.reconcile(primary);
+  assert.equal(getJob(queued.jobId, inboxOptions).channelThreadId, "permanent");
+  assert.equal(getJob(queued.jobId, inboxOptions).status, "completed");
+  await worker.reconcile(primary);
 });

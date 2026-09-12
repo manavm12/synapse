@@ -2,7 +2,6 @@ import {
   applyMemoryChangeSet,
   currentClaims,
   evidenceContextFor,
-  extractionSchema,
   prepareMemoryChangeSet,
   reconciliationSchema,
   segmentsFor,
@@ -18,6 +17,11 @@ import {
   reviewPrompt,
   reviewSchema,
 } from "./prompts.mjs";
+import {
+  extractionRepairFeedback,
+  extractionSchemaFor,
+  validationReason,
+} from "./validation.mjs";
 
 function catalogFor(ledger) {
   return currentClaims(ledger).map((claim) => ({
@@ -69,6 +73,7 @@ export function createMemoryOrganizerHandler({
       const segments = segmentsFor(source);
       const catalog = catalogFor(ledger);
       const contextEvidence = evidenceContextFor(ledger);
+      const sourceSchema = extractionSchemaFor(segments, contextEvidence);
       const calls = [];
       const stageCalls = { extract: 0, reconcile: 0, review: 0 };
       const request = async (stage, prompt, schema) => {
@@ -112,7 +117,11 @@ export function createMemoryOrganizerHandler({
       let reconciliation;
       let feedback = "";
       let stage = "extract";
-      for (let attempt = 1; attempt <= maxStageCalls; attempt++) {
+      // Repairs in one stage must not consume another stage's allowance.
+      // request() remains the authoritative per-stage (and transport) budget;
+      // this outer bound also fences deterministic failures that make no call.
+      const maxRounds = maxStageCalls * 3;
+      for (let attempt = 1; attempt <= maxRounds; attempt++) {
         try {
           stage = "extract";
           extraction ??= await request(
@@ -124,8 +133,18 @@ export function createMemoryOrganizerHandler({
               feedback,
               contextEvidence,
             ),
-            extractionSchema,
+            sourceSchema,
           );
+          // These are local proposal keys, not model-derived facts. Assign
+          // them before reconciliation/review sees the extraction. Repeating
+          // this on a repair is idempotent; all prior proposals are uncommitted.
+          extraction = {
+            ...extraction,
+            claims: extraction.claims.map((claim, index) => ({
+              ...claim,
+              ref: `c${index + 1}`,
+            })),
+          };
           validateExtraction(source, extraction, ledger);
           stage = "reconcile";
           if (catalog.length && extraction.claims.length) {
@@ -186,12 +205,17 @@ export function createMemoryOrganizerHandler({
             );
             if (review.issues.length) {
               feedback = `Semantic review issues: ${JSON.stringify(review.issues)}\nPrior extraction and reconciliation: ${JSON.stringify({ extraction, reconciliation })}`;
-              if (review.issues.some((issue) => issue.stage === "extraction"))
-                extraction = undefined;
-              if (attempt === maxStageCalls)
+              const repairExtraction = review.issues.some(
+                (issue) => issue.stage === "extraction",
+              );
+              if (
+                stageCalls.review >= maxStageCalls ||
+                (repairExtraction && stageCalls.extract >= maxStageCalls)
+              )
                 throw new MemoryInferenceError(
                   "semantic review rejected proposal",
                 );
+              if (repairExtraction) extraction = undefined;
               continue;
             }
           }
@@ -199,6 +223,8 @@ export function createMemoryOrganizerHandler({
             changeSet,
             audit: {
               promptVersion: PROMPT_VERSION,
+              extractionFormat: api.extractionFormat ?? "flat-v1",
+              claimRefStrategy: "source-order-v1",
               reviewStrategy,
               reviewPassed: review !== null,
               maxStageCalls,
@@ -210,12 +236,22 @@ export function createMemoryOrganizerHandler({
           if (signal?.aborted) throw new MemoryInferenceError("cancelled");
           if (
             error instanceof MemoryInferenceError ||
-            attempt === maxStageCalls
+            stageCalls[stage] >= maxStageCalls ||
+            attempt === maxRounds
           )
             throw error instanceof MemoryInferenceError
               ? error
-              : new MemoryInferenceError(`${stage} validation failed`);
-          feedback = `${error.message}\nPrior extraction and reconciliation: ${JSON.stringify({ extraction, reconciliation })}`;
+              : new MemoryInferenceError(`${stage} validation failed`, {
+                  details: {
+                    inference_stage: stage,
+                    validation_reason: validationReason(error),
+                  },
+                });
+          const repair =
+            stage === "extract"
+              ? extractionRepairFeedback(error, extraction, segments)
+              : error.message;
+          feedback = `${repair}\nPrior extraction and reconciliation: ${JSON.stringify({ extraction, reconciliation })}`;
           if (stage === "extract") extraction = undefined;
         }
       }

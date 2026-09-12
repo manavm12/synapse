@@ -6,6 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { inspectConversations } from "./conversation-doctor.mjs";
+
 import {
   hostDatabasePath,
   PROJECT_ALIAS_PATTERN,
@@ -278,6 +280,7 @@ export async function runDoctor(
     repositoryRoot = moduleRoot,
     runCommand = execFileAsync,
     resolveRoot = resolveProjectRoot,
+    conversationDoctor = inspectConversations,
   } = {},
 ) {
   const normalizedAlias = alias
@@ -368,7 +371,13 @@ export async function runDoctor(
       ...inspectProjectBinding({ root, alias: normalizedAlias }, { env }),
     },
   ];
+  const conversations = await conversationDoctor(
+    { root, repositoryRoot },
+    { env },
+  );
+  checks.push(...conversations.checks);
   return {
+    conversations_ready: conversations.ready,
     ok: checks.every((check) => check.status !== "fail"),
     checks,
   };

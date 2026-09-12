@@ -222,6 +222,51 @@ assert(
   "unsupported recovery hooks must remain absent",
 );
 
+for (const event of [
+  "PreToolUse",
+  "PostToolUse",
+  "SessionStart",
+  "UserPromptSubmit",
+  "Stop",
+  "Interrupt",
+]) {
+  assert(
+    hooks[event]?.some((entry) =>
+      entry.hooks?.some(
+        (hook) =>
+          hook.command ===
+            `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/conversation.mjs"` &&
+          hook.async !== true,
+      ),
+    ),
+    `${event} must run synchronous conversation tracking`,
+  );
+}
+for (const event of ["SessionStart", "UserPromptSubmit"]) {
+  assert(
+    hooks[event]?.some((entry) =>
+      entry.hooks?.some(
+        (hook) =>
+          hook.command.includes("/hooks/wake-receiver.mjs") && hook.async,
+      ),
+    ),
+    `${event} must wake the supervised receiver`,
+  );
+}
+for (const file of [
+  "lib/conversation-store.mjs",
+  "lib/conversation-hooks.mjs",
+  "lib/native-queue.mjs",
+  "lib/receiver-service.mjs",
+  "lib/receiver-worker.mjs",
+  "server/control.mjs",
+]) {
+  const loads = findRuntimePackageLoads(
+    await readFile(resolve(pluginRoot, file), "utf8"),
+  );
+  assert(loads.length === 0, `${file} must remain dependency-free`);
+}
+
 const marketplacePath = resolve(
   repositoryRoot,
   ".agents/plugins/marketplace.json",

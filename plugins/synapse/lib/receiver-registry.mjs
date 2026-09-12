@@ -396,3 +396,27 @@ export function removeReceiverConnection(
     database.close();
   }
 }
+
+export function listReceiverConnections({
+  path = receiverRegistryPath(),
+  activeOnly = false,
+} = {}) {
+  const database = openRegistry(path);
+  try {
+    const selected =
+      activeOnly &&
+      database
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE name='receiver_destinations'",
+        )
+        .get();
+    return database
+      .prepare(
+        `SELECT * FROM receiver_connections WHERE status='connected' ${selected ? "AND connection_id IN (SELECT connection_id FROM receiver_destinations)" : ""}`,
+      )
+      .all()
+      .map(fromRow);
+  } finally {
+    database.close();
+  }
+}

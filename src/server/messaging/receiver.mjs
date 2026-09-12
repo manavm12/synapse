@@ -15,6 +15,7 @@ const pairingInput = z
   .strict();
 const claimInput = z
   .object({ limit: z.number().int().min(1).max(10).default(10) })
+  .extend({ version: z.union([z.literal(1), z.literal(2)]).default(1) })
   .strict();
 const importInput = z
   .object({
@@ -79,7 +80,7 @@ function receiverIdentity(value) {
 
 function cloudMessage(value) {
   return {
-    version: 1,
+    version: value.version ?? 1,
     message_id: value.messageId,
     conversation_id: value.conversationId,
     sequence: value.sequence,
@@ -92,6 +93,13 @@ function cloudMessage(value) {
     content_hash: value.contentHash,
     claim_token: value.claimToken,
     lease_expires_at: new Date(value.leaseExpiresAt).toISOString(),
+    ...(value.version === 2
+      ? {
+          disposition: value.disposition,
+          in_reply_to_message_id: value.inReplyToMessageId,
+          recipient_origin_request_id: value.recipientOriginRequestId,
+        }
+      : {}),
   };
 }
 
@@ -285,6 +293,7 @@ export function installReceiverRoutes(
       const claimed = await database.claimReceiverMessages(
         req.receiverCredential,
         parsed.data.limit,
+        parsed.data.version,
       );
       res.json({
         identity: receiverIdentity(req.receiverIdentity),
