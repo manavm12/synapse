@@ -466,8 +466,7 @@ export async function completeSetup(input, dependencies = {}) {
           );
           try {
             await (
-              options.openUrl ??
-              ((value) => openExternalUrl(value, { signal }))
+              options.openUrl ?? ((value) => openExternalUrl(value, { signal }))
             )(url, { signal });
           } catch {
             signal.throwIfAborted();

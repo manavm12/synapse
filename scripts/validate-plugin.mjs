@@ -235,11 +235,21 @@ for (const event of [
       entry.hooks?.some(
         (hook) =>
           hook.command ===
-            `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/conversation.mjs"` &&
+            `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/conversation.mjs"` &&
           hook.async !== true,
       ),
     ),
     `${event} must run synchronous conversation tracking`,
+  );
+  assert(
+    hooks[event]?.some((entry) =>
+      entry.hooks?.some(
+        (hook) =>
+          hook.commandWindows === windowsNodeCommand("conversation.mjs") &&
+          hook.async !== true,
+      ),
+    ),
+    `${event} must run conversation tracking through the Windows-native launcher`,
   );
 }
 for (const event of ["SessionStart", "UserPromptSubmit"]) {

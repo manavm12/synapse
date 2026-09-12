@@ -67,7 +67,21 @@ import {
 
 function runtimeCommand(root, script) {
   return process.platform === "win32"
-    ? [join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe"), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(root, "scripts/run-node.ps1"), script]]
+    ? [
+        join(
+          process.env.SystemRoot,
+          "System32/WindowsPowerShell/v1.0/powershell.exe",
+        ),
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          join(root, "scripts/run-node.ps1"),
+          script,
+        ],
+      ]
     : ["/bin/sh", [join(root, "scripts/run-node.sh"), script]];
 }
 
@@ -152,19 +166,18 @@ test("transient verification and status cancellation never recommend destructive
 
 test("setup helper accepts one JSON line without waiting for terminal EOF", async (t) => {
   const f = await fixture(t);
-  const [command, arguments_] = runtimeCommand(resolve("plugins/synapse"), resolve("plugins/synapse/scripts/setup.mjs"));
-  const child = spawn(
-    command,
-    arguments_,
-    {
-      env: runtimeEnv({
-        PATH: "/no-node",
-        CODEX_MCP_NODE_PATH: process.execPath,
-        SYNAPSE_HOST_DB: f.options.registryPath,
-      }),
-      stdio: ["pipe", "pipe", "pipe"],
-    },
+  const [command, arguments_] = runtimeCommand(
+    resolve("plugins/synapse"),
+    resolve("plugins/synapse/scripts/setup.mjs"),
   );
+  const child = spawn(command, arguments_, {
+    env: runtimeEnv({
+      PATH: "/no-node",
+      CODEX_MCP_NODE_PATH: process.execPath,
+      SYNAPSE_HOST_DB: f.options.registryPath,
+    }),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
   t.after(() => child.kill());
   let output = "";
   child.stdout.on("data", (chunk) => {
@@ -370,15 +383,23 @@ test("installed prompt hook supplies readiness without source checkout or system
     SYNAPSE_HOST_DB: f.options.registryPath,
     SYNAPSE_INBOX_PATH: join(f.directory, "inbox.sqlite"),
   });
-  const setupCommand = runtimeCommand(bundle, join(bundle, "scripts/setup.mjs"));
-  execFileSync(setupCommand[0], setupCommand[1], { cwd: f.directory, env, input: '{"action":"inspect"}\n' });
+  const setupCommand = runtimeCommand(
+    bundle,
+    join(bundle, "scripts/setup.mjs"),
+  );
+  execFileSync(setupCommand[0], setupCommand[1], {
+    cwd: f.directory,
+    env,
+    input: '{"action":"inspect"}\n',
+  });
   assert.equal(
     isolatedHealth.promptHookHealth("owner", options).status,
     "not_observed",
   );
-  const dispatchCommand = process.platform === "win32"
-    ? runtimeCommand(bundle, join(bundle, "hooks/dispatch.mjs"))
-    : ["/bin/sh", [join(bundle, "hooks/run-dispatch.sh")]];
+  const dispatchCommand =
+    process.platform === "win32"
+      ? runtimeCommand(bundle, join(bundle, "hooks/dispatch.mjs"))
+      : ["/bin/sh", [join(bundle, "hooks/run-dispatch.sh")]];
   execFileSync(dispatchCommand[0], dispatchCommand[1], {
     cwd: f.directory,
     env,
@@ -424,21 +445,20 @@ test("plugin setup exposes only the hash, completes, reuses live enrollment and 
   assert.equal(f.secrets.size, 1);
   const bundle = join(f.directory, "installed plugin");
   await cp(resolve("plugins/synapse"), bundle, { recursive: true });
-  const setupCommand = runtimeCommand(bundle, join(bundle, "scripts/setup.mjs"));
-  const output = execFileSync(
-    setupCommand[0],
-    setupCommand[1],
-    {
-      input: JSON.stringify({ action: "inspect" }),
-      cwd: f.directory,
-      env: runtimeEnv({
-        PATH: "/no-system-node-or-npm",
-        CODEX_MCP_NODE_PATH: process.execPath,
-        SYNAPSE_HOST_DB: f.options.registryPath,
-      }),
-      encoding: "utf8",
-    },
+  const setupCommand = runtimeCommand(
+    bundle,
+    join(bundle, "scripts/setup.mjs"),
   );
+  const output = execFileSync(setupCommand[0], setupCommand[1], {
+    input: JSON.stringify({ action: "inspect" }),
+    cwd: f.directory,
+    env: runtimeEnv({
+      PATH: "/no-system-node-or-npm",
+      CODEX_MCP_NODE_PATH: process.execPath,
+      SYNAPSE_HOST_DB: f.options.registryPath,
+    }),
+    encoding: "utf8",
+  });
   assert.equal(
     JSON.parse(output).connections[0].connection_id,
     prepared.connection_id,
@@ -463,8 +483,15 @@ test("runtime launcher fails clearly without Codex runtime and never tries syste
   assert.throws(
     () =>
       execFileSync(
-        ...runtimeCommand(resolve("plugins/synapse"), resolve("plugins/synapse/scripts/setup.mjs")),
-        { cwd: f.directory, env: runtimeEnv({ PATH: "/no-node", CODEX_MCP_NODE_PATH: "" }), stdio: "pipe" },
+        ...runtimeCommand(
+          resolve("plugins/synapse"),
+          resolve("plugins/synapse/scripts/setup.mjs"),
+        ),
+        {
+          cwd: f.directory,
+          env: runtimeEnv({ PATH: "/no-node", CODEX_MCP_NODE_PATH: "" }),
+          stdio: "pipe",
+        },
       ),
     /runtime supplied by Codex/,
   );

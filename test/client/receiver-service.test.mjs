@@ -144,7 +144,10 @@ test("Windows Task Scheduler and Linux systemd user services are generated safel
   assert.equal((await startReceiverService({}, windows)).started, true);
   const launcher = join(f.root, "receiver-service.ps1");
   assert.match(await readFile(launcher, "utf8"), /server\\receiver\.mjs/);
-  assert.equal(windowsCalls.some((args) => args.includes("start")), true);
+  assert.equal(
+    windowsCalls.some((args) => args.includes("start")),
+    true,
+  );
   assert.equal((await stopReceiverService({}, windows)).stopped, true);
   assert.equal(existsSync(launcher), false);
 
@@ -160,12 +163,23 @@ test("Windows Task Scheduler and Linux systemd user services are generated safel
   assert.equal((await startReceiverService({}, linux)).started, true);
   const unit = join(f.root, ".config/systemd/user/synapse-receiver.service");
   assert.match(await readFile(unit, "utf8"), /Restart=always/);
-  assert.equal(linuxCalls.some((args) => args.includes("enable")), true);
+  assert.equal(
+    linuxCalls.some((args) => args.includes("enable")),
+    true,
+  );
   assert.equal((await stopReceiverService({}, linux)).stopped, true);
   assert.equal(existsSync(unit), false);
 
-  const safeWindows = receiverServicePowerShell({ nodePath: "C:\\A'B\\node.exe", stateDirectory: f.root, env: { SYNAPSE_HOME: "C:\\private", SECRET_TOKEN: "never-copy" } });
-  const safeLinux = receiverServiceSystemd({ nodePath: "/A B/node", stateDirectory: f.root, env: { SYNAPSE_HOME: "/private", SECRET_TOKEN: "never-copy" } });
+  const safeWindows = receiverServicePowerShell({
+    nodePath: "C:\\A'B\\node.exe",
+    stateDirectory: f.root,
+    env: { SYNAPSE_HOME: "C:\\private", SECRET_TOKEN: "never-copy" },
+  });
+  const safeLinux = receiverServiceSystemd({
+    nodePath: "/A B/node",
+    stateDirectory: f.root,
+    env: { SYNAPSE_HOME: "/private", SECRET_TOKEN: "never-copy" },
+  });
   assert.doesNotMatch(`${safeWindows}${safeLinux}`, /SECRET_TOKEN|never-copy/);
 });
 

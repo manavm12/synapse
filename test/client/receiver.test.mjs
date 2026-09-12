@@ -1188,10 +1188,22 @@ function secretProcess(output, { input, exitCode = 0 } = {}) {
 }
 
 test("receiver credential factory selects each supported OS vault", () => {
-  assert.ok(createReceiverSecretStore({ platform: "darwin" }) instanceof MacOsKeychainStore);
-  assert.ok(createReceiverSecretStore({ platform: "win32" }) instanceof WindowsDpapiStore);
-  assert.ok(createReceiverSecretStore({ platform: "linux" }) instanceof LinuxSecretServiceStore);
-  assert.throws(() => createReceiverSecretStore({ platform: "aix" }), /not supported/);
+  assert.ok(
+    createReceiverSecretStore({ platform: "darwin" }) instanceof
+      MacOsKeychainStore,
+  );
+  assert.ok(
+    createReceiverSecretStore({ platform: "win32" }) instanceof
+      WindowsDpapiStore,
+  );
+  assert.ok(
+    createReceiverSecretStore({ platform: "linux" }) instanceof
+      LinuxSecretServiceStore,
+  );
+  assert.throws(
+    () => createReceiverSecretStore({ platform: "aix" }),
+    /not supported/,
+  );
 });
 
 test("Windows DPAPI stores only protected data and never puts credentials in argv", async () => {
@@ -1206,15 +1218,23 @@ test("Windows DPAPI stores only protected data and never puts credentials in arg
       invocations.push({ command, arguments_ });
       const operation = arguments_.at(-3);
       return secretProcess(operation === "protect" ? "Y2lwaGVy" : secret, {
-        input: (value) => { stdin += value; },
+        input: (value) => {
+          stdin += value;
+        },
       });
     },
   });
   await store.set("receiver:windows", secret);
   assert.equal(await store.get("receiver:windows"), secret);
-  assert.equal(invocations.every(({ arguments_ }) => !arguments_.includes(secret)), true);
+  assert.equal(
+    invocations.every(({ arguments_ }) => !arguments_.includes(secret)),
+    true,
+  );
   assert.match(stdin, new RegExp(secret));
-  assert.doesNotMatch(await readFile(store.path("receiver:windows"), "utf8"), /syn_recv_/);
+  assert.doesNotMatch(
+    await readFile(store.path("receiver:windows"), "utf8"),
+    /syn_recv_/,
+  );
   await store.delete("receiver:windows");
   await store.delete("receiver:windows");
 });
@@ -1228,16 +1248,32 @@ test("Linux Secret Service sends credentials through stdin and uses stable attri
     spawnImpl(command, arguments_) {
       invocations.push({ command, arguments_ });
       return secretProcess(arguments_[0] === "lookup" ? secret : "", {
-        input: arguments_[0] === "store" ? (value) => { written += value; } : undefined,
+        input:
+          arguments_[0] === "store"
+            ? (value) => {
+                written += value;
+              }
+            : undefined,
       });
     },
   });
   await store.set("receiver:linux", secret);
   await store.delete("receiver:linux");
   assert.equal(written, secret);
-  assert.equal(invocations.every(({ command }) => command === "secret-tool"), true);
-  assert.equal(invocations.every(({ arguments_ }) => !arguments_.includes(secret)), true);
-  assert.equal(invocations.every(({ arguments_ }) => arguments_.includes(RECEIVER_KEYCHAIN_SERVICE)), true);
+  assert.equal(
+    invocations.every(({ command }) => command === "secret-tool"),
+    true,
+  );
+  assert.equal(
+    invocations.every(({ arguments_ }) => !arguments_.includes(secret)),
+    true,
+  );
+  assert.equal(
+    invocations.every(({ arguments_ }) =>
+      arguments_.includes(RECEIVER_KEYCHAIN_SERVICE),
+    ),
+    true,
+  );
 });
 
 test("disconnect resumes after lost remote response and failed secret cleanup", async () => {
