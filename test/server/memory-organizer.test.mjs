@@ -165,6 +165,115 @@ test("extraction constrains current and earlier evidence without mutating shared
   );
 });
 
+test("model claim labels cannot break deterministic refs, downstream actions or replay", async () => {
+  const proposals = fixture.steps.map((step) => ({
+    ...structuredClone(step.extraction),
+    claims: step.extraction.claims.map((claim) => ({
+      ...claim,
+      ref: "duplicate-invalid-model-label",
+    })),
+  }));
+  let extractionIndex = 0;
+  const run = setup({
+    respond(stage) {
+      if (stage === "extract") return proposals[extractionIndex++];
+      if (stage === "reconcile") return fixture.steps[1].reconciliation;
+      return { issues: [] };
+    },
+  });
+  const first = await run.handler.process(fixture.steps[0].envelope);
+  assert.deepEqual(
+    first.changeSet.proposal.extraction,
+    fixture.steps[0].extraction,
+  );
+  assert.equal(first.audit.claimRefStrategy, "source-order-v1");
+  assert.deepEqual(
+    run.calls
+      .find((call) => call.stage === "review")
+      .data.extraction.claims.map((claim) => claim.ref),
+    ["c1", "c2"],
+  );
+  await run.handler.commit({
+    source: fixture.steps[0].envelope,
+    result: first,
+  });
+  const committedClaims = structuredClone(run.ledger.claims);
+  const second = await run.handler.process(fixture.steps[1].envelope);
+  const reconcile = run.calls.find((call) => call.stage === "reconcile");
+  assert.deepEqual(
+    reconcile.data.incoming.map((claim) => claim.ref),
+    fixture.steps[1].extraction.claims.map((_, index) => `c${index + 1}`),
+  );
+  assert.ok(
+    !JSON.stringify(second.changeSet).includes("duplicate-invalid-model-label"),
+  );
+  await run.handler.commit({
+    source: fixture.steps[1].envelope,
+    result: second,
+  });
+  assert.deepEqual(
+    run.ledger.claims.slice(0, committedClaims.length),
+    committedClaims,
+  );
+  assert.equal(run.ledger.relations[0].type, "supersedes");
+  assert.ok(
+    proposals.every((proposal) =>
+      proposal.claims.every(
+        (claim) => claim.ref === "duplicate-invalid-model-label",
+      ),
+    ),
+  );
+});
+
+test("deterministic labels do not repair invalid evidence or authorize stale action labels", async () => {
+  const unsupported = setup({
+    maxStageCalls: 1,
+    respond() {
+      const value = structuredClone(fixture.steps[0].extraction);
+      value.claims[0].ref = "bad model label";
+      value.claims[0].evidence = [];
+      return value;
+    },
+  });
+  await assert.rejects(
+    unsupported.handler.process(fixture.steps[0].envelope),
+    (error) => error.details.validation_reason === "evidence_unique",
+  );
+  assert.equal(unsupported.commits, 0);
+  let committed = false;
+  const stale = setup({
+    maxStageCalls: 1,
+    respond(stage) {
+      if (stage === "review") return { issues: [] };
+      if (stage === "reconcile")
+        return {
+          actions: fixture.steps[1].reconciliation.actions.map((action) => ({
+            ...action,
+            ref: "stale-model-label",
+          })),
+        };
+      const value = structuredClone(
+        fixture.steps[committed ? 1 : 0].extraction,
+      );
+      value.claims.forEach((claim) => {
+        claim.ref = "stale-model-label";
+      });
+      return value;
+    },
+  });
+  const first = await stale.handler.process(fixture.steps[0].envelope);
+  await stale.handler.commit({
+    source: fixture.steps[0].envelope,
+    result: first,
+  });
+  committed = true;
+  await assert.rejects(
+    stale.handler.process(fixture.steps[1].envelope),
+    /reconcile validation failed/,
+  );
+  assert.equal(stale.commits, 1);
+});
+
 test("source-specific extraction schema handles empty and bounded catalogs without truncation", () => {
   assert.deepEqual(extractionSchemaFor([], []), extractionSchema);
   const segments = segmentsFor({
