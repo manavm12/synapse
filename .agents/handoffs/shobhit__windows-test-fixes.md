@@ -2,12 +2,12 @@
 
 - Branch: `shobhit/windows-test-fixes`
 - Human owner: `Shobhit Goel`
-- Active agent: `unassigned` -- Codex completed the Windows hook investigation
-  and stopped after pushing the checkpoint.
-- Base reviewed: `0aad6a1`
+- Active agent: `Codex` -- implementing the user-authorized cross-platform MVP
+  completion pass; do not share this branch/worktree until it is unassigned.
+- Base reviewed: `fa57da5`
 - Last checkpoint: branch `HEAD`
-- Status: `ready_for_review` -- the Windows hook blocker was reproduced,
-  isolated, fixed, and verified live. PR #18 remains the review surface.
+- Status: `active` -- current main is merged; auditing and implementing the
+  remaining Windows/macOS/Linux MVP gates after the verified hook fix.
 
 ## START HERE for the next agent
 
