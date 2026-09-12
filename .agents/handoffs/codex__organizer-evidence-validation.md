@@ -4,8 +4,8 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `0aad6a193276ed98f6e5f8aa2d210d0449aa0ecc`
-- Last checkpoint: `0aad6a193276ed98f6e5f8aa2d210d0449aa0ecc` (before implementation)
-- Status: `active`
+- Last checkpoint: `debf956` (implementation and passing local/live diagnostics)
+- Status: `ready-for-review`
 
 ## Goal
 
@@ -52,10 +52,12 @@ preserving evidence validation, semantic review, queue history, and tenant fenci
   The first reused-fixture run failed the schema isolation assertion; no code
   change was needed after rerunning against the required fresh database.
 - `npm run audit` — zero vulnerabilities; plugin validation passed.
+- Docker build and disabled-worker container startup — passed.
+- PR: https://github.com/manavm12/synapse/pull/16; CI/review pending.
 
 ## Remaining work
 
-1. Complete Docker verification and PR/CI.
+1. Complete PR/CI.
 2. Merge after CI; run an exact-revision canary, verify durable retrieval, then
    reconciliation and historical backlog before continuous activation.
 
