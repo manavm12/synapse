@@ -1,0 +1,14 @@
+---
+description: Coordinate concurrent agents through isolated Git workstreams and durable handoffs
+alwaysApply: true
+---
+
+# Agent coordination
+
+- Read `AGENTS.md` before changing the repository.
+- Use a dedicated branch and worktree for each active agent workstream.
+- Read `.agents/handoffs/` and fetch remote changes before editing or committing.
+- Do not edit files owned by another active workstream without user direction.
+- Commit and push checkpoints with an updated branch-specific handoff before
+  pausing, so a replacement agent can resume from the exact remote commit.
+- Never force-push, rewrite, merge, or delete another agent's branch.
