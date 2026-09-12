@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex` in `Review Synapse functionality`
 - Base reviewed: `bf48aec` (current main at takeover)
-- Last checkpoint: `83ad453da81bafca3819a15ebd48f3c99cff797d` (tested and pushed implementation)
+- Tested and deployed source: `6c7800ca1cf547100b2f65bcc2a41b2852559695`
 - Status: `waiting for live acceptance`
 
 ## Goal
@@ -60,16 +60,64 @@ test when controlled accounts and native queue access are available.
 
 ## Remaining work
 
-1. Verify required CI on the published head (queued at this checkpoint).
-2. Complete the required live two-account desktop smoke test when prerequisites
+1. Complete the required live two-account desktop smoke test when prerequisites
    are available. Do not merge based solely on automated fixture results.
+
+## Authorized rollout — 12 September 2026
+
+- Required CI passed at `6c7800c`, including the production Docker build.
+- Installed the local plugin from that exact source as
+  `synapse@synapse-dev-a23800662bb7`, version
+  `0.3.0+codex.20260909091650`. Immutable staging, cached bytes and 14 hook
+  entries verified; OAuth configuration preserved. The prompt hook subsequently
+  reported verified enrollment. This task still exposes the older nine-tool
+  catalog and may need a fresh task/refresh for reply/history discovery.
+- Diagnosed queued message `31eb97db-b83e-4841-94b7-08e241c9318b`:
+  the new receiver sends `version: 2`, while production main rejected that field.
+  Installing the plugin before its matching backend was the rollout-order error.
+- With the user's explicit server-update approval, used the authenticated
+  Supabase SQL editor for project `kikzjvzdghapmsrubsjk` (matched to the HTTP
+  service's Supabase URL). Applied migrations
+  `202609090002_require_bound_receiver_approval.sql` and
+  `202609090003_conversations.sql` in filename order in one transaction with
+  the migration advisory lock and ledger updates. The submitted migration
+  contents matched the reviewed files' SHA-256 hashes. Both applied at
+  `2026-09-12T07:34:29.45963Z`; all ten migration filenames are now recorded.
+- Verified all three new columns and the three callable functions, including
+  security-definer settings, hardened search path, runtime execution grants,
+  and denial for anonymous/authenticated client roles.
+- Uploaded the clean tested `6c7800c` checkout to the existing Railway HTTP
+  service only. Deployment `33e828ab-265a-4efe-b387-4f19d12897d5` is SUCCESS,
+  its instance is RUNNING, and its image digest is
+  `sha256:e0bf1303de7a3061b55df3243d3656eceaf8371245ccef82ec1f47c5998768a7`.
+  Both `/healthz` and `/readyz` returned HTTP 200. An authenticated
+  `get_message_status` now returns the new `response_state: awaiting_reply`.
+  No live message was sent or manually claimed for this deployment check.
+- Railway's upload records the reviewed commit in the deployment message;
+  it does not attach Git commit metadata. Direct image-file hash verification
+  via Railway SSH was unavailable because no SSH keys are registered. No key
+  was provisioned. Provenance is the verified clean checkout/upload, deployment
+  ID/image digest, and successful upgraded API response.
+- The separate memory worker remains at deployment
+  `9b4d0110-be6e-4255-9eb7-a6307d489540`, stopped/EXITED. Its configuration,
+  credentials and lifecycle were not changed by this rollout.
+- HTTP rollback image: deployment `d01e3421-b2b6-495a-9f3e-f7d25da71051`
+  from main `bf48aeca50cf64c3c2737c89afafafeb714e6338`. Retain the additive
+  schema during an application rollback. HTTP source tracking remains on main;
+  a future main deployment would replace this explicitly uploaded PR version.
 
 ## Risks or blockers
 
-- Controlled account/device identities have been requested.
 - The current desktop's default native control socket remains unavailable.
-- The user asked how another device would be controlled. A connected remote
-  device or a human operating the recipient side is needed; no second device
-  has been accessed and no live messages have been sent.
+- The only authorized other device/project is
+  `Manavs-MacBook-Pro-2.local` / `webcrm-rl`, authenticated as `neev`.
+  The user authorized its plugin update and later reported installing its new
+  hooks. Remote task reports must be copied by the user because the remote task
+  API currently omits their content. Do not create another remote task, access
+  another device/project, or initiate another live test without approval.
+- A prior user-directed message from that device created a local task that
+  answered in its own final text without sending a Synapse reply. This proves
+  only one-way delivery. The later queued message remained queued after the
+  HTTP update; full native round-trip acceptance remains unverified.
 - GitHub currently reports the PR ready for review, although its earlier body
   said draft. Preserve that state and keep the live gate explicitly pending.
