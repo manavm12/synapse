@@ -1,10 +1,10 @@
 # Handoff: Windows test-suite fixes
 
-- Branch: `claude/windows-test-fixes`
+- Branch: `shobhit/windows-test-fixes`
 - Human owner: `Shobhit Goel`
 - Active agent: `unassigned`
 - Base reviewed: `0aad6a1`
-- Last checkpoint: `f0d30bd`
+- Last checkpoint: `3357336`
 - Status: `ready-for-review`
 
 ## Goal
@@ -123,7 +123,7 @@ touched test files) are the exact list of scenarios to revisit first.
 
 ## Remaining work
 
-1. Open a PR for this branch (`claude/windows-test-fixes` -> `main`) and get
+1. Open a PR for this branch (`shobhit/windows-test-fixes` -> `main`) and get
    `CI / verify` + `Security / secrets` passing (CI runs on Linux with
    `TEST_DATABASE_URL` set, so it will additionally exercise the SQL suites
    this environment could not).
