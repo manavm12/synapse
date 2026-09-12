@@ -53,23 +53,28 @@ It stores no raw prompts or model responses. Failed attempts remain pending/fail
 in the queue with bounded error text; this version does not persist detailed
 failed-call usage. Use provider usage reporting for actual billing reconciliation.
 
-Extraction restricts evidence IDs to current source segments plus earlier accepted
-context evidence, and coverage IDs to current segments only. It fails closed on
-the provider's enum-size limits rather than truncating evidence. Deterministic
-validation still enforces current-source support, unique evidence, complete
-coverage, and agreement between coverage dispositions and citations. Exhausted
-validation repairs report a fixed `validation_reason` and `inference_stage` in
-operational logs, never source text or model-supplied identifiers.
+The provider wire format groups claims under exact current source segment keys.
+Every current segment is a required object property. A claim's group is its
+model-selected primary evidence; `additionalEvidence` may cite other current
+segments or earlier accepted context. Shared schema definitions keep evidence
+enums single-copy. The adapter validates the grouped response, flattens it in
+source order, deduplicates citations, and derives complete coverage from those
+citations. The handler and core still receive the original flat contract.
 
-The provider schema requires at least one evidence ID per claim; core validation
-independently enforces that requirement. Repair feedback identifies empty,
-duplicate, or context-only evidence together with coverage inconsistencies, so
-one repair can address all observed structural defects. It identifies each mismatched current segment and its
-citing claim refs, missing/duplicate entries, and returned dispositions. It is
-sent only as untrusted repair context to the model, never added to logs or audit
-metadata. Repairs still use the existing per-stage budget and full independent
-review. The handler never silently changes a coverage disposition, drops a claim,
-or invents a citation; persistent disagreement still fails closed.
+An uncited empty group must contain a model-authored non-claim disposition and
+reason. Cited groups get `claims` coverage deterministically. This does not prove
+semantic coverage: independent review still checks every source segment for
+omitted assertions and checks that each assertion is entailed by its selected
+evidence. Grouping never authorizes unsupported claims or changes earlier
+committed IDs. Audits identify the format as `source-groups-v1` (`flat-v1` for
+injected adapters that do not implement the grouped wire format).
+
+Core validation independently enforces current-source support, unique evidence,
+complete coverage, and total claim bounds. Inputs fail closed on provider enum
+limits rather than truncating evidence. Flat proposal repairs identify all
+evidence and coverage inconsistencies together within the existing call budget.
+That detail is model input only, not audit/log output. Exhausted repairs expose
+only fixed `validation_reason` and `inference_stage` operational codes.
 
 Local incoming claim refs are assigned deterministically (`c1`, `c2`, ...) from
 the validated extraction array before reconciliation and review. The transport

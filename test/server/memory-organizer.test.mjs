@@ -7,12 +7,14 @@ import {
   extractionSchema,
   normalizeSourceEnvelope,
   segmentsFor,
+  validateExtraction,
 } from "../../src/memory/core/index.mjs";
 import { validateSchema } from "../../src/memory/core/schema.mjs";
 import {
   createMemoryInferenceAPI,
   MemoryInferenceError,
 } from "../../src/server/memory-organizer/api.mjs";
+import { extractionTransport } from "../../src/server/memory-organizer/extraction-transport.mjs";
 import { createMemoryOrganizerHandler } from "../../src/server/memory-organizer/handler.mjs";
 import {
   extractionRepairFeedback,
@@ -607,6 +609,210 @@ const apiOptions = {
   model: "synthetic-model",
   reviewer: "synthetic-review",
 };
+
+function groupedFixture() {
+  const flat = fixture.steps[0].extraction;
+  return {
+    segments: Object.fromEntries(
+      flat.coverage.map((entry) => [
+        entry.segmentId,
+        {
+          claims: flat.claims
+            .filter((claim) => claim.evidence[0] === entry.segmentId)
+            .map(({ ref: _ref, evidence, ...claim }) => ({
+              ...claim,
+              additionalEvidence: evidence.slice(1),
+            })),
+          nonClaimDisposition: "context",
+          nonClaimReason: "",
+        },
+      ]),
+    ),
+  };
+}
+
+test("grouped extraction derives current evidence, stable refs and complete coverage", () => {
+  const source = fixture.steps[0].envelope;
+  const schema = extractionSchemaFor(segmentsFor(source), []);
+  const before = structuredClone(schema);
+  const transport = extractionTransport(schema);
+  const grouped = groupedFixture();
+  const reversed = {
+    segments: Object.fromEntries(Object.entries(grouped.segments).reverse()),
+  };
+  const flat = transport.decode(grouped);
+  assert.deepEqual(transport.decode(reversed), flat);
+  assert.deepEqual(flat.claims, fixture.steps[0].extraction.claims);
+  validateExtraction(source, flat, emptyLedger(fixture.identity));
+  assert.deepEqual(schema, before);
+  assert.ok(
+    Object.values(transport.schema.properties.segments.properties).every(
+      (item) => item.$ref === "#/$defs/group",
+    ),
+  );
+  assert.equal(transport.schema.$defs.claim.properties.ref, undefined);
+  assert.equal(transport.schema.$defs.claim.properties.evidence, undefined);
+  assert.deepEqual(
+    transport.schema.$defs.claim.properties.additionalEvidence.items.enum,
+    schema.properties.claims.items.properties.evidence.items.enum,
+  );
+  assert.equal(extractionTransport(extractionSchema), null);
+});
+
+test("cross-segment context and repeated evidence cannot contradict derived coverage", () => {
+  const source = fixture.steps[0].envelope;
+  const schema = extractionSchemaFor(segmentsFor(source), [{ id: "earlier" }]);
+  const transport = extractionTransport(schema);
+  const grouped = groupedFixture();
+  const [first, second] = Object.keys(grouped.segments);
+  grouped.segments[first].claims[0].additionalEvidence = [
+    first,
+    second,
+    second,
+    "earlier",
+  ];
+  grouped.segments[second].claims = [];
+  grouped.segments[second].nonClaimReason = "Context for the first group";
+  const before = structuredClone(grouped);
+  const flat = transport.decode(grouped);
+  assert.deepEqual(flat.claims[0].evidence, [first, second, "earlier"]);
+  assert.ok(flat.coverage.every((entry) => entry.disposition === "claims"));
+  assert.deepEqual(grouped, before);
+  grouped.segments[first].claims = [];
+  grouped.segments[first].nonClaimDisposition = "boilerplate";
+  grouped.segments[first].nonClaimReason = "No assertions";
+  const empty = transport.decode(grouped);
+  assert.equal(empty.claims.length, 0);
+  assert.deepEqual(
+    empty.coverage.map((entry) => entry.disposition),
+    ["boilerplate", "context"],
+  );
+  assert.equal(empty.coverage[1].reason, "Context for the first group");
+});
+
+test("grouped transport rejects missing/foreign groups, foreign evidence and excess total claims", () => {
+  const transport = extractionTransport(
+    extractionSchemaFor(segmentsFor(fixture.steps[0].envelope), []),
+  );
+  const [first, second] = Object.keys(groupedFixture().segments);
+  for (const mutate of [
+    (value) => {
+      delete value.segments[first];
+    },
+    (value) => {
+      value.segments.foreign = value.segments[first];
+    },
+    (value) => {
+      value.segments[first].claims[0].additionalEvidence = ["foreign"];
+    },
+    (value) => {
+      value.segments[first].nonClaimDisposition = "claims";
+    },
+    (value) => {
+      value.segments[first].claims[0].additionalEvidence = null;
+    },
+    (value) => {
+      value.segments[first].claims = Array(101).fill(
+        value.segments[first].claims[0],
+      );
+      value.segments[second].claims = Array(100).fill(
+        value.segments[second].claims[0],
+      );
+    },
+  ]) {
+    const value = groupedFixture();
+    mutate(value);
+    assert.throws(() => transport.decode(value));
+  }
+});
+
+test("real API uses compact grouped provider schema and returns the flat handler contract", async () => {
+  let body;
+  const api = createMemoryInferenceAPI({
+    ...apiOptions,
+    fetcher: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return Response.json(rawResponse(groupedFixture()));
+    },
+  });
+  const schema = extractionSchemaFor(
+    segmentsFor(fixture.steps[0].envelope),
+    [],
+  );
+  const result = await api.structured(
+    "extract",
+    "Synthetic grouped prompt",
+    schema,
+  );
+  assert.ok(body.text.format.schema.$defs);
+  assert.equal(body.text.format.strict, true);
+  assert.deepEqual(result.value.claims, fixture.steps[0].extraction.claims);
+  assert.equal(api.extractionFormat, "source-groups-v1");
+  validateExtraction(
+    fixture.steps[0].envelope,
+    result.value,
+    emptyLedger(fixture.identity),
+  );
+});
+
+test("derived coverage does not bypass semantic review for omitted or unsupported claims", async () => {
+  for (const omit of [true, false]) {
+    const grouped = groupedFixture();
+    const first = Object.keys(grouped.segments)[0];
+    if (omit) {
+      grouped.segments[first].claims = [];
+      grouped.segments[first].nonClaimReason =
+        "Model incorrectly judged no durable facts";
+    } else
+      grouped.segments[first].claims[0].assertion =
+        "Unsupported synthetic assertion";
+    let reviews = 0;
+    let commits = 0;
+    const api = createMemoryInferenceAPI({
+      ...apiOptions,
+      fetcher: async (_url, options) => {
+        const request = JSON.parse(options.body);
+        if (request.text.format.name === "memory_extract")
+          return Response.json(rawResponse(grouped));
+        reviews++;
+        return Response.json(
+          rawResponse({
+            issues: [
+              {
+                stage: "extraction",
+                ref: "c1",
+                detail: omit
+                  ? "Lost retention decision"
+                  : "Unsupported assertion",
+              },
+            ],
+          }),
+        );
+      },
+    });
+    const handler = createMemoryOrganizerHandler({
+      api,
+      maxStageCalls: 1,
+      adapter: {
+        async loadSource(source) {
+          return {
+            source: normalizeSourceEnvelope(source, fixture.identity),
+            ledger: emptyLedger(fixture.identity),
+          };
+        },
+        async commit() {
+          commits++;
+        },
+      },
+    });
+    await assert.rejects(
+      handler.process(fixture.steps[0].envelope),
+      /semantic review rejected/,
+    );
+    assert.equal(reviews, 1);
+    assert.equal(commits, 0);
+  }
+});
 
 test("real API adapter uses strict Responses output, store false and bounded requests", async () => {
   const requests = [];

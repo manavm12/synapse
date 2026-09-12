@@ -15,6 +15,8 @@ then resume the authorized production organizer rollout.
 ## File ownership
 
 - `src/server/memory-organizer/handler.mjs`
+- `src/server/memory-organizer/api.mjs`
+- `src/server/memory-organizer/extraction-transport.mjs`
 - `src/server/memory-organizer/validation.mjs`
 - `src/server/memory-organizer/prompts.mjs`
 - `test/server/memory-organizer.test.mjs`
@@ -34,6 +36,15 @@ then resume the authorized production organizer rollout.
 - Provider schema now requires nonempty evidence, and one repair feedback lists
   all invalid evidence and coverage relationships. Prompt clarifies the exact
   bidirectional citation/coverage rule; no semantic content is silently repaired.
+- Full read-only dry run on `7c77711` still failed coverage after two extraction
+  calls. Do not merge or deploy that checkpoint as a proven production fix.
+- Rechecked active branches before expanding into the API transport: no overlap.
+  Next change groups model claims under exact current source segment keys and
+  derives citation/coverage bookkeeping; the flat handler/core API stays stable.
+- Implemented source-keyed provider transport with shared definitions, full
+  local validation, deterministic flattening and citation/coverage derivation.
+  Empty uncited groups still need justified non-claim classifications; omission
+  and unsupported assertions remain subject to independent semantic review.
 
 ## Decisions and invariants
 
@@ -41,6 +52,9 @@ then resume the authorized production organizer rollout.
   commits, and queue attempt history. Do not blindly retry the queue.
 - Inspect the coverage mismatch and provide actionable repair feedback; do not
   silently reclassify uncited material or fabricate supporting citations.
+- A model-authored claim group explicitly identifies its primary evidence.
+  Empty groups require a model-authored non-claim disposition and explanation;
+  mandatory semantic review must still detect omitted durable assertions.
 
 ## Verification
 
@@ -48,6 +62,7 @@ then resume the authorized production organizer rollout.
 - Final full PostgreSQL-backed check: 254 passed, zero skipped. Coverage 95.70%
   lines, 86.29% branches, 94.34% functions.
 - Audit: zero vulnerabilities. Docker build and disabled startup passed.
+- Grouped transport focused tests: 22 passed. Full final check/build pending.
 
 ## Remaining work
 

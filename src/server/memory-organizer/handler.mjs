@@ -214,6 +214,7 @@ export function createMemoryOrganizerHandler({
             changeSet,
             audit: {
               promptVersion: PROMPT_VERSION,
+              extractionFormat: api.extractionFormat ?? "flat-v1",
               claimRefStrategy: "source-order-v1",
               reviewStrategy,
               reviewPassed: review !== null,
