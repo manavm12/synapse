@@ -28,6 +28,18 @@ import {
 
 const repositoryRoot = resolve(".");
 const mcpUrl = "https://synapse-production-ff6c.up.railway.app/mcp";
+
+// Windows does not execute a file directly via its #! shebang line the way
+// POSIX does; this fixture technique (and the real desktop-binary lookup it
+// stands in for) is POSIX-only today.
+const needsPosixShebangExecution =
+  process.platform === "win32" &&
+  "relies on POSIX shebang execution, which Windows does not support";
+// Windows has no real POSIX signal delivery; sending SIGTERM does not
+// produce the "killed by signal" exit reporting this asserts.
+const needsPosixSignalDelivery =
+  process.platform === "win32" &&
+  "relies on POSIX SIGTERM delivery/reporting, which Windows does not support";
 const pluginVersion = JSON.parse(
   await readFile(
     join(repositoryRoot, "plugins/synapse/.codex-plugin/plugin.json"),
@@ -104,6 +116,7 @@ function createCodexRunner() {
 
 test("real login streams its URL before exit without recording credentials", {
   timeout: 10_000,
+  skip: needsPosixShebangExecution,
 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "synapse-login-stream-"));
   const synapseHome = join(directory, "synapse");
@@ -190,11 +203,15 @@ test("real login streams its URL before exit without recording credentials", {
   ]);
 });
 
-test("interactive runner propagates exit, signal, and startup failures without command data", async () => {
+test("interactive runner propagates exit, signal, and startup failures without command data", async (t) => {
   for (const [program, expected] of [
     ["process.exit(7)", /exited with code 7/],
     ['process.kill(process.pid, "SIGTERM")', /stopped by SIGTERM/],
   ]) {
+    if (program.includes("SIGTERM") && needsPosixSignalDelivery) {
+      t.diagnostic(`skipped SIGTERM case: ${needsPosixSignalDelivery}`);
+      continue;
+    }
     await assert.rejects(
       () =>
         runSetupCommand(
@@ -273,7 +290,16 @@ test("setup completes missing stages and a rerun preserves completed state", asy
       completedAt: "2026-09-07T12:00:00.000Z",
     },
   });
-  assert.equal((await stat(setupStatePath(env))).mode & 0o777, 0o600);
+  // Windows has no POSIX permission-bit model; fs.chmod/mode-on-create
+  // cannot produce a real 0600 there, so this owner-only-access guarantee
+  // is only verifiable on POSIX today.
+  if (process.platform === "win32") {
+    t.diagnostic(
+      "skipped exact 0600 mode check: Windows has no POSIX permission bits",
+    );
+  } else {
+    assert.equal((await stat(setupStatePath(env))).mode & 0o777, 0o600);
+  }
 
   const second = await runSetup(
     { project: projectRoot, alias: "demo", cwd: directory },

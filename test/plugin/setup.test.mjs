@@ -65,6 +65,13 @@ import {
   markReceiverDisconnecting,
 } from "../../plugins/synapse/lib/receiver-registry.mjs";
 
+// The installed plugin's launcher scripts are POSIX shell scripts, invoked
+// via a hardcoded /bin/sh; this matches production (Codex desktop is
+// macOS-only today), but Windows has no /bin/sh to exercise this against.
+const needsPosixShell =
+  process.platform === "win32" &&
+  "requires a POSIX shell (/bin/sh), which this Windows host does not have";
+
 test("first Keychain write failure remains resumable without publishing or remotely revoking its hash", async (t) => {
   const f = await fixture(t);
   let sets = 0;
@@ -138,7 +145,9 @@ test("transient verification and status cancellation never recommend destructive
   assert.equal(f.secrets.size, 1);
 });
 
-test("setup helper accepts one JSON line without waiting for terminal EOF", async (t) => {
+test("setup helper accepts one JSON line without waiting for terminal EOF", {
+  skip: needsPosixShell,
+}, async (t) => {
   const f = await fixture(t);
   const child = spawn(
     "/bin/sh",
@@ -341,7 +350,9 @@ test("enrollment is not ready until this installed build's real prompt hook is o
   assert.equal(f.secrets.size, 1);
 });
 
-test("installed prompt hook supplies readiness without source checkout or system Node; setup does not forge it", async (t) => {
+test("installed prompt hook supplies readiness without source checkout or system Node; setup does not forge it", {
+  skip: needsPosixShell,
+}, async (t) => {
   const f = await fixture(t);
   const bundle = join(f.directory, "installed plugin");
   await cp(resolve("plugins/synapse"), bundle, { recursive: true });
@@ -386,7 +397,9 @@ test("installed prompt hook supplies readiness without source checkout or system
   assert.equal(promptHookHealth("owner", options).status, "different_build");
 });
 
-test("plugin setup exposes only the hash, completes, reuses live enrollment and preserves state on reinstall", async (t) => {
+test("plugin setup exposes only the hash, completes, reuses live enrollment and preserves state on reinstall", {
+  skip: needsPosixShell,
+}, async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
   assert.match(prepared.credential_hash, /^[0-9a-f]{64}$/);
@@ -447,7 +460,9 @@ test("plugin setup exposes only the hash, completes, reuses live enrollment and 
   );
 });
 
-test("runtime launcher fails clearly without Codex runtime and never tries system Node", async (t) => {
+test("runtime launcher fails clearly without Codex runtime and never tries system Node", {
+  skip: needsPosixShell,
+}, async (t) => {
   const f = await fixture(t);
   assert.throws(
     () =>

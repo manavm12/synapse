@@ -100,10 +100,20 @@ test("consumed private prompts do not count toward the next interval", async (t)
     );
     assert.equal(result.due, turn === 6);
   }
-  assert.equal(
-    (await stat(join(fixture.synapseHome, "checkpoints.sqlite"))).mode & 0o777,
-    0o600,
-  );
+  // Windows has no POSIX permission-bit model; fs.chmod/mode-on-create
+  // cannot produce a real 0600 there, so this owner-only-access guarantee
+  // is only verifiable on POSIX today.
+  if (process.platform === "win32") {
+    t.diagnostic(
+      "skipped exact 0600 mode check: Windows has no POSIX permission bits",
+    );
+  } else {
+    assert.equal(
+      (await stat(join(fixture.synapseHome, "checkpoints.sqlite"))).mode &
+        0o777,
+      0o600,
+    );
+  }
 });
 
 test("compaction emits a cloud save without persisting a local due record", async (t) => {
