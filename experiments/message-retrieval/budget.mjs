@@ -127,8 +127,23 @@ export function createBudget({ path, phase = "dev", fetchImpl = fetch }) {
           redirect: "error",
         },
       );
-      if (!response.ok || response.redirected)
-        throw new BudgetError("provider_http");
+      if (!response.ok || response.redirected) {
+        let reason = "";
+        try {
+          const body = await response.json();
+          const code = body?.error?.code;
+          if (
+            [
+              "insufficient_quota",
+              "rate_limit_exceeded",
+              "invalid_json_schema",
+              "invalid_api_key",
+            ].includes(code)
+          )
+            reason = `_${code}`;
+        } catch {}
+        throw new BudgetError(`provider_http_${response.status}${reason}`);
+      }
       const chunks = [];
       let size = 0;
       for await (const chunk of response.body) {

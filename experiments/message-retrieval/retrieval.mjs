@@ -28,6 +28,18 @@ export function createRepository(input) {
   };
   return { load };
 }
+const boundedQuery = (query) => {
+  let result = "";
+  for (const character of query) {
+    if (
+      Buffer.byteLength(result + character) > 512 ||
+      result.length + character.length > 450
+    )
+      break;
+    result += character;
+  }
+  return result;
+};
 const normalized = (text) => text.normalize("NFKC").toLowerCase();
 const terms = (text) =>
   [
@@ -163,6 +175,10 @@ export function createView(repository, identity) {
         status: c.state,
         scope: c.scope,
         topic: c.topic,
+        subject: c.subject,
+        aspect: c.aspect,
+        kind: c.kind,
+        relationships: relations(id),
       };
     const s = segmentById.get(id);
     return s
@@ -178,7 +194,7 @@ export function createView(repository, identity) {
     const ids = [];
     for (let i = 0; i < 2; i++) {
       const page = await service.search(identity, {
-        query: query.slice(0, 450),
+        query: boundedQuery(query),
         status: all ? "all" : "current",
         limit: 10,
         evidence_limit: 0,

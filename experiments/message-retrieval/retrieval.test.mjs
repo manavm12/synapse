@@ -5,7 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { parseDeliveryMarker } from "../../plugins/synapse/lib/markers.mjs";
 import { routeDelivery } from "../../plugins/synapse/lib/native-router.mjs";
-import { currentClaims } from "../../src/memory/core/index.mjs";
+import {
+  currentClaims,
+  normalizeSourceEnvelope,
+  segmentsFor,
+} from "../../src/memory/core/index.mjs";
 import { createMessageContextPreparer } from "./agent.mjs";
 import { createBudget } from "./budget.mjs";
 import {
@@ -14,6 +18,7 @@ import {
   hash,
   identity,
   persistCorpus,
+  uuid,
 } from "./corpus.mjs";
 import { mockDelivery, scoreResult, summarize } from "./evaluate.mjs";
 import { createDeliverySession, renderMessagePrompt } from "./prompt.mjs";
@@ -35,7 +40,17 @@ const finish = (selected) => ({ selected, actions: [], done: true, gaps: [] });
 const prepare = (infer, options = {}) =>
   createMessageContextPreparer({
     repository,
-    provider: provider(infer),
+    provider: provider(async (input, options) => {
+      if (input.data.knownIds.length === 0 && input.data.results.length === 0)
+        return {
+          ...finish([]),
+          done: false,
+          actions: [
+            { op: "search", query: "Diagnostic event retention", id: "" },
+          ],
+        };
+      return infer(input, options);
+    }),
     ...options,
   });
 const context = () =>
@@ -423,7 +438,16 @@ const success = () =>
     service_tier: "default",
     usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     output: [
-      { content: [{ type: "output_text", text: JSON.stringify(finish([])) }] },
+      {
+        content: [
+          {
+            type: "output_text",
+            text: JSON.stringify({
+              step: { kind: "finish", selected: [], gaps: [] },
+            }),
+          },
+        ],
+      },
     ],
   });
 test("budget persists actual and uncertain reservations across clients/restarts", async () => {
@@ -529,4 +553,198 @@ test("provider parses structured responses and caches embeddings without persist
   );
   budget.close();
   rmSync(directory, { recursive: true, force: true });
+});
+
+test("provider schema constrains observed IDs without aliasing gap enums", async () => {
+  let sent;
+  const p = createProvider({
+    apiKey: "synthetic-key",
+    budget: {
+      request: async (_endpoint, body) => {
+        sent = body.text.format.schema;
+        return {
+          data: {
+            status: "completed",
+            output: [
+              {
+                content: [
+                  {
+                    type: "output_text",
+                    text: JSON.stringify({
+                      step: { kind: "finish", selected: [], gaps: [] },
+                    }),
+                  },
+                ],
+              },
+            ],
+          },
+          metrics: {},
+        };
+      },
+    },
+    embeddingDirectory: "/unused",
+  });
+  await p.infer({
+    instructions: "test",
+    data: { knownIds: ["claim:allowed"], navigationIds: ["topic:operations"] },
+  });
+  assert.deepEqual(
+    sent.properties.step.anyOf[0].properties.selected.items.enum,
+    ["m1"],
+  );
+  assert.ok(
+    sent.properties.step.anyOf[1].properties.actions.items.anyOf
+      .find((s) => s.properties.op.enum[0] === "topics")
+      .properties.id.enum.includes("m2"),
+  );
+  assert.ok(
+    !sent.properties.step.anyOf[0].properties.gaps.items.enum.includes(
+      "claim:allowed",
+    ),
+  );
+});
+
+test("planner has no selectable evidence and cannot read topic IDs as claims", async () => {
+  let sent;
+  const p = createProvider({
+    apiKey: "synthetic",
+    embeddingDirectory: "/unused",
+    budget: {
+      request: async (_endpoint, body) => {
+        sent = body.text.format.schema;
+        return {
+          data: {
+            status: "completed",
+            output: [
+              {
+                content: [
+                  {
+                    type: "output_text",
+                    text: JSON.stringify({
+                      step: { kind: "finish", selected: [], gaps: [] },
+                    }),
+                  },
+                ],
+              },
+            ],
+          },
+          metrics: {},
+        };
+      },
+    },
+  });
+  await p.infer({
+    instructions: "test",
+    data: { knownIds: [], navigationIds: ["topic:one"] },
+  });
+  assert.equal(sent.properties.step.anyOf[0].properties.selected.maxItems, 0);
+  assert.ok(
+    !sent.properties.step.anyOf[1].properties.actions.items.anyOf.some(
+      (s) => s.properties.op.enum[0] === "read",
+    ),
+  );
+});
+
+test("search requests execute even if a model also marks the turn done", async () => {
+  let calls = 0;
+  const run = createMessageContextPreparer({
+    repository,
+    provider: provider(async () =>
+      ++calls === 1
+        ? {
+            ...finish([]),
+            actions: [
+              { op: "search", query: "Diagnostic event retention", id: "" },
+            ],
+          }
+        : finish([project.keys["logs.current"]]),
+    ),
+  });
+  const bundle = await run(identity, example.message);
+  assert.equal(bundle.status, "ready");
+  assert.equal(bundle.metrics.actions, 1);
+  assert.equal(bundle.metrics.calls, 2);
+});
+
+test("source search exposes unprocessed snapshots with explicit status", async () => {
+  const copy = structuredClone(corpus);
+  const source = normalizeSourceEnvelope(
+    {
+      ...copy.projects[0].sources[0],
+      revisionId: uuid("unprocessed"),
+      nodeId: uuid("unprocessed-node"),
+      captureId: uuid("unprocessed-capture"),
+      contentHash: undefined,
+      markdown: "# Operations\n\nThe unprocessed recovery operator is Amber.",
+    },
+    { ownerId: identity.userId, projectId: identity.projectId },
+  );
+  copy.projects[0].sources.push(source);
+  const view = createView(createRepository(copy), identity);
+  const id = view.searchSources("unprocessed recovery operator Amber")[0];
+  assert.equal(id, segmentsFor(source)[0].id);
+  const resolved = view.resolve(id);
+  assert.equal(resolved.status, "unprocessed");
+  assert.match(resolved.scope, /no current-policy inference/);
+});
+
+test("multibyte queries and long conversation histories remain bounded", async () => {
+  const view = createView(repository, identity);
+  assert.deepEqual(await view.search("語".repeat(2000)), []);
+  let captured;
+  await prepare(async (input) => {
+    captured = input.data.conversation;
+    return finish([]);
+  })(
+    identity,
+    { ...example.message, sequence: 30 },
+    Array.from({ length: 20 }, (_, n) => ({
+      conversationId: example.message.conversationId,
+      sequence: n,
+      text: "x".repeat(2500),
+    })),
+  );
+  assert.ok(captured.length <= 4);
+  assert.ok(Buffer.byteLength(JSON.stringify(captured)) <= 8192);
+  assert.equal(captured.at(-1).sequence, 19);
+});
+
+test("wire evidence handles resolve back to authoritative IDs", async () => {
+  const p = createProvider({
+    apiKey: "synthetic",
+    embeddingDirectory: "/unused",
+    budget: {
+      request: async (_endpoint, body) => {
+        const data = JSON.parse(body.input[1].content);
+        assert.equal(data.knownIds[0], "m1");
+        return {
+          data: {
+            status: "completed",
+            output: [
+              {
+                content: [
+                  {
+                    type: "output_text",
+                    text: JSON.stringify({
+                      step: { kind: "finish", selected: ["m1"], gaps: [] },
+                    }),
+                  },
+                ],
+              },
+            ],
+          },
+          metrics: {},
+        };
+      },
+    },
+  });
+  assert.deepEqual(
+    (
+      await p.infer({
+        instructions: "test",
+        data: { knownIds: [project.keys["logs.current"]] },
+      })
+    ).selected,
+    [project.keys["logs.current"]],
+  );
 });

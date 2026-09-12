@@ -42,6 +42,7 @@ const option = (name, fallback) => {
 };
 const strategy = option("strategy", "agent"),
   model = option("model", "gpt-5-nano"),
+  reasoningEffort = option("reasoning", "medium"),
   split = option("split", "dev");
 const corpus = buildCorpus(),
   benchmark = buildBenchmark(corpus.projects[0]);
@@ -127,6 +128,7 @@ if (command === "help") {
     apiKey: process.env.OPENAI_API_KEY,
     model,
     embeddingDirectory: join(state, "embeddings"),
+    reasoningEffort,
   };
   try {
     if (strategy === "hybrid")
@@ -202,6 +204,7 @@ if (command === "help") {
       strategy,
       model,
       split,
+      reasoningEffort,
       configVersion: CONFIG_VERSION,
       codeHash: executedCodeHash,
       corpus: corpus.fingerprint,

@@ -3,8 +3,8 @@
 - Branch: `codex/message-memory-retrieval`
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
-- Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
-- Last checkpoint: `uncommitted`
+- Base reviewed: `bf48aeca50cf64c3c2737c89afafeb714e6338`
+- Last checkpoint: `e11266c`
 - Status: `active`
 
 ## Goal
@@ -27,8 +27,14 @@ the later messaging integration. Production remains untouched.
 - Built 204 claims / 31 sources / 80 mock messages and retained source fixtures.
 - Implemented bounded retrieval, hybrid indexing, prompt injection, durable spend
   reservations, native delivery test doubles, and PostgreSQL round-trip tests.
-- First live development run exposed ambiguous action IDs; v2 constrains IDs and
-  gap codes, and adds bounded topic labels. Agent/hybrid comparisons are running.
+- Full repository checks passed 272 tests with disposable PostgreSQL; audit clean.
+- Development runs exposed schema aliasing and premature/overbroad selection.
+  Corrected independent schemas, typed actions, first-step planning, full status
+  metadata, graph neighbors, compact wire handles, and configurable reasoning.
+- Retained all failed runs and charges. Latest complete v3 comparisons: hybrid
+  nano 84.38% recall; mini graph 88.54%. Neither meets all gates.
+- Added integration boundary and experiment audit documents. New smoke runs are
+  evaluating v6 before further full development comparisons.
 
 ## Decisions and invariants
 
@@ -41,17 +47,18 @@ the later messaging integration. Production remains untouched.
 
 ## Verification
 
-- 22 focused tests including disposable PostgreSQL: passed, zero skipped.
+- Latest focused suite: 24 passed. Previous SQL round-trip passed; final full check pending.
 - Biome checks passed after formatting.
 - Lexical baseline: 50.05% required recall, 16.29% precision, no abstention.
 - Initial nano agent: 52.86% required recall, 47.51% precision; gates not met.
-- API spending at the first full checkpoint: USD 0.02085; budget preserved.
+- Approximately USD 0.33 charged/reserved in development; consult the durable ledger for current spend. No held-out calls yet.
 
 ## Remaining work
 
-1. Build corpus, retrieval agent, persistent budget and mock delivery harness.
-2. Run engineering/Postgres checks and real bounded API comparisons.
-3. Preserve results, integration handoff, and push the final branch for review.
+1. Finish development comparisons and freeze finalist configurations.
+2. Evaluate held-out cases, repeat selected configuration, and report unmet gates.
+3. Tighten benchmark status/scope validation and finish independent boundary tests.
+4. Run final fresh-Postgres checks, preserve concise results, commit/push and open PR.
 
 ## Risks or blockers
 
