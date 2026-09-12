@@ -2,15 +2,14 @@
 
 - Branch: `shobhit/native-task-verification`
 - Human owner: `Shobhit Goel`
-- Active agent: `unassigned` -- Claude stopped here; safe for Codex (or any
-  agent) to resume immediately, fully committed and pushed, nothing left
-  uncommitted in this worktree.
+- Active agent: `Codex` -- resumed with the user's explicit authorization to
+  complete the minimal metered live verification. Do not share this branch or
+  worktree until it is unassigned again.
 - Base reviewed: `027c513` (main, includes merged PR #18)
 - Last checkpoint: `d56920b` (includes an intentional WIP diagnostic commit
   in `dispatch.mjs` -- see "Risks or blockers", not for merge as-is)
-- Status: `blocked` -- waiting on Codex account usage to reset (~9:09 PM
-  per the last error) or on the user adding more credits before any further
-  live `codex exec` testing.
+- Status: `active` -- usage should have reset and the user explicitly authorized
+  completing the live native-task verification.
 
 ## Goal
 
@@ -143,10 +142,9 @@ history, now on `main`, for that full investigation and its methodology).
 
 ## Risks or blockers
 
-- **`dispatch.mjs` currently has uncommitted temporary diagnostic code in
-  the working tree.** It is NOT committed (kept separate from the real
-  `b554593` fix deliberately). Do not commit it as-is; either use it for
-  one more live test then revert, or revert it now if pausing for a while.
+- **`dispatch.mjs` currently has temporary diagnostic code committed in
+  `d56920b`.** It is intentionally pushed for resumability but must be removed
+  before this branch is proposed for merge.
 - **The Codex account is at its usage limit** (reported reset ~9:09 PM).
   Get explicit confirmation before spending more live-test budget.
 - A disposable dev plugin build (`synapse@synapse-dev-b699c2d4687a`, from
