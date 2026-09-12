@@ -2,11 +2,74 @@
 
 - Branch: `shobhit/windows-test-fixes`
 - Human owner: `Shobhit Goel`
-- Active agent: `unassigned`
+- Active agent: `unassigned` -- Claude has stopped; ready for Codex (or any
+  agent) to resume immediately. Usage/credits have been added to the
+  connected Codex account, so the live-testing budget concern below is
+  cleared -- proceed with live `codex exec` testing.
 - Base reviewed: `0aad6a1`
-- Last checkpoint: `e79f0f9`
-- Status: `ready-for-review` (PR #18 open, was green on CI before this commit;
-  recheck CI after this commit before merging)
+- Last checkpoint: `9245aae`
+- Status: `blocked` -- PR #18 (the parts already fixed) is open and was green
+  on CI as of `e79f0f9`; the specific open problem is below in
+  "START HERE for the next agent."
+
+## START HERE for the next agent
+
+**The problem, precisely**: Synapse's plugin hooks (`plugins/synapse/hooks/hooks.json`)
+do not execute successfully when Codex triggers them on Windows, even after
+fixing the hardcoded absolute path `/bin/sh` to the bare command `sh` (which
+is the technically correct fix -- verified that `sh` resolves correctly via
+Node's real process spawn on this Windows machine, and it matches Codex's
+own documented Windows plugin support via Git Bash). The `sh` fix is real
+and already committed (`e79f0f9`), but it was proven, not assumed, to be
+insufficient by itself: see "Follow-up in the same session: a conclusive
+negative result" below for the exact reproduction.
+
+**What to actually do**:
+1. Read this entire handoff before touching anything -- especially the
+   "Completed" section below, so you don't repeat the same dead-end
+   experiments (e.g. don't rely on `prompt-memory.mjs`'s own checkpoint
+   write as a success signal; it requires a registered project AND an
+   already-existing checkpoint file, so it can't prove success or failure
+   on its own -- that's why the unconditional-marker-write technique below
+   was needed instead).
+2. Reproduce the negative result first, to confirm the starting state:
+   register a throwaway git repo as a Synapse project via `connectProject()`
+   (pure local SQLite write, no OAuth needed -- see the exact code below),
+   then run `codex exec --dangerously-bypass-hook-trust --json "<prompt>"`
+   against it, with a temporary unconditional diagnostic write added to the
+   top of a hook script (e.g. `prompt-memory.mjs`) to remove all ambiguity.
+   Confirm the marker still doesn't appear before investigating further.
+3. Test hypotheses in this order (cheapest/most informative first), **now
+   that usage is available**:
+   a. Add `--dangerously-bypass-approvals-and-sandbox` to the same repro.
+      `codex doctor` reports command execution is sandboxed by default
+      ("restricted fs + restricted network... sandbox backend: elevated").
+      If the marker appears with this flag, the sandbox is wrapping hook
+      subprocess execution and blocking `sh.exe` (or restricting its
+      filesystem/network access) independently of the shell-invocation fix.
+      That would mean the real fix is either an explicit sandbox exemption
+      for hook commands, or documenting that hooks need
+      `-s danger-full-access` on Windows, or something Codex-side to report
+      upstream.
+   b. If sandbox bypass doesn't change the result, test whether `codex exec`
+      (a non-interactive, single-shot command) processes plugin hooks at
+      all on this platform -- try the same scenario through the interactive
+      `codex` TUI instead (a real prompt in a real interactive session, in
+      the registered repo), since hooks may be an interactive/desktop-app-only
+      surface regardless of platform. This wasn't tested yet.
+   c. If neither explains it, this may be a genuine Codex-side Windows gap
+      outside this repo's control -- consider checking
+      https://github.com/openai/codex/issues (found real, relevant Windows
+      native-pipe issues there during earlier research) or filing a new one.
+4. Once you find the actual fix, **verify it conclusively** the same way
+   the negative result was proven: an unconditional diagnostic write that
+   bypasses all of Synapse's own gating logic, not just "no visible error."
+   Then **remove the diagnostic code** (`git diff` must be clean of it)
+   before committing the real fix.
+5. Update this handoff's "Completed"/"Verification" sections with the
+   result -- positive or still-negative -- and push before stopping.
+   `npm run lint`, `npm run format:check`, and `npm test` must still pass
+   (219 pass / 0 fail / 16 skipped baseline; see "Verification" below).
 
 ## Goal
 
@@ -299,3 +362,70 @@ Windows-specific Codex hook-execution gap not yet identified.
   don't just forget it's there. Likewise a throwaway test project is
   registered in the real `~/.synapse/host.sqlite` (see item 1 above).
 - No production/live server changes were made in either phase.
+
+## Appendix: exact reproduction commands
+
+Real values from this Windows machine; adjust the `codex.exe` build hash and
+`DELL` username if different on whoever's machine resumes this.
+
+```powershell
+# 1. Locate the real installed codex.exe (adjust build hash if it differs)
+$bin = "C:\Users\DELL\AppData\Local\OpenAI\Codex\bin\7ac07f4ce733f89a\codex.exe"
+
+# 2. Point plugin installs at it (only needed if reinstalling the dev plugin)
+$env:SYNAPSE_CODEX_BIN = $bin
+
+# 3. A throwaway registered test project already exists from this session:
+#    C:\Users\DELL\AppData\Local\Temp\synapse-native-test-repo
+#    registered under alias "synapselivetest" in ~/.synapse/host.sqlite.
+#    Reuse it, or make a fresh one:
+$repo = New-Item -ItemType Directory -Force -Path "$env:TEMP\synapse-native-test-repo-2"
+Set-Location $repo
+git init -b main .
+git config user.email "test@example.test"
+git config user.name "Synapse Live Test"
+"fixture" | Out-File -FilePath "$repo\README.md" -Encoding utf8
+git add README.md
+git commit -m "fixture"
+```
+
+```js
+// register-project.mjs -- run once with `node register-project.mjs` from the
+// repo root (adjust the `repo` path to match)
+import { connectProject } from "./plugins/synapse/lib/project-registry.mjs";
+const result = await connectProject({
+  alias: "synapselivetest2",
+  project: ".",
+  cwd: "C:\\Users\\DELL\\AppData\\Local\\Temp\\synapse-native-test-repo-2",
+});
+console.log(JSON.stringify(result, null, 2));
+```
+
+```powershell
+# 4. The actual repro (baseline -- confirm this still fails before investigating)
+Set-Location $repo
+& $bin exec --cd $repo --dangerously-bypass-hook-trust --json "reply with exactly: PING_OK" 2>&1
+
+# 5. Hypothesis (a): does disabling the sandbox change the result?
+& $bin exec --cd $repo --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox --json "reply with exactly: PING_OK" 2>&1
+```
+
+To make the result unambiguous (don't trust "no visible error" alone -- see
+"Completed" above for why), temporarily add this to the very top of
+`plugins/synapse/hooks/prompt-memory.mjs`, before its existing imports/logic,
+then run `npm run install:plugin` (with `SYNAPSE_CODEX_BIN` set) to rebuild
+before testing, and **remove it again** (verify with `git diff`) once done:
+
+```js
+try {
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(
+    "C:\\Users\\DELL\\.synapse\\hook-executed-marker.txt",
+    `ran at ${new Date().toISOString()} on ${process.platform}\n`,
+  );
+} catch {}
+```
+
+Then check `Test-Path C:\Users\DELL\.synapse\hook-executed-marker.txt` after
+each exec run -- delete it between runs so a stale marker from a previous
+run can't be mistaken for a fresh success.
