@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
-- Last checkpoint: `uncommitted`
+- Last checkpoint: `be0b39f6b9c2069206462258f709646c6a96cfb6` (tested implementation)
 - Status: `active`
 
 ## Goal
@@ -45,8 +45,9 @@ then resume the authorized production organizer rollout.
 ## Verification
 
 - Focused tests: 17 passed, including repair completeness and fail-closed behavior.
-- First full PostgreSQL run passed; rerunning after the final evidence constraints.
-- Audit: zero vulnerabilities. Docker build pending.
+- Final full PostgreSQL-backed check: 254 passed, zero skipped. Coverage 95.70%
+  lines, 86.29% branches, 94.34% functions.
+- Audit: zero vulnerabilities. Docker build and disabled startup passed.
 
 ## Remaining work
 
