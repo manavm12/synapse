@@ -109,3 +109,36 @@ failures, index generation and evidence counts without message or source bodies.
 Alert on sustained unavailable rates, cost overruns, stale indexes or tenant/evidence
 validation failures. Disable enrichment to roll back; keep message transport,
 authoritative memory, queue history and accepted delivery attempts intact.
+
+## Concrete implementation sequence for the messaging workstream
+
+1. In `src/server/messaging/receiver.mjs` and its storage layer, add a
+   recipient-authenticated, message-ID-only preparation/read operation. Persist
+   preparation separately from the transport message and its acknowledgement.
+   The worker derives the project from the stored recipient; there is no public
+   owner/project/query selector. Design the migration with the messaging owner.
+2. In the durable import/dispatch path across `receiver-sync.mjs` and
+   `receiver-worker.mjs`, request that message's context after import. Apply the
+   retrieval deadline without blocking sender acknowledgement. An unavailable
+   bundle follows the existing delivery path with a labeled gap.
+3. In `plugins/synapse/lib/native-queue.mjs`, revalidate recipient, message hash,
+   graph generation and configuration immediately before issuing the first native
+   attempt. Persist the chosen context/prompt hash with that attempt atomically.
+   Unknown outcomes and retries use the frozen prompt; later graph updates do not
+   create a different prompt under the same delivery identity.
+4. `native-router.mjs` consumes the prepared native prompt in both task creation
+   and existing-task submission. Keep its routing, receipts and conversation
+   ordering unchanged. Test busy queues, duplicate imports, revocation and
+   recovery before enabling a recipient-side feature flag.
+5. Coordinate a shared Responses transport with the organizer workstream. The
+   prototype's isolated provider preserves its request conventions, but the
+   existing adapter exposes only organizer stages. The durable budget wrapper
+   must remain outside individual calls and cover embeddings and uncertain usage.
+
+Use mini graph retrieval with low reasoning as the initial shadow configuration,
+subject to the measured limits in `RESULTS.md`. Include the prompt/schema version,
+model settings, build/configuration hash and returned model version in recorded
+preparation metadata. Keep embeddings optional until measurements on realistic
+recipient graphs justify their operational cost. The existing full-ledger loader
+and forty-topic directory are prototype limitations, not a production indexing
+strategy.

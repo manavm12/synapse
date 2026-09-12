@@ -309,7 +309,9 @@ export function createMessageContextPreparer({
       try {
         if (!view.unchanged()) throw new Error("generation_changed");
         const expanded = new Set(selected);
-        for (const id of selected)
+        // Newly added successors can themselves have conflicts or successors.
+        // Iterating the set follows that closure without revisiting cycles.
+        for (const id of expanded)
           if (id.startsWith("claim:"))
             view.companions(id).forEach((other) => {
               expanded.add(other);

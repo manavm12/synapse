@@ -169,6 +169,9 @@ test("history traversal exposes the current successor and preserves historical l
   assert.ok(
     result.evidenceItems.some((i) => i.id === project.keys["logs.current"]),
   );
+  assert.ok(
+    result.evidenceItems.some((i) => i.id === project.keys["logs.conflict"]),
+  );
 });
 test("conversation context is limited to preceding messages in the same conversation", async () => {
   let observed;
@@ -837,5 +840,28 @@ test("retained sources, proposals and benchmark definitions reconstruct exactly"
   assert.equal(
     benchmark.semanticFingerprint,
     "1e28807efb9ee9f724872d8c9028f6131014abc96886023e02baf7c84653cb51",
+  );
+});
+
+test("markerless prompts preserve the exact native size limit including separators", async () => {
+  const bundle = await context();
+  const delivery = mockDelivery(example);
+  const nativePrompt = "x".repeat(65536);
+  const full = renderMessagePrompt({ ...delivery, nativePrompt }, bundle);
+  assert.equal(full.prompt, nativePrompt);
+  assert.equal(full.promptBytes, 65536);
+  assert.equal(full.contextBytes, 0);
+  assert.equal(full.status, "unavailable");
+  const short = "peer message";
+  const enriched = renderMessagePrompt(
+    { ...delivery, nativePrompt: short },
+    bundle,
+  );
+  assert.ok(
+    enriched.prompt.startsWith(`${short}\n\n<synapse_recipient_memory>`),
+  );
+  assert.equal(
+    enriched.promptBytes - Buffer.byteLength(short),
+    enriched.contextBytes,
   );
 });

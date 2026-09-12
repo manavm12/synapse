@@ -86,3 +86,18 @@ uses top-20 lexical and top-20 semantic candidates with RRF (k=60), then the sam
 scoped navigation and selection. Because the fixture has only twenty named subject
 subtopics, the directory is informative; this experiment cannot establish that
 embeddings are unnecessary for large, unfamiliar or poorly organized projects.
+
+
+## Post-benchmark engineering review
+
+After all paid trials completed, review found a markerless prompt could exceed the
+native limit by two separator bytes. The renderer now counts those bytes inside
+the context budget and preserves a full-size original unchanged. Companion
+expansion also follows newly added successors' recorded conflicts, closing a gap
+in the historical-selection boundary. These fixes do not alter retrieval model
+inputs or settings. All 360 saved v9 cases replayed to identical native prompts.
+
+The paid benchmark's original code snapshot remains frozen and retained.
+RELEASE_VERIFICATION.json separately records the release source snapshot, these
+engineering changes and replay evidence; it does not claim additional paid model
+trials occurred on the patched release. Deterministic tests cover both edges.

@@ -5,6 +5,10 @@ memory from its recipient's project. It does not install hooks, send real messag
 change production tables, or deploy a worker. Existing production modules are
 imported without modification.
 
+Start with [RESULTS.md](RESULTS.md) for the scorecard and selected configuration,
+[GRAPH.md](GRAPH.md) for the fixture, and [INTEGRATION.md](INTEGRATION.md) for the
+recipient-side delivery handoff.
+
 ## Reproduce
 
 Use Node 24 and the repository's pinned dependencies:

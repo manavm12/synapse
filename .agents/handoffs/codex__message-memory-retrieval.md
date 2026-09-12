@@ -3,9 +3,9 @@
 - Branch: `codex/message-memory-retrieval`
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
-- Base reviewed: `bf48aeca50cf64c3c2737c89afafeb714e6338`
-- Last checkpoint: `1a6606c`
-- Status: `active`
+- Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
+- Last checkpoint: `5255abb`
+- Status: `ready-for-review`
 
 ## Goal
 
@@ -34,7 +34,15 @@ the later messaging integration. Production remains untouched.
 - Nano graph and nano hybrid fail development gates. Mini graph was selected
   before held-out evaluation; SELECTION.json records the choice and freeze.
 - All four v9 development runs replayed to 160 identical prompts without API calls.
-- Frozen held-out comparisons are running. Do not tune retrieval using those results.
+- Frozen mini primary and repeat both pass every gate: 100% recall, completeness
+  and abstention; macro precision 92.708% / 90.625%, pooled 86.486% / 83.117%.
+  Both have zero citation, tenant, status and scope violations. Nano controls fail.
+- Paid trials ended at USD 1.135522518 total, including USD 0.276797151 reserved
+  for 41 uncertain development requests. Final phase has no uncertain requests.
+- Post-benchmark review fixed markerless-size and transitive-companion boundaries;
+  all 360 saved v9 cases replay identically. See RELEASE_VERIFICATION.json.
+- Reports, exact prompt comparison, graph inspection, and production integration
+  sequence are complete. Actual prompts, caches and the spending ledger remain local.
 
 ## Decisions and invariants
 
@@ -47,23 +55,33 @@ the later messaging integration. Production remains untouched.
 
 ## Verification
 
-- Latest focused suite: 36 passed. Full check: 287 passed, zero skipped, including disposable PostgreSQL; coverage 95.68% lines / 86.63% branches / 94.20% functions. Audit: zero vulnerabilities.
+- Full release check: 288 passed, zero skipped, including disposable PostgreSQL; coverage 95.70% lines / 86.73% branches / 94.21% functions. Audit: zero vulnerabilities.
 - Biome checks passed after formatting.
 - Lexical baseline: 50.05% required recall, 16.29% precision, no abstention.
 - Initial nano agent: 52.86% required recall, 47.51% precision; gates not met.
-- USD 0.931534357 development charged/reserved before final runs. USD 2 final reserve is separate; consult the durable SQLite ledger for current spend.
+- Final ledger: USD 0.931534357 development + USD 0.203988161 final = USD 1.135522518 charged/reserved out of USD 5.
 
 ## Remaining work
 
-1. Finish frozen held-out controls and mini evaluation; repeat mini once.
-2. Report each run independently, actual prompt differences, failures, cost and limits.
-3. Update integration handoff and push final results for review.
+- Push final report/boundary checkpoint and open a focused PR; record its URL.
+- Production integration is deliberately separate and owned by the active messaging
+  workstream. Follow experiments/message-retrieval/INTEGRATION.md.
 
 ## Risks or blockers
 
-- Synthetic dev success may not transfer to held-out or real recipient graphs.
-- A failed repeat or held-out run must remain visible; do not declare success.
+- Synthetic success does not establish quality on real recipient graphs.
+- Failed nano controls and early development attempts remain visible; do not conflate them with the selected mini result.
 - Existing ledger adapter rebuilds project history; large-project scaling is unproven.
 - Transport is an isolated Responses-style client because the existing organizer
   adapter is coupled to extract/reconcile/review stages and an active workstream.
-- Runtime/config, ledger, corpus and benchmark are frozen at SELECTION.json's hash.
+- Paid-trial runtime/config, ledger, corpus and benchmark are frozen at SELECTION.json's hash. RELEASE_VERIFICATION.json records the later boundary-only patch and exact replay evidence.
+
+
+## Remote compatibility review
+
+Fetched before the final commit. Main advanced to `a50f222` (organizer coverage
+transport and prompt repair); the deterministic ledger, evidence, relation,
+projection and retrieval contracts used here did not change. No changed remote
+file overlaps this experiment. Keep the benchmark base at `bf48aeca` and let PR
+CI validate the merge; do not rewrite the frozen experiment onto another agent's
+branch. Messaging ownership remains with `codex/conversational-messaging`.
