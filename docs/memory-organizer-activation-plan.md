@@ -1,9 +1,9 @@
 # Activate the production memory organizer
 
-Status (12 September 2026): credentials and worker role verified; PRs #11, #14,
-and #16 merged. The first production canary committed successfully and its notes
-are retrievable with source citations. A three-attempt reconciliation batch is
-running; continuous processing is still disabled pending verification.
+Status (12 September 2026): credentials and worker role verified; three production
+captures committed and are retrievable with citations. PR #19 fixes the measured
+claim-reference failure that stopped a bounded batch. An exact-revision retry is
+running; continuous processing remains disabled pending verification.
 
 Worktree: `/Users/manavmehta/synapse-memory-organizer`
 
@@ -298,3 +298,22 @@ uses `gpt-5-nano` for all stages. Credentials remain only in secret configuratio
 - Continuous activation, the remaining historical backlog, and live
   reconciliation verification are still pending. A successful first capture
   does not establish complete semantic recall or project-wide freshness.
+
+## Claim-reference correction — 12 September 2026
+
+- The three-attempt batch committed two more sources, both with reconciliation
+  and independent review, then stopped on `extract / claim_refs`. The failed
+  revision remained pending with its first attempt recorded. Three sources now
+  account for 79 claims and 56 notes; all 19 captures have jobs (none missing).
+- Claim refs are bookkeeping keys, not semantic output. PR #19 assigns unique
+  refs by array position before reconciliation/review and records the policy in
+  audit metadata. It preserves claim content, evidence, coverage, and already
+  committed IDs. Unsupported evidence and stale action labels still fail closed.
+- PR #19 passed 250 local tests with real PostgreSQL, zero skips, clean dependency
+  audit, Docker verification, and all required CI/security checks. It merged as
+  `bf48aeca50cf64c3c2737c89afafafeb714e6338`; automated review was still pending
+  with no findings reported at merge.
+- Disabled deployment `4e828333-0392-421a-9cd4-780afd50aac0` succeeded. Retry
+  deployment `2b4ad535-7910-4e97-98b9-f170db4e6a36` is pinned to that release and
+  only revision `44a45390-03f5-407f-8cee-6b2c91275918`, with one attempt and no
+  restarts. Future start config is restored to normal disabled mode.

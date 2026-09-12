@@ -3,8 +3,8 @@
 - Branch: `codex/organizer-rollout-verified`
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
-- Base reviewed: `5caaf78736f5ce15939a9e51abbfc99304642540`
-- Last checkpoint: `01548a7` (bounded rollout checkpoint)
+- Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
+- Last checkpoint: `72ba786` (merged tested PR19 into rollout branch)
 - Status: `active`
 
 ## Goal
@@ -36,6 +36,13 @@ reconciliation, drain historical captures, and enable continuous processing.
 - Started three-attempt scoped batch `ad8836bd-b911-4b34-9a75-fbe44e8425af`;
   restored the future start command to disabled normal mode, restart NEVER.
 - Re-read the updated Windows workstream handoff; no file overlap with this scope.
+- Three-attempt batch finished with two successes, then stopped on `claim_refs`.
+  Revision `44a45390-03f5-407f-8cee-6b2c91275918` remains pending with one attempt.
+- PR19 fixes local claim-reference assignment; 250 tests, zero skips, audit and
+  required CI passed. It merged as the current base above. Prior three sources
+  remain unchanged: generation three, 79 claims, 56 notes, no missing jobs.
+- Started exact-revision retry `2b4ad535-7910-4e97-98b9-f170db4e6a36`, one attempt
+  and restart NEVER. Future service start command is restored to disabled normal mode.
 
 ## Decisions and invariants
 
@@ -54,7 +61,7 @@ reconciliation, drain historical captures, and enable continuous processing.
 
 ## Remaining work
 
-1. Inspect the active three-attempt batch and its reconciliation/audit/projection.
+1. Inspect the active exact-revision retry, audit strategy and graph relationships.
 2. Investigate failures without resetting queue attempts or weakening validation.
 3. Drain remaining history, enable continuous mode, verify fresh queued captures.
 4. Record final production state and push a documentation checkpoint/PR.
