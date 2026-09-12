@@ -4,8 +4,8 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
-- Last checkpoint: `3077f9ecf7798b1edfd745ff5724b196ede6e17f` (tested nonblank source groups)
-- Status: `active`
+- Last checkpoint: `50c375c5720680ec8801a0bc2057eeb2ad21e48e` (tested repair budgets and prompt clarifications)
+- Status: `waiting for model choice`
 
 ## Goal
 
@@ -108,10 +108,15 @@ then resume the authorized production organizer rollout.
   Final full check including those prompts: 261 passed, zero skipped; coverage
   95.76% lines, 86.66% branches, 94.39% functions. Docker build and disabled-start
   smoke test passed. Semantic verification remains unresolved.
+- Final read-only production status: generation 3, 79 claims, 56 notes, three
+  succeeded jobs and 21 pending captures. The target is still pending at attempt 2.
+  Continuous processing is disabled; future start is `npm run worker`, restart
+  `NEVER`. No new queue attempt, credential change, or ledger mutation occurred.
 
 ## Remaining work
 
-1. Establish reliable model behavior with positive and negative semantic controls,
+1. Resolve the user's low-cost-model preference, then establish reliable behavior
+   with positive and negative semantic controls,
    then pass a full real-ledger read-only run. Do not treat CI as semantic verification.
 2. Address applicable review findings and pass required PR checks on the final head.
 3. Merge, verify one bounded queue attempt, then resume continuous rollout.
