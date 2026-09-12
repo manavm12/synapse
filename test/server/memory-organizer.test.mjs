@@ -584,6 +584,54 @@ test("review rejection and structural repairs stay inside per-stage budgets", as
   assert.equal(attempts, 2);
 });
 
+test("mixed repairs can use every stage allowance without increasing any call budget", async () => {
+  let processingSecond = false;
+  const counts = { extract: 0, reconcile: 0, review: 0 };
+  const run = setup({
+    maxStageCalls: 2,
+    respond(stage) {
+      if (!processingSecond)
+        return stage === "extract"
+          ? structuredClone(fixture.steps[0].extraction)
+          : { issues: [] };
+      counts[stage]++;
+      if (stage === "extract") {
+        const value = structuredClone(fixture.steps[1].extraction);
+        if (counts.extract === 1) value.coverage = [];
+        return value;
+      }
+      if (stage === "reconcile")
+        return structuredClone(fixture.steps[1].reconciliation);
+      return {
+        issues:
+          counts.review === 1
+            ? [
+                {
+                  stage: "reconciliation",
+                  ref: "c1",
+                  detail: "Synthetic repair",
+                },
+              ]
+            : [],
+      };
+    },
+  });
+  await run.handler.commit({
+    result: await run.handler.process(fixture.steps[0].envelope),
+  });
+  processingSecond = true;
+  const result = await run.handler.process(fixture.steps[1].envelope);
+  assert.deepEqual(result.audit.stageCalls, {
+    extract: 2,
+    reconcile: 2,
+    review: 2,
+  });
+  assert.equal(result.audit.calls.length, 6);
+  assert.equal(result.audit.maxStageCalls, 2);
+  assert.equal(result.audit.reviewPassed, true);
+  assert.equal(run.commits, 1, "processing alone must not commit the repair");
+});
+
 test("transport retries reuse inputs and are bounded; failed requests never commit", async () => {
   let extracts = 0;
   const run = setup({

@@ -117,7 +117,11 @@ export function createMemoryOrganizerHandler({
       let reconciliation;
       let feedback = "";
       let stage = "extract";
-      for (let attempt = 1; attempt <= maxStageCalls; attempt++) {
+      // Repairs in one stage must not consume another stage's allowance.
+      // request() remains the authoritative per-stage (and transport) budget;
+      // this outer bound also fences deterministic failures that make no call.
+      const maxRounds = maxStageCalls * 3;
+      for (let attempt = 1; attempt <= maxRounds; attempt++) {
         try {
           stage = "extract";
           extraction ??= await request(
@@ -201,12 +205,17 @@ export function createMemoryOrganizerHandler({
             );
             if (review.issues.length) {
               feedback = `Semantic review issues: ${JSON.stringify(review.issues)}\nPrior extraction and reconciliation: ${JSON.stringify({ extraction, reconciliation })}`;
-              if (review.issues.some((issue) => issue.stage === "extraction"))
-                extraction = undefined;
-              if (attempt === maxStageCalls)
+              const repairExtraction = review.issues.some(
+                (issue) => issue.stage === "extraction",
+              );
+              if (
+                stageCalls.review >= maxStageCalls ||
+                (repairExtraction && stageCalls.extract >= maxStageCalls)
+              )
                 throw new MemoryInferenceError(
                   "semantic review rejected proposal",
                 );
+              if (repairExtraction) extraction = undefined;
               continue;
             }
           }
@@ -227,7 +236,8 @@ export function createMemoryOrganizerHandler({
           if (signal?.aborted) throw new MemoryInferenceError("cancelled");
           if (
             error instanceof MemoryInferenceError ||
-            attempt === maxStageCalls
+            stageCalls[stage] >= maxStageCalls ||
+            attempt === maxRounds
           )
             throw error instanceof MemoryInferenceError
               ? error

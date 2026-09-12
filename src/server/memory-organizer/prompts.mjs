@@ -1,6 +1,6 @@
 import { choice, object, records, text } from "../../memory/core/schema.mjs";
 
-export const PROMPT_VERSION = "claims-v2.6-cloud-v3";
+export const PROMPT_VERSION = "claims-v2.7-cloud-v3";
 export const reviewSchema = object({
   issues: records({
     stage: choice("extraction", "reconciliation"),
@@ -18,6 +18,14 @@ export function extractionPrompt(
   contextEvidence = [],
 ) {
   return `Extract durable atomic claims from this session's source segments. ${GUARD}
+A SOURCE SEGMENT IS A PARAGRAPH, NOT A SINGLE CLAIM. Extract ALL durable assertions in
+every paragraph, not a representative sentence or a summary. A claims group can and normally
+will contain MANY claims. Preserve each independent item in What changed, Decisions, Still
+unresolved and Important references, including review outcomes, commit/task IDs, prerequisites
+and unverified conditions. Citing a paragraph is not enough: each fact must appear in an assertion.
+Example: "Added cache eviction and metrics. TLS remains required. Commit abc is awaiting review"
+contains at least four independently changing claims: eviction added, metrics added, TLS required,
+and abc awaiting review. Do not combine independently changing facts to shorten the result.
 Each independently changing policy or property needs its OWN claim. Split conjunctions
 when the parts could change independently. Keep material qualifications inside each claim.
 Prefer the source's exact wording for assertions. Add only the minimal subject context needed
@@ -80,6 +88,8 @@ replaced_by: incoming describes an old rule already explicitly replaced by a lat
 claim; exactly one existing target. An older timestamp alone is not proof of replacement.
 resolves: incoming explicitly answers existing open questions; target those questions.
 conflicts: unresolved incompatible observations; keep original claims, mark incoming disputed.
+Different values conflict only for the SAME exclusive property. "Branch contains commit A"
+and "latest assembled commit B" are compatible facts, not competing authoritative versions.
 Never replace across production/staging/branch scope, erase a read check when writes gain
 roles, discard a useful reference because a later note omits it, or repurpose an old question
 as a different new question. Retired claims remain in the immutable ledger.
@@ -115,6 +125,10 @@ Check ALL live old claims for obsolete duplicate rules left active when another 
 replaced. New claims cannot be falsely marked historical or have their scope silently changed.
 projectedCurrent is the deterministic reducer's ACTUAL post-transaction live claim set. Use
 it to check what stays visible; do not speculate about statuses the reducer does not produce.
+Check the plan's actual action value. conflicts intentionally leaves the existing observations
+visible and marks incoming disputed; it is not replaces and does not promise to retire targets.
+Different values are incompatible only for the same exclusive property; a branch can contain
+an older planning commit while identifying a different latest assembled commit.
 An equivalent historical recap of a target superseded/resolved in the SAME atomic transaction
 does not resurrect that target. Its evidence is retained but it is not a live rule.
 Do not introduce conditional restrictions into independently stated category rules simply

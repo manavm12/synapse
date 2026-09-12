@@ -86,10 +86,33 @@ then resume the authorized production organizer rollout.
   86.61% branches, 94.39% functions. Docker build and disabled startup passed.
 - CodeRabbit accepted the corrected handoff and withdrew its foreign-evidence
   repair finding after verifying schema rejection and regression coverage.
+- Final read-only run on `3077f9e` reached review but failed semantic reconciliation
+  after two review passes. No queue attempt or ledger write occurred.
+- Loaded a scoped generation-3 snapshot through a one-off read-only deployment.
+  Only encrypted snapshot chunks reached Railway logs; decryption and proposal
+  inspection stay in diagnostic memory. No private source fixture was committed.
+- Inspection found nano compressing five source paragraphs to five incomplete
+  claims, confusing compatible commit references, and misreading pending work.
+  Generic paragraph-completeness guidance improved one extraction to 34 claims,
+  but it still omitted a current commit reference. This is not a quality pass.
+- Experimental structured and focused source-review checks still missed omitted
+  facts. They were NOT added to the runtime. A smaller entailment control also
+  rejected a verbatim-supported fact. Asked whether a newer nano model may be tested;
+  no model/config change has been made at this checkpoint.
+- Fixed an independent repair-budget bug: outer pipeline rounds no longer exhaust
+  another stage's unused request allowance. Per-stage/transport call caps remain
+  unchanged. Regression covers mixed structural and semantic repairs using exactly
+  two calls per stage. Full PostgreSQL-backed check: 261 passed, zero skipped;
+  coverage 95.77% lines, 86.68% branches, 94.39% functions; audit clean.
+- Added paragraph-completeness and compatible-reference prompt clarifications.
+  Final full check including those prompts: 261 passed, zero skipped; coverage
+  95.76% lines, 86.66% branches, 94.39% functions. Docker build and disabled-start
+  smoke test passed. Semantic verification remains unresolved.
 
 ## Remaining work
 
-1. Finish the full real-ledger read-only dry run of grouped extraction.
+1. Establish reliable model behavior with positive and negative semantic controls,
+   then pass a full real-ledger read-only run. Do not treat CI as semantic verification.
 2. Address applicable review findings and pass required PR checks on the final head.
 3. Merge, verify one bounded queue attempt, then resume continuous rollout.
 

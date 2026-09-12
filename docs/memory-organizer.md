@@ -134,7 +134,10 @@ live targets), and independent semantic review. Review defaults to `always`;
 explicit `never` is available for experiments and is recorded in audit metadata.
 Selective review / one-call organization has not been validated and is not the
 default. Each stage has at most three requests per queue attempt, with bounded
-prompt/output sizes and request deadlines. Queue retry limits multiply this cost
+prompt/output sizes and request deadlines. Structural and semantic repairs share
+those per-stage allowances; repairing extraction does not consume a reconciliation
+or review call. Transport retries still count against the stage making the request.
+Queue retry limits multiply this cost
 ceiling; they do not establish a dollar budget. No inference is run by migration,
 tests, module import, or handler construction.
 
