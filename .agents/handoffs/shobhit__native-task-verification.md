@@ -2,10 +2,15 @@
 
 - Branch: `shobhit/native-task-verification`
 - Human owner: `Shobhit Goel`
-- Active agent: `Claude`
+- Active agent: `unassigned` -- Claude stopped here; safe for Codex (or any
+  agent) to resume immediately, fully committed and pushed, nothing left
+  uncommitted in this worktree.
 - Base reviewed: `027c513` (main, includes merged PR #18)
-- Last checkpoint: `uncommitted`
-- Status: `active`
+- Last checkpoint: `d56920b` (includes an intentional WIP diagnostic commit
+  in `dispatch.mjs` -- see "Risks or blockers", not for merge as-is)
+- Status: `blocked` -- waiting on Codex account usage to reset (~9:09 PM
+  per the last error) or on the user adding more credits before any further
+  live `codex exec` testing.
 
 ## Goal
 
