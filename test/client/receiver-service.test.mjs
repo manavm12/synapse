@@ -143,7 +143,10 @@ test("Windows Task Scheduler and Linux systemd user services are generated safel
   };
   assert.equal((await startReceiverService({}, windows)).started, true);
   const launcher = join(f.root, "receiver-service.ps1");
-  assert.match(await readFile(launcher, "utf8"), /server\\receiver\.mjs/);
+  // The default executable path is computed via fileURLToPath on whatever
+  // host actually runs this test, so its separator reflects that host, not
+  // the simulated win32 platform above; accept either.
+  assert.match(await readFile(launcher, "utf8"), /server[\\/]receiver\.mjs/);
   assert.equal(
     windowsCalls.some((args) => args.includes("start")),
     true,
