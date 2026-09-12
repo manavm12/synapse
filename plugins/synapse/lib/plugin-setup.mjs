@@ -6,13 +6,13 @@ import { promisify } from "node:util";
 import { AppToolsClient, appToolJson } from "./app-tools-client.mjs";
 import { waitForApproval, withDeadline } from "./deadline.mjs";
 import { promptHookHealth } from "./hook-health.mjs";
-import { openExternalUrl } from "./open-url.mjs";
 import {
   activateDestination,
   activeDestinations,
   deactivateDestination,
   withReceiverLease,
 } from "./onboarding-state.mjs";
+import { openExternalUrl } from "./open-url.mjs";
 import { connectProject, resolveProjectRoot } from "./project-registry.mjs";
 import { ReceiverClient, ReceiverHttpError } from "./receiver-client.mjs";
 import {
