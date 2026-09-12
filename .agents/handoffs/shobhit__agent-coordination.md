@@ -2,10 +2,10 @@
 
 - Branch: `shobhit/agent-coordination`
 - Human owner: `Shobhit Goel`
-- Active agent: `Codex`
+- Active agent: `unassigned`
 - Base reviewed: `c87995c`
-- Last checkpoint: pending initial commit
-- Status: `active`
+- Last checkpoint: `66399ea`
+- Status: `ready-for-review`
 
 ## Goal
 
@@ -33,12 +33,14 @@ Git-based handoffs.
 
 ## Verification
 
-- Pending formatting and diff checks.
+- `npm run format:check` — passed.
+- `npm run lint` — passed.
+- `git diff --check` — passed.
 
 ## Remaining work
 
-1. Validate, commit, and push the coordination branch.
-2. Merge the rules before relying on them from new branches.
+1. Review and merge the coordination branch.
+2. Use separate worktrees and create a handoff file for each new workstream.
 
 ## Risks or blockers
 
