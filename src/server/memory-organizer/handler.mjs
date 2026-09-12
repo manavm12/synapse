@@ -17,7 +17,11 @@ import {
   reviewPrompt,
   reviewSchema,
 } from "./prompts.mjs";
-import { extractionSchemaFor, validationReason } from "./validation.mjs";
+import {
+  extractionRepairFeedback,
+  extractionSchemaFor,
+  validationReason,
+} from "./validation.mjs";
 
 function catalogFor(ledger) {
   return currentClaims(ledger).map((claim) => ({
@@ -232,7 +236,11 @@ export function createMemoryOrganizerHandler({
                     validation_reason: validationReason(error),
                   },
                 });
-          feedback = `${error.message}\nPrior extraction and reconciliation: ${JSON.stringify({ extraction, reconciliation })}`;
+          const repair =
+            stage === "extract"
+              ? extractionRepairFeedback(error, extraction, segments)
+              : error.message;
+          feedback = `${repair}\nPrior extraction and reconciliation: ${JSON.stringify({ extraction, reconciliation })}`;
           if (stage === "extract") extraction = undefined;
         }
       }

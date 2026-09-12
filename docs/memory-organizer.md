@@ -61,6 +61,16 @@ coverage, and agreement between coverage dispositions and citations. Exhausted
 validation repairs report a fixed `validation_reason` and `inference_stage` in
 operational logs, never source text or model-supplied identifiers.
 
+The provider schema requires at least one evidence ID per claim; core validation
+independently enforces that requirement. Repair feedback identifies empty,
+duplicate, or context-only evidence together with coverage inconsistencies, so
+one repair can address all observed structural defects. It identifies each mismatched current segment and its
+citing claim refs, missing/duplicate entries, and returned dispositions. It is
+sent only as untrusted repair context to the model, never added to logs or audit
+metadata. Repairs still use the existing per-stage budget and full independent
+review. The handler never silently changes a coverage disposition, drops a claim,
+or invents a citation; persistent disagreement still fails closed.
+
 Local incoming claim refs are assigned deterministically (`c1`, `c2`, ...) from
 the validated extraction array before reconciliation and review. The transport
 shape retains its `ref` string for compatibility, but the model's labels are not

@@ -15,6 +15,7 @@ import {
 } from "../../src/server/memory-organizer/api.mjs";
 import { createMemoryOrganizerHandler } from "../../src/server/memory-organizer/handler.mjs";
 import {
+  extractionRepairFeedback,
   extractionSchemaFor,
   validationReason,
 } from "../../src/server/memory-organizer/validation.mjs";
@@ -48,7 +49,7 @@ function setup({ reviewStrategy = "always", maxStageCalls = 3, respond } = {}) {
     reviewer: "synthetic-reviewer",
     async structured(stage, prompt, schema, options) {
       const data = JSON.parse(prompt.split("\n").at(-1));
-      calls.push({ stage, data, schema, options });
+      calls.push({ stage, data, schema, options, prompt });
       const value = respond
         ? await respond(stage, data, calls)
         : stage === "extract"
@@ -126,6 +127,7 @@ test("extraction constrains current and earlier evidence without mutating shared
   await run.handler.process(fixture.steps[1].envelope);
   const extract = run.calls.filter((call) => call.stage === "extract")[1];
   const properties = extract.schema.properties;
+  assert.equal(properties.claims.items.properties.evidence.minItems, 1);
   const current = extract.data.segments.map((segment) => segment.id);
   const known = [
     ...new Set([
@@ -346,6 +348,131 @@ test("validation diagnostics expose only fixed reasons and preserve failure fenc
   );
   assert.equal(run.calls.length, 2);
   assert.equal(run.commits, 0);
+});
+
+test("coverage repairs identify both citation mismatches without modifying proposals", async () => {
+  const original = structuredClone(fixture.steps[0].extraction);
+  const bad = structuredClone(original);
+  bad.coverage[0].disposition = "context";
+  bad.claims.pop();
+  const before = structuredClone(bad);
+  const segments = segmentsFor(fixture.steps[0].envelope);
+  const message = extractionRepairFeedback(
+    new Error("Coverage disposition disagrees with claim evidence"),
+    bad,
+    segments,
+  );
+  const issues = JSON.parse(
+    message.split("Coverage consistency issues: ")[1].split("\n")[0],
+  );
+  assert.deepEqual(issues, [
+    {
+      segmentId: original.coverage[0].segmentId,
+      coverageEntries: 1,
+      citingRefs: ["c1"],
+      dispositions: ["context"],
+    },
+    {
+      segmentId: original.coverage[1].segmentId,
+      coverageEntries: 1,
+      citingRefs: [],
+      dispositions: ["claims"],
+    },
+  ]);
+  assert.deepEqual(bad, before);
+  assert.match(message, /Never add an unsupported citation/);
+  const run = setup({
+    maxStageCalls: 2,
+    respond(stage, _data, calls) {
+      if (stage === "review") return { issues: [] };
+      return calls.filter((call) => call.stage === "extract").length === 1
+        ? bad
+        : original;
+    },
+  });
+  const result = await run.handler.process(fixture.steps[0].envelope);
+  assert.match(run.calls[1].prompt, /Coverage consistency issues:/);
+  assert.ok(run.calls[1].prompt.includes(message));
+  assert.deepEqual(result.changeSet.proposal.extraction, original);
+  assert.deepEqual(result.audit.stageCalls, {
+    extract: 2,
+    reconcile: 0,
+    review: 1,
+  });
+  assert.equal(run.commits, 0);
+});
+
+test("coverage feedback identifies missing and duplicate current entries, not foreign text", () => {
+  const segments = segmentsFor(fixture.steps[0].envelope);
+  const bad = structuredClone(fixture.steps[0].extraction);
+  bad.coverage[1] = structuredClone(bad.coverage[0]);
+  const feedback = extractionRepairFeedback(
+    new Error("Unknown or duplicate coverage segment"),
+    bad,
+    segments,
+  );
+  assert.match(feedback, /"coverageEntries":2/);
+  assert.match(feedback, /"coverageEntries":0/);
+  assert.ok(feedback.includes(segments[1].id));
+  assert.equal(
+    extractionRepairFeedback(new Error("Other failure"), bad, segments),
+    "Other failure",
+  );
+  assert.equal(
+    extractionRepairFeedback(
+      new Error("Every source segment requires a coverage disposition"),
+      undefined,
+      segments,
+    ),
+    "Every source segment requires a coverage disposition",
+  );
+});
+
+test("persistent coverage mismatches still fail closed with safe errors and no review or commit", async () => {
+  const run = setup({
+    maxStageCalls: 2,
+    respond() {
+      const bad = structuredClone(fixture.steps[0].extraction);
+      bad.coverage[0].disposition = "context";
+      return bad;
+    },
+  });
+  await assert.rejects(
+    run.handler.process(fixture.steps[0].envelope),
+    (error) => {
+      assert.deepEqual(error.details, {
+        inference_stage: "extract",
+        validation_reason: "coverage_evidence",
+      });
+      assert.doesNotMatch(
+        JSON.stringify(error),
+        /seg:|citingRefs|Coverage consistency issues/,
+      );
+      return true;
+    },
+  );
+  assert.equal(run.calls.length, 2);
+  assert.equal(run.commits, 0);
+});
+
+test("one repair identifies empty, duplicate, and context-only claim evidence alongside coverage", () => {
+  const bad = structuredClone(fixture.steps[0].extraction);
+  bad.claims[0].evidence = [];
+  bad.claims[1].evidence = ["earlier-context", "earlier-context"];
+  const feedback = extractionRepairFeedback(
+    new Error("Each claim needs unique evidence segment IDs"),
+    bad,
+    segmentsFor(fixture.steps[0].envelope),
+  );
+  const issues = JSON.parse(
+    feedback.split("Evidence consistency issues: ")[1].split("\n")[0],
+  );
+  assert.deepEqual(issues, [
+    { ref: "c1", empty: true, duplicate: false, currentMissing: true },
+    { ref: "c2", empty: false, duplicate: true, currentMissing: true },
+  ]);
+  assert.match(feedback, /Coverage consistency issues:/);
+  assert.doesNotMatch(feedback, /earlier-context/);
 });
 
 test("review rejection and structural repairs stay inside per-stage budgets", async () => {
