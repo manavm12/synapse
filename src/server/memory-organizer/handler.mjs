@@ -127,6 +127,16 @@ export function createMemoryOrganizerHandler({
             ),
             sourceSchema,
           );
+          // These are local proposal keys, not model-derived facts. Assign
+          // them before reconciliation/review sees the extraction. Repeating
+          // this on a repair is idempotent; all prior proposals are uncommitted.
+          extraction = {
+            ...extraction,
+            claims: extraction.claims.map((claim, index) => ({
+              ...claim,
+              ref: `c${index + 1}`,
+            })),
+          };
           validateExtraction(source, extraction, ledger);
           stage = "reconcile";
           if (catalog.length && extraction.claims.length) {
@@ -200,6 +210,7 @@ export function createMemoryOrganizerHandler({
             changeSet,
             audit: {
               promptVersion: PROMPT_VERSION,
+              claimRefStrategy: "source-order-v1",
               reviewStrategy,
               reviewPassed: review !== null,
               maxStageCalls,
