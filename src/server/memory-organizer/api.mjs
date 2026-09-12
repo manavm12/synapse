@@ -23,6 +23,17 @@ export class MemoryInferenceError extends Error {
         "incomplete",
       ],
       incomplete_reason: ["max_output_tokens", "content_filter"],
+      validation_reason: [
+        "claim_refs",
+        "evidence_unique",
+        "evidence_unknown",
+        "current_evidence_required",
+        "coverage_segments",
+        "coverage_evidence",
+        "coverage_missing",
+        "required_text",
+        "invalid_proposal",
+      ],
     })) {
       if (allowed.includes(details[key])) safe[key] = details[key];
     }
