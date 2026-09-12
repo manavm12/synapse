@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `bf48aeca50cf64c3c2737c89afafafeb714e6338`
-- Last checkpoint: `55c69763c2d9d7a2b768452986462510211fdc82` (tested grouped implementation)
+- Last checkpoint: `181619a4cfe3131462229ba2965cb8683b1e353d` (tested exclusive source groups)
 - Status: `active`
 
 ## Goal
@@ -73,6 +73,11 @@ then resume the authorized production organizer rollout.
   passed, zero skipped; coverage 95.74% lines, 86.50% branches, 94.38% functions.
 - Grouped Docker build and disabled startup passed. Full real-ledger read-only
   dry run is started on this checkpoint; do not interrupt it with a main merge.
+- Exclusive-group final check: 259 passed, zero skipped. Coverage 95.75% lines,
+  86.58% branches, 94.38% functions; Docker build and disabled startup passed.
+- Current read-only verification permits the library's bounded maximum of three
+  calls per stage (initial call, repair, transient retry); actual production
+  settings remain two until this experiment is verified. Queue history unchanged.
 
 ## Remaining work
 
