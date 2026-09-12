@@ -69,9 +69,9 @@ then resume the authorized production organizer rollout.
 
 ## Remaining work
 
-1. Correct the specific coverage failure and add regression tests.
-2. Run full PostgreSQL-backed checks, audit, and required PR checks.
-3. Merge, bounded verification, then resume continuous rollout.
+1. Finish the full real-ledger read-only dry run of grouped extraction.
+2. Address applicable review findings and pass required PR checks on the final head.
+3. Merge, verify one bounded queue attempt, then resume continuous rollout.
 
 ## Risks or blockers
 
