@@ -73,6 +73,13 @@ export function createView(repository, identity) {
   const project = repository.load(identity);
   const ledger = structuredClone(project.ledger),
     sources = structuredClone(project.sources);
+  if (
+    sources.some(
+      (s) =>
+        s.ownerId !== identity.userId || s.projectId !== identity.projectId,
+    )
+  )
+    throw new Error("tenant_mismatch");
   const generation = ledger.version;
   const fingerprint = hash(ledger);
   const projection = deriveTopicProjection(ledger);
@@ -110,8 +117,13 @@ export function createView(repository, identity) {
     const canonical = ledger.sources.find(
       (s) => s.revisionId === evidence.documentId,
     );
+    const segment = segmentById.get(evidence.segmentId);
     if (
       !source ||
+      !segment ||
+      segment.documentId !== source.revisionId ||
+      evidence.start < segment.start ||
+      evidence.end > segment.end ||
       source.ownerId !== identity.userId ||
       source.projectId !== identity.projectId ||
       hash(source.markdown) !== source.contentHash ||

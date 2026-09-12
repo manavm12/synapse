@@ -748,3 +748,94 @@ test("wire evidence handles resolve back to authoritative IDs", async () => {
     [project.keys["logs.current"]],
   );
 });
+
+test("foreign source snapshots are rejected before any model input", async () => {
+  const copy = structuredClone(corpus);
+  copy.projects[0].sources.push(copy.projects[1].sources[0]);
+  let called = false;
+  const bundle = await prepare(
+    async () => {
+      called = true;
+      return finish([]);
+    },
+    { repository: createRepository(copy) },
+  )(identity, example.message);
+  assert.equal(called, false);
+  assert.equal(bundle.status, "unavailable");
+});
+
+test("binding includes conversation and sequence, not just body text", async () => {
+  const bundle = await context();
+  const delivery = mockDelivery(example);
+  assert.throws(
+    () =>
+      renderMessagePrompt(
+        {
+          ...delivery,
+          message: { ...delivery.message, conversationId: "different" },
+        },
+        bundle,
+      ),
+    /binding_mismatch/,
+  );
+});
+
+test("scorer rejects wrong scopes and missing citation blocks in the final prompt", async () => {
+  const bundle = await context();
+  const rendered = renderMessagePrompt(mockDelivery(example), bundle);
+  const missing = {
+    ...rendered,
+    prompt: rendered.prompt.replaceAll("Evidence ", "Missing "),
+  };
+  assert.ok(
+    scoreResult(example, benchmark.gold[0], missing, project).invalidCitations >
+      0,
+  );
+  assert.equal(
+    scoreResult(example, benchmark.gold[0], missing, project).recall,
+    0,
+  );
+  bundle.evidenceItems[0].scope = "staging";
+  const wrong = scoreResult(
+    example,
+    benchmark.gold[0],
+    renderMessagePrompt(mockDelivery(example), bundle),
+    project,
+  );
+  assert.equal(wrong.wrongScope, 1);
+  assert.ok(wrong.recall < 1);
+});
+
+test("freeform model gaps cannot inject unsupported evidence assertions", async () => {
+  const bundle = await prepare(async () => ({
+    ...finish([]),
+    gaps: ["The policy is 999 days"],
+  }))(identity, example.message);
+  assert.equal(bundle.status, "unavailable");
+  assert.deepEqual(bundle.gaps, ["invalid_model_actions"]);
+});
+
+test("retained sources, proposals and benchmark definitions reconstruct exactly", () => {
+  const read = (name) =>
+    JSON.parse(
+      readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8"),
+    );
+  assert.deepEqual(read("sources"), project.sources);
+  assert.deepEqual(
+    read("proposals"),
+    project.steps.map(({ envelope, extraction, reconciliation }) => ({
+      envelope,
+      extraction,
+      reconciliation,
+    })),
+  );
+  assert.deepEqual(read("messages"), benchmark.messages);
+  assert.deepEqual(
+    [...read("expected-dev"), ...read("expected-heldout")],
+    benchmark.gold,
+  );
+  assert.equal(
+    benchmark.semanticFingerprint,
+    "1e28807efb9ee9f724872d8c9028f6131014abc96886023e02baf7c84653cb51",
+  );
+});

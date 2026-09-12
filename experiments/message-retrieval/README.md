@@ -35,11 +35,14 @@ input token bounds and provider output caps; it is not an account billing limit.
 Prices are explicit in `budget.mjs` and must be reverified before future runs.
 Credentials never belong in arguments, fixtures, captured output, or Git.
 
-`--model gpt-5-mini` compares the larger model. `--limit`, `--offset`, and
+`--model gpt-5-mini --reasoning low` selects the development winner.
+`--reasoning medium` is retained for reproducing development comparisons. `--limit`, `--offset`, and
 `--concurrency` allow bounded development runs (maximum four concurrent cases).
 `demo --strategy lexical` demonstrates one message without an API call. Each run
 retains JSON traces, expected-versus-actual scores and the exact `.prompt.md` sent
 to the native test double. Run names cannot overwrite earlier results.
+`node experiments/message-retrieval/replay.mjs mini-dev-v9` reproduces retained
+model decisions and exact prompts without API calls; it is not an independent trial.
 
 Before evaluating held-out messages:
 
@@ -48,7 +51,8 @@ node experiments/message-retrieval/cli.mjs freeze --name finalists
 node experiments/message-retrieval/cli.mjs eval --split heldout --freeze finalists --strategy agent --run final-agent
 ```
 
-The freeze binds runtime code, graph, benchmark and configuration version.
+The freeze binds experiment and imported production code, package lock, graph,
+benchmark, configuration version, and allowed model/strategy/reasoning settings.
 Held-out runs fail if those change. Repeat runs are fresh model calls; only
 embeddings are cached. Gold evidence never enters the model request.
 
@@ -68,7 +72,10 @@ so only the first two are seeded through SQL. No real customer data is copied.
 
 `seed` writes a reconstructable graph, messages, expected evidence and a Markdown
 graph inspection report into the ignored state directory. Canonical fictional
-facts and deterministic proposals are retained in this directory's Git files.
+facts, exact source envelopes, authored proposals, messages and expected evidence
+are retained as JSON under `fixtures/`; tests compare reconstruction against them.
+`FIXTURE_HASHES.json` identifies every fixture. Generated ledgers, vector caches,
+code snapshots, run traces and actual prompts stay in ignored local state.
 `createRepository` accepts either an in-memory corpus or the generated graph file.
 
 The PostgreSQL test creates and drops its own database, applies existing migrations,
@@ -86,7 +93,8 @@ test reports a skip. Full repository checks must use a fresh disposable database
   terminal receipt intact. It returns the actual injected items for scoring.
 - Claims and quotes are selected by observed identifiers. Authoritative source
   hashes, offsets and owner/project scope are checked before evidence is rendered.
-- A bounded structured-action loop searches, browses, reads, follows recorded
+- A typed interpretation plan identifies recipient topics, scopes and requested
+  aspects. Its executor and a bounded structured-action loop search, browse, read, follow recorded
   relations and searches source segments. The hybrid strategy combines lexical
   and cached embedding ranks. These experimental actions are not public MCP tools.
 - `ready`, `partial`, `no_match`, and `unavailable` are different outcomes. Failed
@@ -104,3 +112,11 @@ Model/API references: [nano](https://developers.openai.com/api/docs/models/gpt-5
 [mini](https://developers.openai.com/api/docs/models/gpt-5-mini),
 [embeddings](https://developers.openai.com/api/docs/models/text-embedding-3-small),
 [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+
+The provider follows the existing organizer's Responses conventions (strict JSON,
+standard tier, store disabled, bounded output), but uses an isolated transport:
+that adapter only accepts organizer stages and is owned by another active branch.
+Durable accounting also needs to cover embeddings and uncertain calls. Production
+integration should coordinate a shared transport rather than copy this experiment
+into the organizer. See `INTEGRATION.md` and `EXPERIMENTS.md` for boundaries.

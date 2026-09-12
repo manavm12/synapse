@@ -14,7 +14,7 @@ export function renderMessagePrompt(originalDelivery, contextBundle) {
     binding.userId !== originalDelivery.message.recipient.userId ||
     binding.projectId !== originalDelivery.message.recipient.projectId ||
     binding.messageId !== originalDelivery.message.id ||
-    binding.messageHash !== hash(originalDelivery.message.text)
+    binding.messageHash !== hash(originalDelivery.message)
   )
     throw new Error("context_binding_mismatch");
   const marker = parseDeliveryMarker(original);

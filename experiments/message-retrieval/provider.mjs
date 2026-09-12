@@ -1,6 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { hash } from "./corpus.mjs";
+import { createPlanner } from "./planner.mjs";
 
 const object = (properties) => ({
   type: "object",
@@ -31,7 +39,7 @@ export function createProvider({
   apiKey,
   model = "gpt-5-nano",
   embeddingDirectory,
-  reasoningEffort = "medium",
+  reasoningEffort = "low",
 }) {
   if (!["low", "medium"].includes(reasoningEffort))
     throw new Error("invalid_reasoning_effort");
@@ -164,7 +172,18 @@ export function createProvider({
     for (const [i, text] of texts.entries()) {
       const key = hash({ model: "text-embedding-3-small", text });
       const path = join(embeddingDirectory, `${key}.json`);
-      if (existsSync(path)) result[i] = JSON.parse(readFileSync(path, "utf8"));
+      let cached;
+      if (existsSync(path)) {
+        try {
+          cached = JSON.parse(readFileSync(path, "utf8"));
+        } catch {}
+      }
+      if (
+        Array.isArray(cached) &&
+        cached.length === 1536 &&
+        cached.every(Number.isFinite)
+      )
+        result[i] = cached;
       else missing.push({ i, text, path });
     }
     for (let i = 0; i < missing.length; i += 32) {
@@ -190,10 +209,19 @@ export function createProvider({
         )
           throw new Error("invalid_embeddings");
         result[item.i] = vector;
-        writeFileSync(item.path, JSON.stringify(vector), { mode: 0o600 });
+        const temporary = `${item.path}.${randomUUID()}.tmp`;
+        writeFileSync(temporary, JSON.stringify(vector), { mode: 0o600 });
+        renameSync(temporary, item.path);
       }
     }
     return result;
   }
-  return { infer, embed, usage, model, reasoningEffort };
+  return {
+    infer,
+    embed,
+    usage,
+    model,
+    reasoningEffort,
+    plan: createPlanner({ budget, apiKey, model, reasoningEffort, usage }),
+  };
 }

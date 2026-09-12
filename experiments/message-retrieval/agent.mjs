@@ -1,7 +1,8 @@
 import { hash } from "./corpus.mjs";
+import { executePlan, planningDirectory } from "./planner.mjs";
 import { createHybridSearch, createView } from "./retrieval.mjs";
 
-export const CONFIG_VERSION = "message-retrieval-v7";
+export const CONFIG_VERSION = "message-retrieval-v9";
 export const DEFAULT_LIMITS = {
   maxCalls: 6,
   maxActions: 12,
@@ -61,7 +62,7 @@ export function createMessageContextPreparer({
     const binding = {
       ...trustedRecipient,
       messageId: message.id,
-      messageHash: hash(message.text),
+      messageHash: hash(message),
       configHash: hash({
         strategy,
         configVersion,
@@ -106,7 +107,44 @@ export function createMessageContextPreparer({
         strategy === "hybrid"
           ? createHybridSearch(view, provider, semanticIndex, controller.signal)
           : (query) => view.search(query, { all: strategy !== "lexical" });
-      const initial = strategy === "lexical" ? await search(message.text) : [];
+      let requestPlan;
+      let initial = strategy === "lexical" ? await search(message.text) : [];
+      if (strategy !== "lexical" && provider.plan) {
+        calls++;
+        requestPlan = await provider.plan(
+          {
+            message: message.text,
+            conversation: history,
+            directory: planningDirectory(view),
+          },
+          { signal: controller.signal },
+        );
+        controller.signal.throwIfAborted();
+        trace.push({ call: calls, plan: requestPlan });
+        initial = await executePlan(
+          view,
+          requestPlan,
+          search,
+          async (action, work) => {
+            controller.signal.throwIfAborted();
+            if (actions >= limits.maxActions) throw new Error("action_limit");
+            actions++;
+            const ids = await work();
+            trace.push({ action, result: ids.map(view.describe) });
+            return ids;
+          },
+        );
+        if (requestPlan.disposition !== "retrieve") {
+          gaps = [
+            requestPlan.disposition === "foreign_recipient"
+              ? "unsupported_scope"
+              : requestPlan.disposition,
+          ];
+          done = true;
+          return;
+        }
+      }
+      trace.push({ candidates: initial.map(view.describe) });
       initial.forEach((id) => {
         seen.add(id);
       });
@@ -117,6 +155,7 @@ export function createMessageContextPreparer({
       }
       const data = {
         message: message.text,
+        requestPlan,
         conversation: history,
         topics: view.projection.topics
           .filter((t) => t.id !== "root")
@@ -153,7 +192,14 @@ export function createMessageContextPreparer({
           typeof reply.done !== "boolean" ||
           !Array.isArray(reply.gaps) ||
           reply.gaps.length > 8 ||
-          reply.gaps.some((g) => typeof g !== "string" || g.length > 500)
+          reply.gaps.some(
+            (g) =>
+              ![
+                "missing_evidence",
+                "unsupported_scope",
+                "ambiguous_scope",
+              ].includes(g),
+          )
         )
           throw new Error("invalid_model_actions");
         selected = [...new Set(reply.selected)];

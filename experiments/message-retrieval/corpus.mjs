@@ -358,16 +358,37 @@ export function buildBenchmark(project) {
       });
     }
   }
+  const semanticFingerprint = hash({ messages, gold });
+  const current = currentClaims(project.ledger, { includeHistory: true });
+  const evidence = new Map(
+    current.map((c) => [
+      c.id,
+      { id: c.id, type: "claim", status: c.state, scope: c.scope },
+    ]),
+  );
+  for (const source of project.sources)
+    for (const segment of segmentsFor(source))
+      evidence.set(segment.id, {
+        id: segment.id,
+        type: "source",
+        status: "source_only",
+        scope: "source context; no current-policy inference",
+      });
+  for (const entry of gold) {
+    for (const requirement of entry.requirements)
+      requirement.expected = requirement.anyOf.map((id) => evidence.get(id));
+    entry.acceptableEvidence = entry.acceptable.map((id) => evidence.get(id));
+    entry.prohibited = {
+      otherRecipients: "all",
+      ids: [...evidence.keys()].filter((id) => !entry.acceptable.includes(id)),
+    };
+  }
   return {
     messages,
     gold,
+    semanticFingerprint,
     fingerprint: hash({ messages, gold }),
-    states: Object.fromEntries(
-      currentClaims(project.ledger, { includeHistory: true }).map((c) => [
-        c.id,
-        c.state,
-      ]),
-    ),
+    states: Object.fromEntries(current.map((c) => [c.id, c.state])),
   };
 }
 

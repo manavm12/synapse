@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `bf48aeca50cf64c3c2737c89afafeb714e6338`
-- Last checkpoint: `e11266c`
+- Last checkpoint: `1a6606c`
 - Status: `active`
 
 ## Goal
@@ -21,20 +21,20 @@ the later messaging integration. Production remains untouched.
 
 ## Completed
 
-- Fetched origin; inspected current main, worktrees, all remote diffs and handoffs.
-- Created the dedicated worktree from current main. No active ownership overlap.
-- Read the retrieval, organizer, receiver and reference-task implementation.
-- Built 204 claims / 31 sources / 80 mock messages and retained source fixtures.
-- Implemented bounded retrieval, hybrid indexing, prompt injection, durable spend
-  reservations, native delivery test doubles, and PostgreSQL round-trip tests.
-- Full repository checks passed 272 tests with disposable PostgreSQL; audit clean.
-- Development runs exposed schema aliasing and premature/overbroad selection.
-  Corrected independent schemas, typed actions, first-step planning, full status
-  metadata, graph neighbors, compact wire handles, and configurable reasoning.
-- Retained all failed runs and charges. Latest complete v3 comparisons: hybrid
-  nano 84.38% recall; mini graph 88.54%. Neither meets all gates.
-- Added integration boundary and experiment audit documents. New smoke runs are
-  evaluating v6 before further full development comparisons.
+- Created isolated worktree from current main; production files remain untouched.
+- Built and retained 204 claims / 31 source revisions / eight topics / 80 messages.
+- Added exact JSON sources, authored proposals, messages, and gold definitions.
+- Implemented typed subject/scope/aspect planning, bounded topic and relation
+  navigation, source fallback, graph and hybrid candidates, verified rendering,
+  durable budget accounting, prompt freezing, and offline decision replay.
+- Corrected schema aliasing, action ambiguity and broad candidate selection.
+  All failed development trials and costs remain in ignored local state.
+- Development v9: mini graph passes every gate (96.875% recall and completeness,
+  91.833% macro precision, 100% abstention, zero integrity violations).
+- Nano graph and nano hybrid fail development gates. Mini graph was selected
+  before held-out evaluation; SELECTION.json records the choice and freeze.
+- All four v9 development runs replayed to 160 identical prompts without API calls.
+- Frozen held-out comparisons are running. Do not tune retrieval using those results.
 
 ## Decisions and invariants
 
@@ -47,20 +47,23 @@ the later messaging integration. Production remains untouched.
 
 ## Verification
 
-- Latest focused suite: 24 passed. Previous SQL round-trip passed; final full check pending.
+- Latest focused suite: 36 passed. Full check: 287 passed, zero skipped, including disposable PostgreSQL; coverage 95.68% lines / 86.63% branches / 94.20% functions. Audit: zero vulnerabilities.
 - Biome checks passed after formatting.
 - Lexical baseline: 50.05% required recall, 16.29% precision, no abstention.
 - Initial nano agent: 52.86% required recall, 47.51% precision; gates not met.
-- Approximately USD 0.33 charged/reserved in development; consult the durable ledger for current spend. No held-out calls yet.
+- USD 0.931534357 development charged/reserved before final runs. USD 2 final reserve is separate; consult the durable SQLite ledger for current spend.
 
 ## Remaining work
 
-1. Finish development comparisons and freeze finalist configurations.
-2. Evaluate held-out cases, repeat selected configuration, and report unmet gates.
-3. Tighten benchmark status/scope validation and finish independent boundary tests.
-4. Run final fresh-Postgres checks, preserve concise results, commit/push and open PR.
+1. Finish frozen held-out controls and mini evaluation; repeat mini once.
+2. Report each run independently, actual prompt differences, failures, cost and limits.
+3. Update integration handoff and push final results for review.
 
 ## Risks or blockers
 
-- Quality gates may remain unmet; budget exhaustion is not a quality pass.
-- Existing ledger adapter loads full project history; measure scale explicitly.
+- Synthetic dev success may not transfer to held-out or real recipient graphs.
+- A failed repeat or held-out run must remain visible; do not declare success.
+- Existing ledger adapter rebuilds project history; large-project scaling is unproven.
+- Transport is an isolated Responses-style client because the existing organizer
+  adapter is coupled to extract/reconcile/review stages and an active workstream.
+- Runtime/config, ledger, corpus and benchmark are frozen at SELECTION.json's hash.

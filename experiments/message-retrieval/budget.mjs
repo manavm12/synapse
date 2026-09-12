@@ -18,6 +18,17 @@ export class BudgetError extends Error {
   }
 }
 
+async function readBoundedJSON(response, limit = 8e6) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > limit) throw new BudgetError("response_size");
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString());
+}
+
 export function createBudget({ path, phase = "dev", fetchImpl = fetch }) {
   if (!["dev", "final"].includes(phase)) throw new BudgetError("invalid_phase");
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -130,7 +141,7 @@ export function createBudget({ path, phase = "dev", fetchImpl = fetch }) {
       if (!response.ok || response.redirected) {
         let reason = "";
         try {
-          const body = await response.json();
+          const body = await readBoundedJSON(response, 16384);
           const code = body?.error?.code;
           if (
             [
@@ -144,14 +155,7 @@ export function createBudget({ path, phase = "dev", fetchImpl = fetch }) {
         } catch {}
         throw new BudgetError(`provider_http_${response.status}${reason}`);
       }
-      const chunks = [];
-      let size = 0;
-      for await (const chunk of response.body) {
-        size += chunk.length;
-        if (size > 8e6) throw new BudgetError("response_size");
-        chunks.push(chunk);
-      }
-      const data = JSON.parse(Buffer.concat(chunks).toString());
+      const data = await readBoundedJSON(response);
       const input = embedding
         ? data.usage?.prompt_tokens
         : data.usage?.input_tokens;

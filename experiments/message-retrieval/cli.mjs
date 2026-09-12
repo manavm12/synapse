@@ -42,19 +42,40 @@ const option = (name, fallback) => {
 };
 const strategy = option("strategy", "agent"),
   model = option("model", "gpt-5-nano"),
-  reasoningEffort = option("reasoning", "medium"),
+  reasoningEffort = option("reasoning", "low"),
   split = option("split", "dev");
 const corpus = buildCorpus(),
   benchmark = buildBenchmark(corpus.projects[0]);
 mkdirSync(state, { recursive: true });
+const runtimeFiles = [
+  ...["experiments/message-retrieval", "src", "plugins/synapse/lib"].flatMap(
+    (directory) =>
+      readdirSync(join(root, directory), { recursive: true })
+        .filter((p) => p.endsWith(".mjs") && !p.endsWith(".test.mjs"))
+        .map((p) => `${directory}/${p}`),
+  ),
+  "package-lock.json",
+  "experiments/message-retrieval/fixtures/families.json",
+].sort();
 const codeHash = () =>
   hash(
-    readdirSync(dirname(fileURLToPath(import.meta.url)))
-      .filter((p) => p.endsWith(".mjs") && !p.endsWith(".test.mjs"))
-      .sort()
-      .map((p) => [p, hash(readFileSync(new URL(p, import.meta.url), "utf8"))]),
+    runtimeFiles.map((path) => [
+      path,
+      hash(readFileSync(join(root, path), "utf8")),
+    ]),
   );
 const executedCodeHash = codeHash();
+const snapshot = join(state, "code", executedCodeHash);
+for (const path of runtimeFiles) {
+  const destination = join(snapshot, path);
+  mkdirSync(dirname(destination), { recursive: true });
+  writeFileSync(destination, readFileSync(join(root, path)));
+}
+const validName = (name) => {
+  if (!/^[\w-]{1,120}$/.test(name)) throw new Error("invalid_artifact_name");
+  return name;
+};
+const configuration = `${strategy}:${model}:${reasoningEffort}`;
 if (command === "help") {
   console.log(
     "node experiments/message-retrieval/cli.mjs seed|demo|eval|freeze|report|budget\nOptions: --strategy lexical|agent|hybrid --model gpt-5-nano|gpt-5-mini --split dev|heldout --limit N --offset N --run NAME --concurrency N\nReal API calls require OPENAI_API_KEY. One cumulative $5 budget is stored under state/message-retrieval/spend.sqlite.",
@@ -76,7 +97,17 @@ if (command === "help") {
   );
   console.log(info);
 } else if (command === "freeze") {
-  const name = option("name", "finalists");
+  const name = validName(option("name", "finalists"));
+  const configurations = option(
+    "configurations",
+    "lexical:gpt-5-nano:low,agent:gpt-5-nano:low,hybrid:gpt-5-nano:low,agent:gpt-5-mini:low",
+  ).split(",");
+  if (
+    configurations.some(
+      (c) => !/^(lexical|agent|hybrid):gpt-5-(nano|mini):(low|medium)$/.test(c),
+    )
+  )
+    throw new Error("invalid_configurations");
   const path = join(state, `${name}.freeze.json`);
   if (existsSync(path))
     throw new Error(
@@ -84,6 +115,7 @@ if (command === "help") {
     );
   writeJSON(path, {
     codeHash: executedCodeHash,
+    configurations,
     corpus: corpus.fingerprint,
     benchmark: benchmark.fingerprint,
     configVersion: CONFIG_VERSION,
@@ -99,11 +131,12 @@ if (command === "help") {
   if (split === "heldout") {
     const freeze = JSON.parse(
       readFileSync(
-        join(state, `${option("freeze", "finalists")}.freeze.json`),
+        join(state, `${validName(option("freeze", "finalists"))}.freeze.json`),
         "utf8",
       ),
     );
     if (
+      !freeze.configurations.includes(configuration) ||
       freeze.codeHash !== codeHash() ||
       freeze.corpus !== corpus.fingerprint ||
       freeze.benchmark !== benchmark.fingerprint
@@ -177,7 +210,10 @@ if (command === "help") {
             corpus.projects[0],
           );
           const result = { example, bundle, rendered, score };
-          result.failureClasses = classifyFailure(result);
+          result.failureClasses = classifyFailure(
+            result,
+            benchmark.gold.find((g) => g.id === example.id),
+          );
           writeJSON(join(directory, `${example.id}.json`), result);
           writeFileSync(
             join(directory, `${example.id}.prompt.md`),
