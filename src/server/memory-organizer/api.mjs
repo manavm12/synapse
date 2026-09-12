@@ -1,4 +1,5 @@
 import { validateSchema } from "../../memory/core/schema.mjs";
+import { extractionTransport } from "./extraction-transport.mjs";
 
 export class MemoryInferenceError extends Error {
   constructor(
@@ -117,6 +118,7 @@ export function createMemoryInferenceAPI({
   return {
     model,
     reviewer,
+    extractionFormat: "source-groups-v1",
     async structured(stage, prompt, schema, { signal } = {}) {
       if (!["extract", "reconcile", "review"].includes(stage))
         throw new TypeError("Unknown inference stage");
@@ -127,6 +129,8 @@ export function createMemoryInferenceAPI({
       )
         throw new MemoryInferenceError("prompt size exceeded");
       signal?.throwIfAborted();
+      const transport =
+        stage === "extract" ? extractionTransport(schema) : null;
       const controller = new AbortController();
       let timeout;
       let onAbort;
@@ -175,7 +179,7 @@ export function createMemoryInferenceAPI({
                     format: {
                       type: "json_schema",
                       name: `memory_${stage}`,
-                      schema,
+                      schema: transport?.schema ?? schema,
                       strict: true,
                     },
                   },
@@ -232,12 +236,13 @@ export function createMemoryInferenceAPI({
               .flatMap((item) => item.content ?? []);
             if (content.some((item) => item.type === "refusal"))
               throw new MemoryInferenceError("refused");
-            const value = JSON.parse(
+            let value = JSON.parse(
               content
                 .filter((item) => item.type === "output_text")
                 .map((item) => item.text)
                 .join(""),
             );
+            if (transport) value = transport.decode(value);
             validateSchema(value, schema);
             const count = (name) =>
               Number.isSafeInteger(raw.usage?.[name]) && raw.usage[name] >= 0

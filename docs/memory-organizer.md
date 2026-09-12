@@ -53,13 +53,30 @@ It stores no raw prompts or model responses. Failed attempts remain pending/fail
 in the queue with bounded error text; this version does not persist detailed
 failed-call usage. Use provider usage reporting for actual billing reconciliation.
 
-Extraction restricts evidence IDs to current source segments plus earlier accepted
-context evidence, and coverage IDs to current segments only. It fails closed on
-the provider's enum-size limits rather than truncating evidence. Deterministic
-validation still enforces current-source support, unique evidence, complete
-coverage, and agreement between coverage dispositions and citations. Exhausted
-validation repairs report a fixed `validation_reason` and `inference_stage` in
-operational logs, never source text or model-supplied identifiers.
+The provider wire format groups claims under exact current source segment keys.
+Every current segment is a required object property, containing either a nonempty
+claims array or a non-claim disposition and reason (never both). A claim's group is its
+model-selected primary evidence; `additionalEvidence` may cite other current
+segments or earlier accepted context. Shared schema definitions keep evidence
+enums single-copy. The adapter validates the grouped response, flattens it in
+source order, deduplicates citations, and derives complete coverage from those
+citations. The handler and core still receive the original flat contract.
+
+An uncited empty group must contain a model-authored non-claim disposition and
+reason. Cited groups get `claims` coverage deterministically. This does not prove
+semantic coverage: independent review still checks every source segment for
+omitted assertions and checks that each assertion is entailed by its selected
+evidence. Grouping never authorizes unsupported claims or changes earlier
+committed IDs. Audits identify the format as `source-groups-v1` (`flat-v1` for
+injected adapters that do not implement the grouped wire format).
+
+Provider patterns require nonblank claim metadata/assertions and exclusion reasons,
+matching the core's nonempty-text checks. Core validation independently enforces current-source support, unique evidence,
+complete coverage, and total claim bounds. Inputs fail closed on provider enum
+limits rather than truncating evidence. Flat proposal repairs identify all
+evidence and coverage inconsistencies together within the existing call budget.
+That detail is model input only, not audit/log output. Exhausted repairs expose
+only fixed `validation_reason` and `inference_stage` operational codes.
 
 Local incoming claim refs are assigned deterministically (`c1`, `c2`, ...) from
 the validated extraction array before reconciliation and review. The transport
@@ -117,7 +134,10 @@ live targets), and independent semantic review. Review defaults to `always`;
 explicit `never` is available for experiments and is recorded in audit metadata.
 Selective review / one-call organization has not been validated and is not the
 default. Each stage has at most three requests per queue attempt, with bounded
-prompt/output sizes and request deadlines. Queue retry limits multiply this cost
+prompt/output sizes and request deadlines. Structural and semantic repairs share
+those per-stage allowances; repairing extraction does not consume a reconciliation
+or review call. Transport retries still count against the stage making the request.
+Queue retry limits multiply this cost
 ceiling; they do not establish a dollar budget. No inference is run by migration,
 tests, module import, or handler construction.
 
