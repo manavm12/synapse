@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { controlConversation } from "../lib/conversation-control.mjs";
 import { primaryCheckout } from "../lib/hook-context.mjs";
 import {
@@ -40,7 +41,10 @@ export async function control(arguments_) {
   );
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   try {
     process.stdout.write(
       `${JSON.stringify(await control(process.argv.slice(2)), null, 2)}\n`,
