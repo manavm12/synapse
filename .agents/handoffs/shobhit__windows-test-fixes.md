@@ -103,20 +103,68 @@ whether that's even possible:
   --dangerously-bypass-hook-trust` (a flag the CLI itself documents as
   "intended only for automation that already vets hook sources" -- used
   here because the hook source is this repo, already read in full) in an
-  isolated ephemeral temp directory, before and after the `sh` fix.
-  **Result: inconclusive, not negative.** Neither run produced a visible
-  hook-spawn error in the CLI's own JSONL/stderr output (and errors clearly
-  do surface there -- an unrelated MCP OAuth error appeared plainly in both
-  runs). But the one observable side effect available without deeper setup
-  (a memory-checkpoint file write from `prompt-memory.mjs`) never appeared
-  either time, for a reason unrelated to the shell fix: that code path
-  requires the target directory to already be a registered git project
-  (`findRegisteredProject`, backed by `host.sqlite`), which doesn't exist
-  yet on this machine. The test methodology could not distinguish "hook
-  failed" from "hook succeeded but had nothing to do." `codex doctor` also
-  showed `--ephemeral` runs are disconnected from the real desktop
-  app-server daemon entirely, which may itself matter for testing the
-  native app-tools pipe specifically (separate from the `sh` question).
+  isolated ephemeral temp directory, before and after the `sh` fix. Initial
+  result looked encouraging (no visible hook-spawn error in the CLI's own
+  JSONL/stderr output, which does clearly surface other errors -- an
+  unrelated MCP OAuth error appeared plainly in the same runs), but was
+  actually inconclusive: the one observable side effect available without
+  deeper setup (a memory-checkpoint file write from `prompt-memory.mjs`)
+  never appeared either time, for a reason unrelated to the shell fix --
+  that code path requires the target directory to already be a *registered*
+  git project (`findRegisteredProject`, backed by `host.sqlite`), which
+  didn't exist yet, and even then only reads/updates an *existing*
+  checkpoint file rather than creating one. The test methodology could not
+  distinguish "hook failed" from "hook succeeded but had nothing to do."
+
+### Follow-up in the same session: a conclusive negative result
+
+Registered a real (throwaway, disposable) primary git checkout locally via
+`connectProject()` -- this needs no OAuth/cloud, it's a pure local SQLite
+write to `host.sqlite` -- to remove the "project not registered" ambiguity.
+Re-ran `codex exec` (both `--ephemeral` and non-ephemeral, the latter to
+connect to the real desktop app-server per `codex doctor`'s note that
+ephemeral mode is disconnected from it) against that registered project.
+Still no observable checkpoint write. To eliminate all remaining ambiguity
+from Synapse's own business logic, temporarily added an **unconditional**
+diagnostic file write at the very top of `prompt-memory.mjs` (before any of
+its own gating logic), rebuilt, reinstalled, and re-ran.
+
+**The marker file never appeared. This is a conclusive negative result for
+this test surface**: `sh "${PLUGIN_ROOT}/scripts/run-node.sh" "..."` did not
+execute successfully via `codex exec --dangerously-bypass-hook-trust` on
+this Windows machine, even after the `/bin/sh` -> `sh` fix. The diagnostic
+code has been fully reverted (`git diff` confirms `prompt-memory.mjs` is
+back to its committed state) -- this was never merged.
+
+One more variable was tested and came back **inconclusive, not negative**:
+whether `codex`'s command sandbox (`codex doctor` shows "restricted fs +
+restricted network... sandbox backend: elevated" is the default) also wraps
+plugin-hook subprocess execution, which could independently block spawning
+`sh.exe` regardless of the shell-invocation fix. Ran once with
+`--dangerously-bypass-approvals-and-sandbox` added; **the run hit the
+account's Codex usage limit before the turn completed**, so this specific
+variable remains untested. Live testing was stopped at this point rather
+than continuing to spend usage without the user's explicit sign-off on the
+cost -- **each `codex exec` call in this investigation is a real,
+usage-metered model turn against the account's Codex quota/credits, not a
+free local operation.** Whoever resumes should get explicit user
+confirmation before running more of these, and should budget for it,
+similar to how this repo's own docs treat the $5 live-inference allowance
+for the memory organizer as a real, tracked cost.
+
+**Net effect on the earlier optimistic framing**: it was wrong to call the
+first round of testing "encouraging." The corrected status is: the `sh` fix
+is still justified on its own technical merits (matches Codex's documented
+Windows behavior; `sh` demonstrably resolves via Node's own real process
+creation on this machine), but it has now been conclusively shown *not* to
+be sufficient on its own to make hooks execute via `codex exec` on Windows.
+Remaining candidate explanations, untested: (a) the command sandbox also
+wraps hook subprocesses and blocks/restricts them independently of the
+shell-invocation fix, (b) `codex exec` specifically (a non-interactive,
+single-shot command) may not process plugin hooks at all regardless of
+platform -- untested whether hooks fire differently through the interactive
+TUI or the real desktop app GUI, which were not exercised, (c) some other
+Windows-specific Codex hook-execution gap not yet identified.
 
 ## Decisions and invariants
 
@@ -125,28 +173,50 @@ whether that's even possible:
   rather than papering over failures with skips, except where a capability
   is genuinely OS-gated (Windows symlink privilege, POSIX permission bits,
   POSIX signals) -- there, skip explicitly with a stated reason.
-- The `/bin/sh` -> `sh` fix is justified on its own technical merits
-  (matches Codex's documented Windows behavior; verified correct PATH
-  resolution via Node's real spawn) even without full end-to-end live proof.
-  Do not describe it as "verified working end-to-end on Windows" until a
-  properly registered project makes a conclusive test possible -- say
-  "fixed and partially verified" instead.
+- The `/bin/sh` -> `sh` fix is justified on its own technical merits (matches
+  Codex's documented Windows behavior; verified correct PATH resolution via
+  Node's real spawn) but is **conclusively proven insufficient on its own**
+  to make hooks execute via `codex exec` on Windows -- see the "conclusive
+  negative result" note above. Do not describe it as fixing Windows hook
+  execution; describe it as "a necessary but not sufficient fix, with the
+  actual blocker still unidentified."
 - `--dangerously-bypass-hook-trust` is safe to use for automation that has
   actually read the hook source, per the flag's own documentation. Used
   here deliberately, not as a workaround.
+- **Each `codex exec` invocation spends real, metered usage/credits against
+  the connected Codex account.** Treat it like the repo's own tracked
+  live-inference budget for the memory organizer: get explicit user
+  confirmation before running more of it, and stop immediately if a usage
+  limit is hit rather than retrying. This was not flagged clearly enough
+  early in this investigation.
 - Do not use `git stash` in this repo's worktree setup (shared stash stack
   across worktrees/sessions); none was needed here.
+- Temporary diagnostic code added to production hook files for a live test
+  must be reverted (verify with `git diff`) before committing/pausing --
+  done here for the `prompt-memory.mjs` marker-write experiment.
 
 ## Remaining work
 
-1. **Get a fully conclusive live test.** This needs a registered Synapse
-   project (`host.sqlite` populated via the real setup/connect flow, or
-   directly via `connectProject`) so `getPendingMemoryPrompt` /
-   `findRegisteredProject` don't short-circuit before touching anything.
-   With that in place, re-run `codex exec --dangerously-bypass-hook-trust`
-   (or better, a non-ephemeral run connected to the real running desktop
-   app-server, to also exercise the native app-tools pipe) and check for an
-   actual `checkpoints.sqlite` row, not just absence of a visible error.
+1. **Find the actual blocker.** Hooks conclusively do not execute via
+   `codex exec` on Windows even after the `sh` fix and with a registered
+   project (see "conclusive negative result" above). Get explicit user
+   sign-off before spending more Codex usage, then investigate in this
+   order (cheapest/most informative first):
+   - Retry with `--dangerously-bypass-approvals-and-sandbox` (the run that
+     would test this hit the account's usage limit before finishing --
+     rerun once usage resets) to isolate whether the command sandbox blocks
+     hook subprocess spawning independently of the shell fix.
+   - If sandbox bypass doesn't fix it, test via the interactive `codex` TUI
+     or the real desktop app GUI directly (not `codex exec`), since plugin
+     hooks may be processed differently -- or not at all -- by the
+     non-interactive single-shot exec path.
+   - Consider asking in the Codex/OpenAI developer community or filing an
+     issue if neither explains it; this may be a genuine Codex-side Windows
+     gap rather than anything fixable in this repo.
+   - A registered throwaway test project already exists locally for this:
+     `C:\Users\DELL\AppData\Local\Temp\synapse-native-test-repo`, registered
+     under alias `synapselivetest` in the real `~/.synapse/host.sqlite`.
+     Harmless to leave; remove via direct SQL/CLI if a clean slate is wanted.
 2. **Un-skip the 6 `needsPosix*`/`0o600` test scenarios individually now
    that a real `sh` fix exists** -- not a blanket find/replace:
    - The `/bin/sh`-hardcoded test harnesses (`setup.test.mjs` x4,
@@ -195,21 +265,37 @@ whether that's even possible:
   --json` confirmed `installed: true, enabled: true` for the resulting
   `synapse@synapse-dev-*` plugin.
 - Live: `codex exec --dangerously-bypass-hook-trust` completed successfully
-  before and after the `sh` fix, with no visible hook-spawn error in either
-  run -- inconclusive as positive proof (see "Completed" above for why), but
-  not a negative result either.
+  (the model turn itself) in every run. Hook execution specifically was
+  tested with an **unconditional** diagnostic file write added temporarily
+  to `prompt-memory.mjs`, against a real registered project -- the marker
+  never appeared. **Conclusive negative result** for hook execution via
+  `codex exec` on Windows post-fix; not merged, fully reverted (`git diff`
+  clean).
+- Live: a follow-up test adding `--dangerously-bypass-approvals-and-sandbox`
+  (to isolate whether Codex's command sandbox also blocks hook subprocess
+  spawning) hit the account's Codex usage limit before the turn completed --
+  untested, not failed.
 
 ## Risks or blockers
 
-- PR #18 was already open and green on CI before this commit (`e79f0f9`).
-  Recheck `gh pr checks 18` after pushing this commit before merging --
-  CI runs on Linux, so it re-validates none of these Windows-specific
-  changes broke POSIX behavior, but cannot itself validate the Windows-side
-  claims in this handoff.
+- **Hook execution on Windows is still broken after this fix.** The `sh`
+  change is real and correct but not sufficient by itself; do not report or
+  merge-describe this as "Windows hook execution now works." See "Remaining
+  work" item 1 for the next diagnostic steps.
+- **Each live `codex exec` test spends real, metered usage against the
+  connected Codex account.** This investigation's repeated tests hit the
+  account's usage limit. Get explicit user confirmation before running more
+  live tests, and expect a real wait/cost to continue this investigation.
+- PR #18 was already open and green on CI before commit `e79f0f9`. Recheck
+  `gh pr checks 18` after pushing further commits before merging -- CI runs
+  on Linux, so it re-validates none of these Windows-specific changes broke
+  POSIX behavior, but cannot itself validate the Windows-side claims in this
+  handoff (which, per above, are currently a mix of "fixed" and "still
+  broken, cause unknown").
 - The plugin is currently installed into the user's real, live Windows
   Codex app as `synapse@synapse-dev-81bbd29df3a5` (a disposable dev
-  snapshot, not `synapse@synapse`) for this investigation. It does not
-  affect their real `synapse@synapse` installation if one exists, but
-  leave it in place or remove it deliberately (`codex plugin remove
-  synapse@synapse-dev-81bbd29df3a5`) -- don't just forget it's there.
+  snapshot, not `synapse@synapse`). Harmless but leave it deliberately or
+  remove it (`codex plugin remove synapse@synapse-dev-81bbd29df3a5`) --
+  don't just forget it's there. Likewise a throwaway test project is
+  registered in the real `~/.synapse/host.sqlite` (see item 1 above).
 - No production/live server changes were made in either phase.
