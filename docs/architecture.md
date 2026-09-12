@@ -48,7 +48,7 @@ acceptance, not successful execution of the requested work.
 - `plugins/synapse/skills/setup-synapse` and bundled scripts implement opt-in
   onboarding, live status, reconnect, disable, and the shared Codex runtime launcher.
 - `plugins/synapse/lib/receiver-*.mjs` implements scoped transport, local account
-  binding, Keychain access, staging and receipt synchronization.
+  binding, platform credential-store access, staging and receipt synchronization.
 - `src/server/messaging/` implements OAuth sender tools and scoped receiver HTTP.
 - `src/server/memory-processing/` owns durable job scheduling and project fences.
 - `src/server/memory-organizer/` validates inference against immutable revisions
@@ -62,13 +62,18 @@ acceptance, not successful execution of the requested work.
 - Queued task text is untrusted data. It is delivered to a separate native task
   and must never be executed in the owner task.
 - The inbox contains task content and native task identifiers. Its directory is
-  private to the local user and its SQLite files use owner-only permissions.
+  private to the local user; on macOS/Linux its SQLite files use explicit
+  owner-only (`0600`) permissions, and on Windows they inherit the user
+  profile's default NTFS access control instead, since Windows has no POSIX
+  permission-bit model to set explicitly.
 - Identifiers have a restricted character set, task and hook payload sizes are
   bounded, and SQL values are parameterized.
 - Hosted APIs derive user/project identity from verified authentication; client
   input cannot select an owner, another project, local paths or native task IDs.
-- The receiver credential is separate from OAuth, stored in macOS Keychain, and
-  scoped only to one opted-in installation. Server storage contains its hash.
+- The receiver credential is separate from OAuth, stored in the platform's own
+  secure credential store (macOS Keychain, Windows DPAPI-protected local
+  storage, or Linux Secret Service), and scoped only to one opted-in
+  installation. Server storage contains its hash.
 - Runtime and organizer-worker database roles are distinct. Forced RLS isolates
   tenants; worker writes additionally bind project identity and a queue fence.
 - Exact evidence offsets refer to immutable revision bytes. Organized claims

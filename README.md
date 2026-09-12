@@ -21,11 +21,14 @@ choose **Enable** or **Later**; you can also select **Enable incoming tasks**
 from Synapse at any time. Setup chooses a saved local Git project, opens
 account-bound browser consent, and finishes automatically.
 
-Recipients need a Mac, Git, and a compatible Codex desktop with its supplied Node
-runtime and SQLite support. No Synapse repository, system Node, npm install,
-server URL, or separately managed runner is needed. The repository's local
-marketplace is for development; publishing to a recipient-accessible marketplace
-is a separate rollout step.
+Recipients need a Mac or a Windows PC, Git, and a compatible Codex desktop with
+its supplied Node runtime and SQLite support. No Synapse repository, system
+Node, npm install, server URL, or separately managed runner is needed. Windows
+support uses native PowerShell hook launchers and DPAPI-backed credential
+storage instead of the macOS Keychain; both are exercised by the test suite,
+but a full live two-account rollout has only been validated on macOS so far.
+The repository's local marketplace is for development; publishing to a
+recipient-accessible marketplace is a separate rollout step.
 
 Trust Synapse's hooks in Codex to enable background checks. A prompt in any local
 chat registers the desktop connection and wakes the supervised receiver. It
@@ -130,8 +133,11 @@ Review the new identity's hooks in Codex, then test in a fresh task.
 
 The command snapshots only `plugins/synapse` outside Git into
 `~/.synapse/plugin-builds`, with a checkout-specific `synapse-dev-…` marketplace.
-It uses the desktop's bundled CLI on macOS (`SYNAPSE_CODEX_BIN` can explicitly
-select another executable). Subsequent builds retain that identity and keep older
+It uses the desktop's bundled CLI on macOS, or a bare `codex` resolved from
+`PATH` otherwise; on Windows, `codex.exe` is not reliably on `PATH` by default,
+so set `SYNAPSE_CODEX_BIN` explicitly to its installed location (for example
+`%LOCALAPPDATA%\OpenAI\Codex\bin\<build>\codex.exe`). Subsequent builds retain
+that identity and keep older
 snapshots for recovery. Ordinary recipients still install the published plugin;
 this command is only for developers. Do not install mutable worktree builds as
 `synapse@synapse`: repository marketplace discovery can replace that shared cache

@@ -78,8 +78,10 @@ hooks restore private routing context. Pending sends with unknown outcomes are
 retried through authenticated agent MCP using their original request IDs; the
 receiver credential never gains sending permissions.
 
-The macOS LaunchAgent runs one worker per installation, checks every two seconds,
-drains batches of ten, and backs off to sixty seconds during outages. SQLite
+The supervised background receiver service (macOS LaunchAgent, Windows
+Scheduled Task, or Linux systemd user unit) runs one worker per installation,
+checks every two seconds, drains batches of ten, and backs off to sixty
+seconds during outages. SQLite
 leases fence stale workers. Native calls are durably marked before issuance.
 Ambiguous native results stay fenced until evidence can be reconciled; Synapse
 does not claim exactly-once native execution.

@@ -1,8 +1,9 @@
 # Set up incoming tasks in Codex
 
-Recipients need a Mac, Git, a saved local Git project, and a compatible Codex
-desktop installation with its supplied Node runtime and SQLite support. They do
-not need system Node, npm, a Synapse checkout, a server URL, or a separate runner.
+Recipients need a Mac or a Windows PC, Git, a saved local Git project, and a
+compatible Codex desktop installation with its supplied Node runtime and
+SQLite support. They do not need system Node, npm, a Synapse checkout, a
+server URL, or a separate runner.
 The operator must distribute the plugin through an accessible Codex marketplace;
 the repository's local marketplace is a development source, not public distribution.
 
@@ -44,7 +45,8 @@ build and chat. Expired, revoked, mismatched, unavailable, or unverified hook st
 does not count as ready. Setup itself never fabricates a prompt-hook receipt.
 
 Browser approval waiting is bounded to five minutes, including network and
-Keychain work. Progress is visible; cancellation retains resumable state.
+credential-store work (macOS Keychain or the platform equivalent). Progress
+is visible; cancellation retains resumable state.
 Repeat Enable to resume: the skill runs `prepare`, the authenticated
 `begin_receiver_setup` tool, and `complete`. Pending pairings are reused until
 their ten-minute server expiry; a five-minute local wait timeout is resumable,
@@ -52,9 +54,11 @@ and an expired pairing is renewed. A healthy connected enrollment is validated
 and reused without another approval. Explicit reconnect is needed only when
 setup reports `reconnect_required`. Disable stops
 local routing immediately and revokes the receiver. Failed remote revocation or
-Keychain cleanup can be retried without deleting queued work.
+credential-store cleanup can be retried without deleting queued work.
 
-Credentials stay in macOS Keychain. Only their SHA-256 hash reaches the
+Credentials stay in the platform's own secure credential store: macOS
+Keychain, Windows DPAPI-protected local storage, or Linux Secret Service.
+Only their SHA-256 hash reaches the
 authenticated setup MCP tool. The server stores the expected account and
 cloud-project IDs derived from authenticated context to enforce browser approval.
 The helper caches those expected IDs locally; destination paths, onboarding
