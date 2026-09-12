@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `5caaf78736f5ce15939a9e51abbfc99304642540`
-- Last checkpoint: `5caaf78736f5ce15939a9e51abbfc99304642540` (merged PR16)
+- Last checkpoint: `01548a7` (bounded rollout checkpoint)
 - Status: `active`
 
 ## Goal
@@ -29,8 +29,12 @@ reconciliation, drain historical captures, and enable continuous processing.
 - Started exact-revision canary deployment `f5739d4e-e4f1-4d6a-aaa8-c70145071673`
   pinned to PR16, one attempt, restart NEVER. The future service command was
   restored to `npm run worker`; the service-level enable flag remains false.
-- Latest read-only database snapshot: 19 pending jobs, ledger generation zero;
-  original job had two attempts before this canary.
+- Original canary succeeded in 149 seconds: attempt three, one source, generation
+  one, 13 notes. Authenticated topic, search, and note reads verified citations.
+- Accepted audit: two extraction calls, one clean review, 10,209 input and 24,582
+  output tokens on gpt-5-nano. Earlier failed/local calls are additional usage.
+- Started three-attempt scoped batch `ad8836bd-b911-4b34-9a75-fbe44e8425af`;
+  restored the future start command to disabled normal mode, restart NEVER.
 - Re-read the updated Windows workstream handoff; no file overlap with this scope.
 
 ## Decisions and invariants
@@ -46,17 +50,17 @@ reconciliation, drain historical captures, and enable continuous processing.
 
 - PR16 full local check with fresh PostgreSQL: passed, zero skipped; audit clean.
 - Docker build and disabled startup: passed.
-- Live canary outcome and retrieval verification pending.
+- First live canary and authenticated note/evidence retrieval: passed.
 
 ## Remaining work
 
-1. Inspect exact canary outcome and committed source/audit/projection via SQL and MCP.
-2. Exercise reconciliation with a small bounded production batch, investigate failures.
+1. Inspect the active three-attempt batch and its reconciliation/audit/projection.
+2. Investigate failures without resetting queue attempts or weakening validation.
 3. Drain remaining history, enable continuous mode, verify fresh queued captures.
 4. Record final production state and push a documentation checkpoint/PR.
 
 ## Risks or blockers
 
-- Production has not yet been proven to commit a graph result.
+- Production has committed the first source; reconciliation/backlog still unverified.
 - Prior extraction validation failed intermittently; new enum constraints passed locally.
 - Keep continuous processing disabled until bounded verification succeeds.

@@ -1,8 +1,9 @@
 # Activate the production memory organizer
 
-Status: deployment/status/canary tooling implemented, verified and merged in
-PR #11. The dedicated production worker is deployed but disabled; activation
-awaits credentials, model selection and an operating inference allowance.
+Status (12 September 2026): credentials and worker role verified; PRs #11, #14,
+and #16 merged. The first production canary committed successfully and its notes
+are retrievable with source citations. A three-attempt reconciliation batch is
+running; continuous processing is still disabled pending verification.
 
 Worktree: `/Users/manavmehta/synapse-memory-organizer`
 
@@ -223,6 +224,10 @@ semantic result requires an explicit data-repair procedure, not a queue reset.
 These inputs do not block implementing the deployment/status/canary tooling in
 this worktree. They are needed before its live rollout.
 
+The inputs above were subsequently supplied and verified. The user selected the
+cheapest small model and authorized continued work through activation; the worker
+uses `gpt-5-nano` for all stages. Credentials remain only in secret configuration.
+
 ## Implementation verification — 9 September 2026
 
 - Added `deploy/railway-worker.json` and the operating runbook commands.
@@ -264,3 +269,32 @@ this worktree. They are needed before its live rollout.
   historical backfill and continuous processing remain unperformed.
 - The HTTP service deployed the same release; `/healthz` returned `ok` and
   `/readyz` returned `ready` after deployment.
+
+## First production commit — 12 September 2026
+
+- PR #14 added safe incomplete-response diagnostics and exact-revision canaries.
+- After measured output exhaustion, the worker allowance was raised to 32,000
+  output tokens and 180 seconds per request, retaining two calls per stage and
+  mandatory independent review. This is not a hard dollar budget.
+- PR #16 constrained extraction evidence and coverage IDs to supplied segments,
+  added fixed validation reason codes, and passed all required CI/security checks.
+  Automated review was still pending with no findings when it merged.
+- A full no-write inference diagnostic passed before deployment. The tested
+  release is `5caaf78736f5ce15939a9e51abbfc99304642540`.
+- Exact-revision canary deployment `f5739d4e-e4f1-4d6a-aaa8-c70145071673`
+  processed the original cloud-onboarding capture successfully in 149 seconds.
+  Its job retained its earlier attempts and succeeded on attempt three.
+- Database verification found one committed source, generation one, and 13
+  projected notes. Authenticated topic discovery, lexical search, and note reads
+  returned actual claims with original revision IDs, source offsets, and hashes.
+- Accepted audit: two extraction calls and one review, `reviewPassed: true`, all
+  `gpt-5-nano`; 10,209 input and 24,582 output tokens. Earlier failed attempts and
+  local diagnostics are additional usage, not included in that accepted audit.
+- Started a scoped three-attempt reconciliation batch in deployment
+  `ad8836bd-b911-4b34-9a75-fbe44e8425af`. Both canaries use restart NEVER. After
+  pinning each deployment, the future start command was restored to
+  `npm run worker` with service-level processing disabled, preventing accidental
+  canary repetition on a later main deployment.
+- Continuous activation, the remaining historical backlog, and live
+  reconciliation verification are still pending. A successful first capture
+  does not establish complete semantic recall or project-wide freshness.
