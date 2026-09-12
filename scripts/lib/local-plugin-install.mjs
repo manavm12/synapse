@@ -19,6 +19,13 @@ const execute = promisify(execFile);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const json = async (path) => JSON.parse(await readFile(path, "utf8"));
 
+// Codex reports some Windows paths with the \\?\ long-path prefix while this
+// module's own resolve()/realpath() calls do not; strip it before comparing
+// so the same real directory is never mistaken for a different one.
+const WINDOWS_LONG_PATH_PREFIX = /^\\\\\?\\/;
+const stripLongPathPrefix = (path) =>
+  path.replace(WINDOWS_LONG_PATH_PREFIX, "");
+
 async function bundleFiles(root, prefix = "") {
   const files = [];
   for (const entry of (
@@ -223,11 +230,19 @@ export async function installLocalPlugin(
   const previous = marketplaces.find(
     (item) => item.name === build.marketplaceName,
   );
-  const previousRoot = previous?.marketplaceSource?.source ?? previous?.root;
+  const previousRoot = previous
+    ? stripLongPathPrefix(previous.marketplaceSource?.source ?? previous.root)
+    : undefined;
   if (previous && previousRoot !== build.buildRoot) {
     const receipt = await json(join(previousRoot, "synapse-build.json"));
+    // Some Codex CLI versions omit marketplaceSource on later `list` calls,
+    // reporting only `root`; a populated `root` is itself local-marketplace
+    // evidence, so only reject an explicit non-local sourceType.
+    const isLocalSource =
+      previous.marketplaceSource?.sourceType === "local" ||
+      (previous.marketplaceSource === undefined && Boolean(previous.root));
     if (
-      previous.marketplaceSource?.sourceType !== "local" ||
+      !isLocalSource ||
       receipt.source !== build.source ||
       dirname(previousRoot) !== dirname(build.buildRoot)
     )

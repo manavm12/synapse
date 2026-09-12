@@ -141,7 +141,7 @@ assert(
 );
 assert(
   hooks.Stop[0].hooks[0].command ===
-    `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs"`,
+    `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/checkpoint-memory.mjs"`,
   "Stop must launch the dependency-free checkpoint scheduler",
 );
 await access(resolve(pluginRoot, "hooks/checkpoint-memory.mjs"));
@@ -149,7 +149,7 @@ assert(
   hooks?.UserPromptSubmit?.[0]?.hooks?.some(
     (hook) =>
       hook.command ===
-        `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/prompt-memory.mjs"` &&
+        `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/prompt-memory.mjs"` &&
       hook.async !== true,
   ),
   "UserPromptSubmit must inject due memory saves privately",
@@ -162,7 +162,7 @@ assert(
       entry.hooks?.some(
         (hook) =>
           hook.command ===
-            `/bin/sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/bind-child.mjs"` &&
+            `sh "\${PLUGIN_ROOT}/scripts/run-node.sh" "\${PLUGIN_ROOT}/hooks/bind-child.mjs"` &&
           hook.async === true,
       ),
   ),
@@ -171,7 +171,7 @@ assert(
 assert(
   hooks?.UserPromptSubmit?.[0]?.hooks?.some(
     (hook) =>
-      hook.command === `/bin/sh "\${PLUGIN_ROOT}/hooks/run-dispatch.sh"` &&
+      hook.command === `sh "\${PLUGIN_ROOT}/hooks/run-dispatch.sh"` &&
       hook.async === true,
   ),
   "UserPromptSubmit must route Synapse tasks asynchronously through the signed desktop runtime",

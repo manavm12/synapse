@@ -15,7 +15,7 @@ On acceptance, call `list_projects`. Default to the current saved local Git proj
 
 ## Bundled helper
 
-Resolve these paths relative to this SKILL.md: `../../scripts/run-node.sh` and `../../scripts/setup.mjs`. Execute `/bin/sh <absolute launcher path> <absolute setup script path>`, passing a single compact JSON object followed by a newline on **stdin**. Use a process tool that supports stdin (or start a terminal process and send that JSON line using write_stdin); the helper accepts the newline without needing EOF. Do not use JSON or credentials as command arguments. The launcher uses `CODEX_MCP_NODE_PATH`, supplied by Codex, and verifies SQLite support. If missing, ask the user to update/restart Codex; never fall back to system Node/npm.
+Resolve these paths relative to this SKILL.md: `../../scripts/run-node.sh` and `../../scripts/setup.mjs`. Execute `sh <absolute launcher path> <absolute setup script path>`, passing a single compact JSON object followed by a newline on **stdin**. Use a process tool that supports stdin (or start a terminal process and send that JSON line using write_stdin); the helper accepts the newline without needing EOF. Do not use JSON or credentials as command arguments. The launcher uses `CODEX_MCP_NODE_PATH`, supplied by Codex, and verifies SQLite support. If missing, ask the user to update/restart Codex; never fall back to system Node/npm.
 
 The helper returns safe JSON. Its `inspect` action returns local connection IDs and project paths for subsequent local actions only. Do not read Keychain, copy credential material, inspect private databases to extract secrets, or add OAuth tokens to commands. Only the credential hash from preparation is sent to MCP.
 
