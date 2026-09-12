@@ -6,12 +6,18 @@ import {
   emptyLedger,
   extractionSchema,
   normalizeSourceEnvelope,
+  segmentsFor,
 } from "../../src/memory/core/index.mjs";
+import { validateSchema } from "../../src/memory/core/schema.mjs";
 import {
   createMemoryInferenceAPI,
   MemoryInferenceError,
 } from "../../src/server/memory-organizer/api.mjs";
 import { createMemoryOrganizerHandler } from "../../src/server/memory-organizer/handler.mjs";
+import {
+  extractionSchemaFor,
+  validationReason,
+} from "../../src/server/memory-organizer/validation.mjs";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -108,6 +114,129 @@ test("handler extracts/reconciles/reviews and commits only when explicitly invok
   });
   assert.equal(run.ledger.version, 2);
   assert.equal(run.ledger.relations[0].type, "supersedes");
+});
+
+test("extraction constrains current and earlier evidence without mutating shared schemas", async () => {
+  const run = setup();
+  const first = await run.handler.process(fixture.steps[0].envelope);
+  await run.handler.commit({
+    source: fixture.steps[0].envelope,
+    result: first,
+  });
+  await run.handler.process(fixture.steps[1].envelope);
+  const extract = run.calls.filter((call) => call.stage === "extract")[1];
+  const properties = extract.schema.properties;
+  const current = extract.data.segments.map((segment) => segment.id);
+  const known = [
+    ...new Set([
+      ...current,
+      ...extract.data.contextEvidence.map((segment) => segment.id),
+    ]),
+  ];
+  assert.deepEqual(
+    properties.claims.items.properties.evidence.items.enum,
+    known,
+  );
+  assert.deepEqual(
+    properties.coverage.items.properties.segmentId.enum,
+    current,
+  );
+  assert.equal(properties.claims.items.properties.title.enum, undefined);
+  assert.equal(properties.coverage.items.properties.reason.enum, undefined);
+  assert.equal(
+    extractionSchema.properties.claims.items.properties.evidence.items.enum,
+    undefined,
+  );
+  assert.equal(
+    extractionSchema.properties.coverage.items.properties.segmentId.enum,
+    undefined,
+  );
+  const foreign = structuredClone(fixture.steps[1].extraction);
+  foreign.claims[0].evidence = ["foreign-segment"];
+  assert.throws(
+    () => validateSchema(foreign, extract.schema),
+    /not an allowed value/,
+  );
+  foreign.claims[0].evidence = [known[0]];
+  foreign.coverage[0].segmentId = extract.data.contextEvidence[0].id;
+  assert.throws(
+    () => validateSchema(foreign, extract.schema),
+    /not an allowed value/,
+  );
+});
+
+test("source-specific extraction schema handles empty and bounded catalogs without truncation", () => {
+  assert.deepEqual(extractionSchemaFor([], []), extractionSchema);
+  const segments = segmentsFor({
+    ...fixture.steps[0].envelope,
+    markdown: "# First\nAlpha.\n\n# Second\nBeta.\n\nGamma.",
+  });
+  const schema = extractionSchemaFor(segments, [segments[0]]);
+  assert.equal(
+    schema.properties.coverage.items.properties.segmentId.enum.length,
+    3,
+  );
+  assert.equal(
+    schema.properties.claims.items.properties.evidence.items.enum.length,
+    3,
+  );
+  const catalog = (n, length = 24) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: String(i).padStart(length, "x"),
+    }));
+  assert.doesNotThrow(() => extractionSchemaFor([], catalog(625)));
+  assert.throws(() => extractionSchemaFor([], catalog(626)), /context limit/);
+  assert.throws(
+    () => extractionSchemaFor(catalog(160, 4), catalog(828, 5)),
+    /context limit/,
+  );
+});
+
+test("validation diagnostics expose only fixed reasons and preserve failure fencing", async () => {
+  const messages = [
+    ["Claim refs must be unique c1, c2, etc", "claim_refs"],
+    ["Each claim needs unique evidence segment IDs", "evidence_unique"],
+    ["Unknown evidence segment private source text", "evidence_unknown"],
+    [
+      "A new claim must cite its current source, not only previous context",
+      "current_evidence_required",
+    ],
+    ["Unknown or duplicate coverage segment", "coverage_segments"],
+    ["Coverage disposition disagrees with claim evidence", "coverage_evidence"],
+    [
+      "Every source segment requires a coverage disposition",
+      "coverage_missing",
+    ],
+    ["subject must not be empty", "required_text"],
+    ["private arbitrary error", "invalid_proposal"],
+  ];
+  for (const [message, reason] of messages)
+    assert.equal(validationReason(new Error(message)), reason);
+  assert.equal(validationReason(null), "invalid_proposal");
+  const unsafe = new MemoryInferenceError("invalid response", {
+    details: { validation_reason: "private text" },
+  });
+  assert.deepEqual(unsafe.details, {});
+  const run = setup({
+    maxStageCalls: 2,
+    respond() {
+      return { ...fixture.steps[0].extraction, coverage: [] };
+    },
+  });
+  await assert.rejects(
+    run.handler.process(fixture.steps[0].envelope),
+    (error) => {
+      assert.deepEqual(error.details, {
+        inference_stage: "extract",
+        validation_reason: "coverage_missing",
+      });
+      assert.equal(error.code, "extract validation failed");
+      assert.doesNotMatch(JSON.stringify(error), /private/);
+      return true;
+    },
+  );
+  assert.equal(run.calls.length, 2);
+  assert.equal(run.commits, 0);
 });
 
 test("review rejection and structural repairs stay inside per-stage budgets", async () => {

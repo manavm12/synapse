@@ -53,6 +53,14 @@ It stores no raw prompts or model responses. Failed attempts remain pending/fail
 in the queue with bounded error text; this version does not persist detailed
 failed-call usage. Use provider usage reporting for actual billing reconciliation.
 
+Extraction restricts evidence IDs to current source segments plus earlier accepted
+context evidence, and coverage IDs to current segments only. It fails closed on
+the provider's enum-size limits rather than truncating evidence. Deterministic
+validation still enforces current-source support, unique evidence, complete
+coverage, and agreement between coverage dispositions and citations. Exhausted
+validation repairs report a fixed `validation_reason` and `inference_stage` in
+operational logs, never source text or model-supplied identifiers.
+
 ## Storage/read contract
 
 All tables are in `synapse_private`, keyed/scoped by `owner_id, project_id`:
