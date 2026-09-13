@@ -266,13 +266,11 @@ database) PostgreSQL 17**, since the disposable instance was already running:
   without a database -- both are recorded here rather than only keeping the
   better number.
 
-**Cleanup owed after this session** (not yet done as of this writing, so a
-follow-up agent or the human owner should do it): stop the local Postgres
-process and delete its data directory (both under this session's scratchpad,
-not the repo), delete the throwaway Supabase staging project from the
-dashboard, and delete the local `.env` (already git-ignored, never committed,
-but still holds the disposable local Postgres password and the staging
-project's publishable key).
+**Cleanup done**: the local disposable Postgres process was stopped and its
+data directory deleted, the local server was stopped, and the local `.env`
+(already git-ignored, never committed) was removed. Still outstanding: the
+human owner deleting the throwaway Supabase staging project from the
+dashboard whenever convenient -- nothing in this repo depends on it existing.
 
 ## Linux CI
 
@@ -302,9 +300,9 @@ project's publishable key).
    invocation on this repo, so that step is still pending a person). The live
    end-to-end verification above is complete, so nothing further is blocking
    merge from a verification standpoint.
-2. Perform the cleanup listed at the end of "Live end-to-end verification"
-   above (stop the local disposable Postgres, delete the throwaway Supabase
-   project, delete the local `.env`).
+2. Local cleanup is done (see "Live end-to-end verification"). The only
+   remaining item is the human owner deleting the throwaway Supabase staging
+   project from the dashboard whenever convenient.
 
 ## Risks
 
