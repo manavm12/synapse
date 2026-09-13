@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { controlConversation } from "../../plugins/synapse/lib/conversation-control.mjs";
 import {
   getJob,
@@ -411,7 +412,10 @@ export async function main(
   );
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main()
     .then((result) => {
       if (result?.ok === false) process.exitCode = 1;

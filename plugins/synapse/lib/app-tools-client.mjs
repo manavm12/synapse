@@ -11,9 +11,8 @@ export function appToolsPipePath(env = process.env) {
       "Codex desktop app-tools pipe is unavailable (CODEX_APP_TOOLS_PIPE_PATH is not set)",
     );
   }
-  // A Windows named pipe (used only by local test fixtures; the real Codex
-  // desktop host is POSIX-only) lives in the \\.\pipe\ device namespace,
-  // which path resolution would corrupt -- pass it through unchanged.
+  // A Windows named pipe lives in the \\.\pipe\ device namespace, which path
+  // resolution would corrupt -- pass it through unchanged.
   if (/^\\\\[.?]\\pipe\\/.test(path)) return path;
   // Resolve with posix semantics so a real POSIX socket path is not
   // reinterpreted using the local OS's drive/separator rules.
