@@ -64,20 +64,6 @@ export async function dispatchPrompt(
     timeoutMs = 25_000,
   } = {},
 ) {
-  // TEMPORARY diagnostic for live Windows native-task-creation verification.
-  // Must be removed before this branch merges.
-  try {
-    const { writeFileSync } = await import("node:fs");
-    writeFileSync(
-      "C:\\Users\\DELL\\.synapse\\dispatch-diagnostic.txt",
-      `dispatchPrompt entered at ${new Date().toISOString()} on ${process.platform}\n` +
-        `hook_event_name=${input?.hook_event_name}\n` +
-        `CODEX_APP_TOOLS_PIPE_PATH=${env.CODEX_APP_TOOLS_PIPE_PATH ?? "(unset)"}\n` +
-        `cwd=${input?.cwd}\n`,
-    );
-  } catch {
-    // ignore
-  }
   if (
     input?.hook_event_name !== "UserPromptSubmit" ||
     !safeSessionId(input.session_id) ||
