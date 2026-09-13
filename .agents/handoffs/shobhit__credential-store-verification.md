@@ -2,73 +2,127 @@
 
 - Branch: `shobhit/credential-store-verification`
 - Human owner: `Shobhit Goel`
-- Active agent: `Claude`
+- Active agent: `unassigned`
 - Base reviewed: `a721d6b` (main, includes merged PR #18, #22, #21)
-- Last checkpoint: `uncommitted`
-- Status: `active`
+- Last checkpoint: `6695ab0`
+- Status: `ready-for-review`
 
 ## Goal
 
 PR #18/#22 proved hook execution and native task creation work on Windows.
-What's still unverified: whether `WindowsDpapiStore` (in
+What was unverified: whether `WindowsDpapiStore` (in
 `plugins/synapse/lib/receiver-secrets.mjs`) and the Windows Task Scheduler
 receiver service (`receiverServicePowerShell`/`manage-receiver-task.ps1` in
 `receiver-service.mjs`) actually work on a real Windows session, not just in
-code review and mocked-spawn tests. This is the last unverified piece of the
-Windows cross-platform track before it's genuinely complete end-to-end.
+code review and mocked-spawn tests. This closes out the last unverified
+piece of the Windows cross-platform track.
 
 ## File ownership
 
-- `plugins/synapse/lib/receiver-secrets.mjs`
-- `plugins/synapse/lib/receiver-service.mjs`
-- `plugins/synapse/scripts/windows-secret.ps1`
-- `plugins/synapse/scripts/manage-receiver-task.ps1`
-- Confirmed no overlap with any other active handoff on `main` as of this
-  checkpoint (`codex__conversational-messaging.md` only claims
-  `receiver-worker.mjs`, not `receiver-service.mjs`; organizer handoffs only
-  touch `src/server/memory-organizer/*`).
+- `plugins/synapse/lib/receiver-secrets.mjs` (verified, unchanged)
+- `plugins/synapse/lib/receiver-service.mjs` (verified, unchanged)
+- `plugins/synapse/scripts/windows-secret.ps1` (verified, unchanged)
+- `plugins/synapse/scripts/manage-receiver-task.ps1` (fixed, see Completed)
+- Confirmed no overlap with any other active handoff (`codex__conversational-
+  messaging.md` only claims `receiver-worker.mjs`, not `receiver-service.mjs`;
+  organizer handoffs only touch `src/server/memory-organizer/*`).
+
+## Completed
+
+### 1. WindowsDpapiStore -- verified correct, no bugs found
+
+Directly exercised `set`/`get`/`delete` with a real synthetic
+`syn_recv_...`-format credential against the actual `windows-secret.ps1`
+(no mocking):
+- `set()`: confirmed the on-disk `.dpapi` file contains a genuine DPAPI
+  blob (`AQAAANCMnd8B...`, the standard DPAPI header) and does **not**
+  contain the plaintext secret anywhere in the file.
+- `get()`: confirmed it decrypts back to the exact original secret.
+- `delete()`: confirmed the file is removed, and a second `delete()` call
+  is idempotent (does not throw).
+
+No changes needed here -- the implementation is correct as reviewed earlier.
+
+### 2. Windows Task Scheduler receiver service -- found and fixed a real bug
+
+Called `startReceiverService`/`stopReceiverService` end-to-end (real
+`manage-receiver-task.ps1`, real Task Scheduler, isolated temp inbox path,
+no mocking) and separately isolated the exact failure with a disposable
+long-running heartbeat script once a problem was found:
+
+- `startReceiverService` correctly registered and started a real "Synapse
+  Receiver" scheduled task; confirmed via `Get-ScheduledTask` (state
+  `Running`) and by observing the actual spawned process and its log output.
+- `stopReceiverService` reported `{stopped: true}` and the scheduled task
+  itself was genuinely unregistered -- but **the `node.exe` child process
+  the launcher spawned via PowerShell's `&` call operator survived as an
+  orphan**, indefinitely. Isolated this precisely: the wrapper PowerShell
+  process Task Scheduler tracks and terminates is not the same OS process
+  as the node.exe child it launches; Windows does not propagate that
+  termination to already-spawned children this way. Confirmed via process
+  listing that the wrapper's PID was gone while the child's PID (recording
+  the now-dead wrapper as its parent) kept running and kept writing to a
+  disposable heartbeat log, well after `stop` returned.
+- **Fixed** in `manage-receiver-task.ps1`'s `stop` action: parse the exact
+  target script path back out of the launcher script it generated, then
+  explicitly find and `Stop-Process -Force` any `node.exe` process still
+  running that script, in addition to the existing
+  `Stop-ScheduledTask`/`Unregister-ScheduledTask` calls.
+- Re-verified with the same controlled reproduction three separate times to
+  rule out a fluke or timing artifact: 1 matching process running before
+  `stop`, 0 after, each time, plus confirmation the scheduled task itself
+  is also gone afterward.
+- Does not change `receiverServicePowerShell()`'s generated script format at
+  all, so existing tests asserting its exact string output are unaffected.
+
+All temporary/scratch test scripts, log files, and OS-level artifacts
+(the disposable scheduled task, heartbeat log, credential file) were
+cleaned up after each test. Nothing was left registered or running.
 
 ## Decisions and invariants
 
-- This verification does **not** require `codex exec` or any Codex account
-  usage -- DPAPI credential storage and Task Scheduler registration are pure
-  local Windows OS operations, testable directly via Node scripts calling
-  the real classes (default `spawnImpl`/`run`, not mocked). No live-testing
-  cost concern here, unlike the native-task-creation work.
-- A real Task Scheduler registration is a **persistent, visible OS-level
-  change** (a scheduled task named "Synapse Receiver" that runs at logon and
-  auto-restarts). Clean it up (stop + unregister) after verification,
-  don't leave it running unexpectedly.
-- Do not touch `receiver-worker.mjs` or anything conversational-messaging
-  owns; if the receiver-service test needs a real `CODEX_MCP_NODE_PATH`,
-  reuse the same real Windows codex.exe/runtime discovery used in the prior
-  investigations (see `shobhit__native-task-verification.md` for exact
-  paths), not a fresh guess.
-- If real bugs are found, fix them following the same discipline as the
-  prior two PRs: find the actual root cause, fix it properly (not a skip),
-  verify conclusively, keep diagnostic/throwaway code out of committed history.
-
-## Remaining work
-
-1. Directly exercise `WindowsDpapiStore.set/get/delete` for a real synthetic
-   credential (matching the `SAFE_CREDENTIAL` pattern `syn_recv_...`) via a
-   real `windows-secret.ps1` invocation -- confirm actual DPAPI
-   protect/unprotect round-trips correctly, the file lands with expected
-   permissions, and delete cleans up.
-2. Directly exercise `manage-receiver-task.ps1` (start/status/stop) via
-   `receiverServicePowerShell`/`startService`/`stopService` (or by calling
-   the PowerShell script directly) against a disposable launcher script --
-   confirm a real Scheduled Task actually registers, runs, and unregisters
-   cleanly. Do not leave a stray scheduled task behind.
-3. Fix any real bugs found, with tests, following the file-ownership list.
-4. Update this handoff, commit, and push.
-5. Once this is done, move to the web inbox (the other half of "finish both
-   one by one" from the user) as a separate, later workstream/handoff.
+- This verification did not require `codex exec`/Codex account usage --
+  DPAPI and Task Scheduler are pure local Windows OS operations.
+- The orphan-process bug is **not automatically testable in CI**: it's
+  genuine Windows OS process-lifecycle behavior (a spawned child surviving
+  parent termination unless explicitly handled) that only manifests on a
+  real Windows session with real Task Scheduler; CI runs on Linux. The
+  existing `receiver-service.test.mjs` coverage mocks the `run` function
+  entirely and only validates generated script *content* (already correct,
+  unaffected by this fix), not actual OS process behavior -- it could not
+  have caught this bug, and can't regression-test the fix either. This is
+  documented, not glossed over; the fix is live-verified-only, matching how
+  native task creation (PR #22) was verified.
+- If a future project goal needs automated coverage for this exact
+  behavior, it would require a real (not mocked) Windows CI runner able to
+  register/exercise a real Scheduled Task -- a meaningfully bigger lift than
+  this fix itself.
 
 ## Verification
 
-Not yet started.
+- `npx biome check .` -- passed
+- `npm test` -- 323 pass / 0 fail / 13 skipped (unchanged before/after the fix)
+- Live: `WindowsDpapiStore` full round-trip verified against the real
+  `windows-secret.ps1`, no bugs found.
+- Live: `startReceiverService`/`stopReceiverService` end-to-end against a
+  real Task Scheduler task, confirmed the orphan-process bug and confirmed
+  the fix resolves it, via three separate clean before/after process-count
+  checks (see "Completed" above for exact evidence).
+
+## Remaining work
+
+1. Open a PR to `main` and let required CI/security checks run.
+2. Once merged, this closes the Windows cross-platform track as genuinely
+   complete end-to-end (hooks, native task creation, credential storage,
+   and the background receiver service are all now live-verified, not just
+   reviewed).
+3. Next workstream per the user's plan ("finish both one by one"): the web
+   inbox, as a separate fresh handoff -- this is a much larger, more
+   open-ended greenfield feature and deserves its own scoping discussion
+   before starting, unlike this bounded verification task.
 
 ## Risks or blockers
 
-None yet. Fresh workstream.
+- None. No production/live server changes were made. No OS-level artifacts
+  (scheduled tasks, processes, credential files) were left behind after
+  testing -- confirmed clean after every test in this handoff.
