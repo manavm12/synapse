@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `da0363a2a1768b47875c58759134ae24421534bf`
-- Last checkpoint: `uncommitted`
+- Last checkpoint: `2ecced6eeede3809b5e55b674d242b9aa2fb1c20` (tested implementation)
 - Status: `ready-for-review`
 
 ## Goal
@@ -35,7 +35,7 @@ Implement model-directed memory navigation and recipient prompt enrichment in th
 
 ## Verification
 
-- Clean Linux/container `npm run check` with disposable PostgreSQL: 314 passed, zero failed/skipped; coverage 96.18% lines, 87.44% branches, 94.55% functions.
+- Clean Linux/container `npm run check` with disposable PostgreSQL: 314 passed, zero failed/skipped; coverage 96.19% lines, 87.46% branches, 94.55% functions.
 - `npm run audit`: zero vulnerabilities; plugin validation and production Docker build passed. Disabled worker startup passed locally and in the image.
 - Shared Responses adapter tested with strict retrieval JSON and trusted instructions using mocked HTTP. Model and native desktop calls are test doubles; no new API spending or production changes.
 - Check logs are local `/tmp/synapse-incoming-memory-verified.log`; source build image `synapse-incoming-memory:check`.
