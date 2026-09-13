@@ -777,3 +777,35 @@ test("incoming retrieval distinguishes failed searches, unknown IDs, stale gener
       assert.equal(result.evidence.length, 0, scenario);
   }
 });
+
+test("source windows remain exact and JSONB-safe across an emoji boundary", async () => {
+  const f = buildFixture();
+  const raw = normalizeSourceEnvelope(
+    sourceEnvelope(
+      { ownerId: OWNER, projectId: PROJECT },
+      20,
+      `${"a".repeat(1199)}🍀next`,
+    ),
+    { ownerId: OWNER, projectId: PROJECT },
+  );
+  f.authoritative.set(raw.revisionId, raw);
+  const page = await f.service.read(userIdentity(), {
+    target_type: "source",
+    target_id: raw.revisionId,
+    max_chars: 1200,
+  });
+  assert.equal(page.source.end, 1199);
+  assert.equal(Buffer.from(page.source.text).toString(), page.source.text);
+  const next = await f.service.read(userIdentity(), {
+    target_type: "source",
+    target_id: raw.revisionId,
+    cursor: page.next_cursor,
+    max_chars: 1200,
+  });
+  assert.equal(next.source.start, 1199);
+  assert.equal(next.source.text, "🍀next");
+  assert.equal(
+    raw.markdown.slice(next.source.start, next.source.end),
+    next.source.text,
+  );
+});

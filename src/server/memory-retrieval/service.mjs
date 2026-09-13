@@ -56,7 +56,12 @@ function digest(value) {
 
 function truncate(value, maximum) {
   if (value.length <= maximum) return { value, truncated: false };
-  return { value: value.slice(0, maximum), truncated: true };
+  // JSONB rejects a half-surrogate. Keep exact UTF-16 offsets while cutting
+  // before an emoji/pair instead of manufacturing a replacement character.
+  const end = /[\uD800-\uDBFF]/u.test(value[maximum - 1])
+    ? maximum - 1
+    : maximum;
+  return { value: value.slice(0, end), truncated: true };
 }
 
 function scopeDigest(value) {
@@ -265,7 +270,7 @@ function claimMatchesTopicLabels(claim, topicId, projection) {
 function evidenceCitation(evidence, sources) {
   const source = sources.get(evidence.documentId);
   if (!source) throw new Error("Memory evidence cites an unknown revision");
-  const quote = evidence.quote.slice(0, MAX_EVIDENCE_QUOTE);
+  const quote = truncate(evidence.quote, MAX_EVIDENCE_QUOTE).value;
   return {
     revision_id: evidence.documentId,
     source_revision: source.revision,
@@ -669,7 +674,7 @@ export function createMemoryRetrievalService({ adapter, sourceReader = null }) {
         markdownHash,
       }),
     };
-    const offset =
+    let offset =
       input.query && !input.cursor
         ? Math.max(
             0,
@@ -679,7 +684,10 @@ export function createMemoryRetrievalService({ adapter, sourceReader = null }) {
         : cursorOffset(input.cursor, descriptor);
     if (offset > source.markdown.length)
       throw new Error("cursor is out of range");
-    const text = source.markdown.slice(offset, offset + maxChars);
+    if (/[\uDC00-\uDFFF]/u.test(source.markdown[offset])) offset++;
+    const text = truncate(source.markdown.slice(offset), maxChars).value;
+    if (!text && offset < source.markdown.length)
+      throw new Error("Source window cannot fit a Unicode character");
     const next =
       offset + text.length < source.markdown.length
         ? encodeCursor({ ...descriptor, offset: offset + text.length })

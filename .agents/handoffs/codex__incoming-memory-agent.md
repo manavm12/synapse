@@ -4,7 +4,7 @@
 - Human owner: `Manav Mehta`
 - Active agent: `Codex`
 - Base reviewed: `da0363a2a1768b47875c58759134ae24421534bf`
-- Last checkpoint: `2ecced6eeede3809b5e55b674d242b9aa2fb1c20` (tested implementation)
+- Last checkpoint: `19cfc6ea2aaf27d4ae9c13752700a334a2fa0895` (all GitHub checks passed); the subsequent Unicode-boundary fix is included with this handoff update.
 - Status: `ready-for-review`
 
 ## Goal
@@ -32,6 +32,7 @@ Implement model-directed memory navigation and recipient prompt enrichment in th
 - Added message-specific authenticated context scheduling and a separate inference worker, with recipient-derived scope and one durable attempt per message.
 - Added verified context to both native routes and atomically froze prompts with native attempts (SQLite 5).
 - Compact tests cover real core graph navigation, source offsets, scope isolation, deadlines, stale generation, duplicate requests, revocation, and real PostgreSQL/native-double delivery. No experiment fixtures restored.
+- Source and citation truncation preserves Unicode pairs and exact source offsets so extracted context remains valid PostgreSQL JSONB.
 
 ## Verification
 
@@ -39,10 +40,11 @@ Implement model-directed memory navigation and recipient prompt enrichment in th
 - `npm run audit`: zero vulnerabilities; plugin validation and production Docker build passed. Disabled worker startup passed locally and in the image.
 - Shared Responses adapter tested with strict retrieval JSON and trusted instructions using mocked HTTP. Model and native desktop calls are test doubles; no new API spending or production changes.
 - Check logs are local `/tmp/synapse-incoming-memory-verified.log`; source build image `synapse-incoming-memory:check`.
+- Final Unicode source-window regression: focused retrieval suite passed all 13 tests. GitHub CI, database and secret checks passed on the prior checkpoint; final commit checks are available on draft PR #25.
 
 ## Remaining work
 
-1. Review the focused draft PR and pass CI.
+1. Review the focused draft PR: https://github.com/manavm12/synapse/pull/25 . Check final-commit CI there.
 2. Production rollout is separate: deploy migration/backend, configure the isolated context worker, refresh receivers, and perform a controlled live two-account test.
 
 ## Risks or blockers
