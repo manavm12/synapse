@@ -7,9 +7,12 @@
 - Base inherited from Claude: `7530d65`
 - Base reviewed at takeover: `40c2a3f` (confirmed both local `HEAD` and
   `origin/shobhit/web-inbox` at this commit before editing)
-- Status: `pr-open-ci-green` -- [PR #26](https://github.com/manavm12/synapse/pull/26)
+- Status: `verified-live-ready-for-merge` -- [PR #26](https://github.com/manavm12/synapse/pull/26)
   is open against `main` at commit `5475852`; `verify`, `database`, and
-  `secrets` all passed. Waiting on human review/merge.
+  `secrets` all passed. Beyond that, the human owner and Claude drove a real
+  Supabase magic-link sign-in and real Postgres-backed messaging end-to-end
+  together in this session (see "Live end-to-end verification"). Only human
+  review/merge and the listed cleanup remain.
 
 ## Goal
 
@@ -164,12 +167,112 @@ mobile layout all looked correct, not just DOM-asserted):
 | Narrow/mobile viewport (375px) | PASS -- no horizontal page overflow; tables sit in their own `overflow-x: auto` containers |
 | Sign-out | PASS -- clears the session and returns to the signed-out view on reload |
 
-**Explicitly not verified this way** (needs live credentials this sandbox does
-not have): the real Supabase magic-link email sign-in flow itself (`signInWithOtp`
-against a live Supabase project and clicking through an actual received
-email), and anything that depends on real Postgres-backed account/conversation
-data rather than fixtures. These remain open until a live Supabase/Postgres
-environment is available for a genuine end-to-end pass.
+At the time this matrix ran, the real Supabase magic-link flow and real
+Postgres-backed data had not been exercised -- see "Live end-to-end
+verification" below, which closes that gap in the same session.
+
+## Live end-to-end verification (real Supabase + real Postgres, this session)
+
+Went further than the fixture-backed matrix above and proved the actual live
+integration, with the human owner (`Shobhit Goel`) driving the real browser
+himself since only he could access the real inbox to click the magic link.
+
+**Infrastructure stood up for this** (all local/disposable, nothing production):
+- Downloaded the official PostgreSQL 17.11 Windows binaries (EDB) and ran a
+  standalone, non-service instance on `127.0.0.1:5544` -- not installed as a
+  Windows service, so it is fully torn down by stopping the process and
+  deleting its data directory.
+- Applied `test/sql/bootstrap.sql` (the repo's own stub for the `auth`/`anon`/
+  `authenticated`/`supabase_auth_admin` roles a real Supabase-hosted Postgres
+  provides) and ran the real `scripts/migrate.mjs` against it -- all 11
+  migrations applied cleanly.
+- Created a brand-new, free-tier Supabase project (isolated from the real
+  production project referenced in `codex__conversational-messaging.md`) for
+  its Auth service only; no real user data or the production project was
+  touched. Added `http://127.0.0.1:8787/inbox` as an allowed redirect URL.
+- Started the real `src/server/index.mjs` (not a harness) with `--env-file=.env`
+  pointing `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` at that real project and
+  `DATABASE_URL`/`DATABASE_ADMIN_URL` at the local disposable Postgres.
+  `/readyz` returned `{"status":"ready"}`, confirming it reached both the real
+  Supabase JWKS endpoint and the real database.
+
+**What was actually proven, in order:**
+1. Real magic-link sign-in: the human owner requested a magic link through the
+   real `/inbox` login form, received the real email from Supabase, clicked it,
+   and the real Supabase JS SDK produced a genuine signed JWT
+   (`iss: https://nwpxbyhcziwitlphrhxy.supabase.co/auth/v1`, real `sub`/`email`
+   claims) -- real `jose`/JWKS verification, not a stub.
+2. Discovered and confirmed a genuine (expected, not a bug) product behavior
+   along the way: `inbox.js` calls `signInWithOtp` with `shouldCreateUser:
+   false` deliberately -- the web inbox never lets an arbitrary email
+   self-register; only `consent.js` (the OAuth/CLI onboarding entry point,
+   gated by `PUBLIC_SIGNUP_ENABLED`) creates new Supabase users. Had to
+   pre-create the test user directly in the Supabase dashboard first.
+3. Real account creation: called the actual `POST /auth/account` endpoint
+   (the same one the CLI onboarding flow calls) with the real access token,
+   which invoked the real `synapse_private.register_identity` SQL function.
+   This surfaced one setup gap specific to a non-Supabase-hosted Postgres:
+   that function checks `auth.users` for the caller's email, which on a real
+   Supabase Postgres is auto-populated by GoTrue but on our standalone
+   instance needed one manual mirrored row (`insert into auth.users (id,
+   email) values (...)`) -- not a bug in `register_identity`, just something
+   a fully self-hosted deployment would need to handle (e.g. its own sync from
+   whatever issues the JWTs). Confirmed via a real Postgres error
+   (`42501`/"verified Supabase user is missing") pointing exactly at this.
+   After that one row, registration succeeded for real:
+   `{"status":"ready","username":"shobhit","project_alias":"synapse-test"}`.
+4. Confirmed genuinely empty state first: `/inbox/conversations` and
+   `/inbox/messages` both returned empty arrays for the freshly-created real
+   account, over the real HTTP API.
+5. Real message send: created a second synthetic identity via the repo's own
+   documented local escape hatch (`ALLOW_DEV_TOKENS`/`syn_dev_` tokens,
+   `docs/cloud-memory-architecture.md`'s "Explicit local escape hatch" row) --
+   inserted its `auth.users`/`profiles`/`projects`/`development_tokens` rows
+   directly (again mirroring what GoTrue+real onboarding would produce), then
+   called the actual `send_message` MCP tool over `/mcp` as that identity,
+   addressed to `shobhit` by username. This exercises the real messaging
+   write path (`src/server/messaging/mcp.mjs`/`database.mjs`), not a shortcut.
+6. Confirmed the sent message appears correctly through the real
+   `/inbox/conversations` and `/inbox/messages` HTTP responses.
+7. The human owner then reloaded the real `/inbox` page in his own browser
+   (headed, not automated) and confirmed, with screenshots: the Inbox tab
+   showing the real message with a correct localized timestamp and "Queued"
+   badge; the Conversations tab showing `@alice, @shobhit` with "Awaiting
+   reply" (verified this is the real, correct computed state from
+   `src/server/messaging/database.mjs`'s `activity_state`/`response_state`
+   logic -- reflects that `alice`'s message has disposition `continue` and no
+   reply yet, not a placeholder); clicking into the conversation correctly
+   rendering the full thread (sender, message, status, response state); and
+   Sign out correctly returning to the signed-out view.
+8. This closes every item that the fixture-backed matrix explicitly could not
+   cover: real Supabase magic-link auth, real Postgres-backed account
+   creation, and real message data rendered through the real UI.
+
+**Also incidentally re-verified, now against a real (not skip-without-a-
+database) PostgreSQL 17**, since the disposable instance was already running:
+- `npm run test:sql`: **19/19 passed, 0 skipped, 0 failed** (previously this
+  sandbox could only report 1 passed / 8 gracefully skipped without a
+  database).
+- `npm run check` with `TEST_DATABASE_URL` set: **325 tests, 321 passed, 1
+  failed, 3 skipped**. Coverage jumped to **95.69% lines / 87.38% branches /
+  94.24% functions -- clears the 85%/70%/90% release gate for real.** The one
+  failure (`receiver-approval-upgrade.test.mjs`, `EPERM: operation not
+  permitted, symlink ...`) is a pre-existing Windows limitation unrelated to
+  this session's changes or to web-inbox: creating filesystem symlinks
+  requires either Developer Mode or elevated privileges on Windows, neither
+  of which this account has enabled; it is not something this handoff's scope
+  covers or should change unilaterally. This is a genuinely stronger, more
+  honest result than what could be reported earlier in this same handoff
+  without a database -- both are recorded here rather than only keeping the
+  better number.
+
+**Cleanup owed after this session** (not yet done as of this writing, so a
+follow-up agent or the human owner should do it): stop the local Postgres
+process and delete its data directory (both under this session's scratchpad,
+not the repo), delete the throwaway Supabase staging project from the
+dashboard, and delete the local `.env` (already git-ignored, never committed,
+but still holds the disposable local Postgres password and the staging
+project's publishable key).
 
 ## Linux CI
 
@@ -196,22 +299,32 @@ environment is available for a genuine end-to-end pass.
 
 1. [PR #26](https://github.com/manavm12/synapse/pull/26) is open with all CI
    green; it needs human review/merge approval (CodeRabbit requires a manual
-   invocation on this repo, so that step is still pending a person).
-2. After merge, a genuine live smoke test against a real Supabase project
-   (magic-link sign-in) and real Postgres-backed data remains outstanding --
-   the browser matrix above proves the UI/API contract works correctly, not
-   that the live auth/data path is wired end-to-end.
+   invocation on this repo, so that step is still pending a person). The live
+   end-to-end verification above is complete, so nothing further is blocking
+   merge from a verification standpoint.
+2. Perform the cleanup listed at the end of "Live end-to-end verification"
+   above (stop the local disposable Postgres, delete the throwaway Supabase
+   project, delete the local `.env`).
 
 ## Risks
 
-- The database-backed release gate (`npm run check`'s 85% line-coverage
-  threshold) and `npm run test:sql` have only been exercised in
-  skip-without-a-database mode in this sandbox; only CI's real PostgreSQL
-  service can actually clear that gate. Do not treat the local runs above as
-  having passed it.
-- The live authenticated browser matrix (real Supabase magic-link sign-in,
-  real Postgres data) has not run; the fixture-backed browser matrix in this
-  handoff proves the UI/API contract, not the live integration.
+- The database-backed release gate is now genuinely cleared (see "Live
+  end-to-end verification": 95.69%/87.38%/94.24% against a real PostgreSQL 17,
+  above the 85%/70%/90% thresholds) and the live authenticated browser matrix
+  (real Supabase magic-link sign-in, real Postgres data) has run and passed,
+  confirmed by the human owner directly in his own browser. Neither is an
+  open risk anymore.
+- One pre-existing, unrelated test failure was surfaced while running against
+  a real database: `receiver-approval-upgrade.test.mjs` fails with `EPERM:
+  operation not permitted, symlink ...` on this Windows account because
+  Developer Mode/symlink privilege is not enabled here. Not caused by, or in
+  scope for, this handoff -- flagging so it isn't mistaken for a regression.
+- A fully self-hosted (non-Supabase-hosted) Postgres deployment would need
+  its own mechanism to keep a local `auth.users` mirror in sync with whatever
+  issues its JWTs, since `synapse_private.register_identity` (and other
+  functions) check that table directly. This session worked around it with a
+  manual insert for a one-off test; a real self-hosted deployment is out of
+  scope for this handoff but worth noting for whoever owns that decision.
 - Inbox-feed sender names are displayed as shortened stable IDs because the
   existing `listInbox` database wire shape does not include usernames. Conversation
   detail resolves participant usernames without changing shared database code.
