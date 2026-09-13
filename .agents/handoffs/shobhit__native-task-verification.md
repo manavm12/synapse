@@ -2,10 +2,11 @@
 
 - Branch: `shobhit/native-task-verification`
 - Human owner: `Shobhit Goel`
-- Active agent: `unassigned`
+- Active agent: `Claude` -- claimed to open the PR and drive CI/review per
+  "Remaining work" below; will unassign again once that's done.
 - Base reviewed: `027c513` (main, includes merged PR #18)
 - Last implementation checkpoint: `0babc4f` (all code and test changes pushed;
-  this handoff is finalized in the branch HEAD)
+  this handoff is finalized in the branch HEAD); handoff itself at `00bef8d`
 - Status: `ready-for-review`
 
 ## Goal
