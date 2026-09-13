@@ -1,3 +1,4 @@
+import { resolve, win32 } from "node:path";
 import { AppToolsClient, appToolJson } from "./app-tools-client.mjs";
 import {
   acceptProvisioning,
@@ -91,10 +92,23 @@ export async function authorizeCloudDelivery(
   return fresh;
 }
 
-export function selectProject(projects, projectRoot) {
+function comparableProjectPath(value, platform) {
+  if (typeof value !== "string" || value === "") return null;
+  if (platform !== "win32") return resolve(value);
+  let normalized = win32.resolve(value);
+  if (normalized.startsWith("\\\\?\\")) normalized = normalized.slice(4);
+  return normalized.toLowerCase();
+}
+
+export function selectProject(
+  projects,
+  projectRoot,
+  { platform = process.platform } = {},
+) {
+  const expectedPath = comparableProjectPath(projectRoot, platform);
   const project = projects.find(
     (candidate) =>
-      candidate.path === projectRoot &&
+      comparableProjectPath(candidate.path, platform) === expectedPath &&
       (candidate.hostId == null || candidate.hostId === "local"),
   );
   if (!project) {

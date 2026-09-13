@@ -116,6 +116,33 @@ test("project selection uses the desktop saved-project path", () => {
   );
 });
 
+test("Windows project selection accepts drive-letter case and long-path prefixes", () => {
+  const project = {
+    projectId: "windows-project",
+    path: "c:\\Shobhit Goel\\Synapse\\synapse-core",
+    hostId: "local",
+  };
+  assert.equal(
+    selectProject([project], "C:\\Shobhit Goel\\Synapse\\synapse-core", {
+      platform: "win32",
+    }),
+    project,
+  );
+  assert.equal(
+    selectProject([project], "\\\\?\\C:\\Shobhit Goel\\Synapse\\synapse-core", {
+      platform: "win32",
+    }),
+    project,
+  );
+  assert.throws(
+    () =>
+      selectProject([project], "C:\\Shobhit Goel\\Synapse\\other", {
+        platform: "win32",
+      }),
+    /No saved Codex project/,
+  );
+});
+
 test("new git tasks are accepted immediately from the temporary ID", async () => {
   const client = new FakeClient();
   const acceptances = [];
