@@ -2,17 +2,24 @@
 
 - Branch: `shobhit/web-inbox`
 - Human owner: `Shobhit Goel`
-- Active agent: `unassigned` -- Claude completed the remaining verification and
-  browser smoke-test matrix from Codex's `40c2a3f` handoff and is stopping.
+- Active agent: `unassigned` -- Claude completed the remaining verification
+  and browser smoke-test matrix from Codex's `40c2a3f` handoff, then (with the
+  human owner) drove a real Supabase magic-link sign-in and real
+  Postgres-backed messaging end-to-end (see "Live end-to-end verification"),
+  and is now stopping.
 - Base inherited from Claude: `7530d65`
 - Base reviewed at takeover: `40c2a3f` (confirmed both local `HEAD` and
   `origin/shobhit/web-inbox` at this commit before editing)
+- Last pushed commit: `148236c` -- confirmed local `HEAD` and
+  `origin/shobhit/web-inbox` both at this exact commit, working tree clean, as
+  of this handoff.
 - Status: `verified-live-ready-for-merge` -- [PR #26](https://github.com/manavm12/synapse/pull/26)
-  is open against `main` at commit `5475852`; `verify`, `database`, and
-  `secrets` all passed. Beyond that, the human owner and Claude drove a real
-  Supabase magic-link sign-in and real Postgres-backed messaging end-to-end
-  together in this session (see "Live end-to-end verification"). Only human
-  review/merge and the listed cleanup remain.
+  is open against `main` at `148236c`; `verify`, `database`, and `secrets` all
+  passed (re-confirmed at this exact commit). Beyond that, the human owner and
+  Claude drove a real Supabase magic-link sign-in and real Postgres-backed
+  messaging end-to-end together in this session (see "Live end-to-end
+  verification"). Only human review/merge and deleting the throwaway Supabase
+  staging project remain.
 
 ## Goal
 
