@@ -185,7 +185,9 @@ test("setup helper accepts one JSON line without waiting for terminal EOF", asyn
   });
   child.stdin.write('{"action":"inspect"}\n');
   const [code] = await withDeadline(() => once(child, "close"), {
-    timeoutMs: 3_000,
+    // PowerShell startup can exceed three seconds under a concurrent Windows
+    // test run; this bounds the test without changing the production timeout.
+    timeoutMs: 5_000,
   });
   assert.equal(code, 0);
   assert.deepEqual(JSON.parse(output), { connections: [] });
