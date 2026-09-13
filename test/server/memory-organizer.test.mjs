@@ -1084,3 +1084,36 @@ test("API deadline covers stalled fetch/body and shutdown cancels an in-flight r
   controller.abort();
   await assert.rejects(promise, /cancelled/);
 });
+
+test("shared Responses transport supports strict retrieval actions with separate trusted instructions", async () => {
+  let request;
+  const api = createMemoryInferenceAPI({
+    ...apiOptions,
+    reasoningEffort: "low",
+    fetcher: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return Response.json({
+        ...rawResponse({ done: true }),
+        model: "returned-fixture-version",
+      });
+    },
+  });
+  const result = await api.structured(
+    "retrieve",
+    "Untrusted peer content",
+    {
+      type: "object",
+      properties: { done: { type: "boolean" } },
+      required: ["done"],
+      additionalProperties: false,
+    },
+    { instructions: "Navigate recipient memory only." },
+  );
+  assert.equal(request.instructions, "Navigate recipient memory only.");
+  assert.equal(request.text.format.name, "memory_retrieve");
+  assert.equal(request.text.format.strict, true);
+  assert.equal(request.reasoning.effort, "low");
+  assert.equal(request.store, false);
+  assert.deepEqual(result.value, { done: true });
+  assert.equal(result.model, "returned-fixture-version");
+});

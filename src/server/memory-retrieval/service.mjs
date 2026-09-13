@@ -669,7 +669,14 @@ export function createMemoryRetrievalService({ adapter, sourceReader = null }) {
         markdownHash,
       }),
     };
-    const offset = cursorOffset(input.cursor, descriptor);
+    const offset =
+      input.query && !input.cursor
+        ? Math.max(
+            0,
+            source.markdown.toLowerCase().indexOf(input.query.toLowerCase()) -
+              160,
+          )
+        : cursorOffset(input.cursor, descriptor);
     if (offset > source.markdown.length)
       throw new Error("cursor is out of range");
     const text = source.markdown.slice(offset, offset + maxChars);
@@ -770,6 +777,8 @@ export function createMemoryRetrievalService({ adapter, sourceReader = null }) {
           observed_at: claim.observedAt,
           recorded_at: claim.recordedAt,
           source_revision_id: claim.sourceId,
+          relations_truncated:
+            (relations.get(claim.id)?.length ?? 0) > MAX_RELATIONS,
           relations: (relations.get(claim.id) ?? [])
             .slice(0, MAX_RELATIONS)
             .map((relation) => relationSummary(relation, claim.id, claimsById)),
@@ -818,5 +827,33 @@ export function createMemoryRetrievalService({ adapter, sourceReader = null }) {
     };
   }
 
-  return { topics, search, read };
+  // Internal recipient agent action; not a new receiver-wide search capability.
+  async function searchSources(identity, { query }) {
+    if (typeof sourceReader?.search !== "function")
+      throw new MemoryRetrievalUnavailableError("Source search unavailable");
+    const snapshot = await load(identity);
+    const ids = await sourceReader.search({
+      ownerId: identity.userId,
+      projectId: identity.projectId,
+      query,
+    });
+    if (!Array.isArray(ids) || ids.length > 4)
+      throw new Error("Source search exceeded its limit");
+    const results = [];
+    for (const id of ids)
+      results.push(
+        (
+          await readSource(
+            identity,
+            { target_id: id, query: query.trim(), max_chars: 1200 },
+            snapshot,
+          )
+        ).source,
+      );
+    return {
+      ...catalogEnvelope(snapshot.ledger, snapshot.processing),
+      results,
+    };
+  }
+  return { topics, search, read, searchSources };
 }

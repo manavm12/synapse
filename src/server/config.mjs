@@ -86,6 +86,7 @@ export function loadConfig(env = process.env) {
     cookieSecret,
     allowDevTokens: booleanEnv(env.ALLOW_DEV_TOKENS),
     publicSignup: booleanEnv(env.PUBLIC_SIGNUP_ENABLED),
+    messageMemoryEnabled: booleanEnv(env.MESSAGE_MEMORY_ENABLED),
     trustedProxyHops: boundedIntegerEnv(env.TRUST_PROXY_HOPS, {
       defaultValue: 0,
       minimum: 0,

@@ -9,6 +9,35 @@ export function createMemorySourceReader({ pool }) {
     throw new TypeError("A Postgres pool is required");
   }
   return {
+    async search({ ownerId, projectId, query }) {
+      if (
+        typeof query !== "string" ||
+        query.trim().length < 2 ||
+        query.length > 200
+      )
+        throw new TypeError("Source query must contain 2 to 200 characters");
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN READ ONLY");
+        await client.query(
+          "select set_config('app.current_user_id', $1, true), set_config('app.current_project_id', $2, true)",
+          [ownerId, projectId],
+        );
+        const result = await client.query(
+          `select id from public.memory_revisions
+          where owner_id=$1 and project_id=$2 and position(lower($3) in lower(markdown))>0
+          order by created_at desc, id limit 4`,
+          [ownerId, projectId, query.trim()],
+        );
+        await client.query("COMMIT");
+        return result.rows.map((row) => row.id);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
     async read({ ownerId, projectId, revisionId }) {
       const client = await pool.connect();
       try {

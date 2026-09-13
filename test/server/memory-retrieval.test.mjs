@@ -551,3 +551,229 @@ test("Postgres source reader sets both trusted tenant dimensions and returns a v
   ]);
   assert.equal(queries.at(-1).text, "COMMIT");
 });
+
+// The incoming agent uses the same real ledger fixture and source verifier.
+// Only model decisions are scripted; no generated benchmark data is committed.
+test("incoming agent rewrites searches, reads claims, and preserves replacement/conflict evidence", async () => {
+  const { createMessageMemoryAgent } = await import(
+    "../../src/server/message-memory/agent.mjs"
+  );
+  const f = buildFixture();
+  const decisions = [];
+  const api = {
+    model: "scripted",
+    async structured(stage, prompt, _schema, options) {
+      assert.equal(stage, "retrieve");
+      assert.match(options.instructions, /untrusted/);
+      const data = JSON.parse(prompt);
+      decisions.push(data);
+      const value =
+        data.transcript.length === 0
+          ? {
+              actions: [{ op: "search", query: "logs", cursor: "" }],
+              selected: [],
+              done: false,
+              gaps: [],
+            }
+          : data.transcript.length === 1
+            ? {
+                actions: [
+                  {
+                    op: "read",
+                    target_type: "claim",
+                    target_id: f.initial[0].id,
+                  },
+                ],
+                selected: [],
+                done: false,
+                gaps: [],
+              }
+            : {
+                actions: [],
+                selected: [f.initial[0].id],
+                done: true,
+                gaps: [],
+              };
+      return {
+        value,
+        model: "scripted-version",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      };
+    },
+  };
+  const result = await createMessageMemoryAgent({ retrieval: f.service, api })({
+    identity: userIdentity(),
+    message: "How did diagnostic retention change?",
+    history: [{ sender: "peer", message: "Production logs" }],
+  });
+  assert.equal(result.status, "ready");
+  assert.equal(decisions.length, 3);
+  assert.equal(decisions[1].transcript[0].action.query, "logs");
+  assert.deepEqual(
+    new Set(result.evidence.map((e) => e.id)),
+    new Set([f.initial[0].id, f.replacement[0].id, f.conflict[0].id]),
+  );
+  assert.equal(
+    result.evidence.find((e) => e.id === f.initial[0].id).status,
+    "superseded",
+  );
+  assert.equal(result.metrics.model, "scripted-version");
+  assert.ok(
+    f.calls.every((c) => c.ownerId === OWNER && c.projectId === PROJECT),
+  );
+  for (const e of result.evidence)
+    for (const cite of e.citations)
+      assert.equal(
+        f.authoritative
+          .get(cite.revision_id)
+          .markdown.slice(cite.start, cite.end),
+        cite.quote,
+      );
+});
+
+test("incoming source search recovers evidence outside the first page and labels source-only context", async () => {
+  const { createMessageMemoryAgent } = await import(
+    "../../src/server/message-memory/agent.mjs"
+  );
+  const f = buildFixture();
+  const raw = normalizeSourceEnvelope(
+    sourceEnvelope(
+      { ownerId: OWNER, projectId: PROJECT },
+      20,
+      `${"背景 ".repeat(1800)}\nRunbook restart requires approval.`,
+    ),
+    { ownerId: OWNER, projectId: PROJECT },
+  );
+  f.authoritative.set(raw.revisionId, raw);
+  f.sourceReader.search = async ({ ownerId, projectId, query }) => {
+    assert.equal(ownerId, OWNER);
+    assert.equal(projectId, PROJECT);
+    assert.equal(query, "restart");
+    return [raw.revisionId];
+  };
+  const api = {
+    model: "scripted",
+    async structured(_stage, prompt) {
+      const data = JSON.parse(prompt);
+      return {
+        model: "scripted",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        value: data.transcript.length
+          ? {
+              actions: [],
+              selected: [data.transcript[0].result.results[0].evidence_id],
+              done: true,
+              gaps: [],
+            }
+          : {
+              actions: [{ op: "sources", query: "restart" }],
+              selected: [],
+              done: false,
+              gaps: [],
+            },
+      };
+    },
+  };
+  const result = await createMessageMemoryAgent({ retrieval: f.service, api })({
+    identity: userIdentity(),
+    message: "How do we restart?",
+  });
+  assert.equal(result.status, "ready");
+  assert.equal(result.evidence[0].status, "unprocessed_source");
+  const cite = result.evidence[0].citations[0];
+  assert.ok(cite.start > 4000);
+  assert.equal(raw.markdown.slice(cite.start, cite.end), cite.quote);
+  assert.match(cite.quote, /restart requires approval/);
+});
+
+test("incoming retrieval distinguishes failed searches, unknown IDs, stale generations, and completed abstention", async () => {
+  const { boundedHistory, createMessageMemoryAgent } = await import(
+    "../../src/server/message-memory/agent.mjs"
+  );
+  assert.equal(
+    boundedHistory(
+      Array.from({ length: 10 }, (_, i) => ({
+        sender: "peer",
+        message: String(i),
+      })),
+    ).length,
+    4,
+  );
+  assert.deepEqual(boundedHistory([{ message: "x".repeat(8193) }]), []);
+  for (const scenario of [
+    "no_match",
+    "missing_search",
+    "bad_action",
+    "foreign_id",
+    "generation",
+    "tampered",
+    "deadline",
+    "partial",
+    "limit",
+  ]) {
+    const f = buildFixture();
+    let calls = 0;
+    const api = {
+      model: "scripted",
+      async structured() {
+        calls++;
+        if (scenario === "deadline") return new Promise(() => {});
+        if (scenario === "partial" && calls === 2)
+          throw new Error("provider unavailable");
+        if (scenario === "generation") {
+          f.adapter.load = async () => ({
+            ledger: { ...f.ledger, version: f.ledger.version + 1 },
+            projection: { ...f.projection, generation: f.ledger.version + 1 },
+          });
+        }
+        if (scenario === "tampered")
+          f.authoritative.get(f.initial[1].sourceId).markdown += "tampered";
+        return {
+          model: "scripted",
+          usage: { input_tokens: 1, output_tokens: 1 },
+          value: {
+            actions:
+              scenario === "missing_search"
+                ? []
+                : scenario === "bad_action"
+                  ? [{ op: "write" }]
+                  : ["partial", "tampered"].includes(scenario)
+                    ? [
+                        {
+                          op: "read",
+                          target_type: "claim",
+                          target_id: f.initial[1].id,
+                        },
+                      ]
+                    : [{ op: "search", query: "unrelatedxyz" }],
+            selected:
+              scenario === "foreign_id"
+                ? ["claim:foreign"]
+                : scenario === "partial"
+                  ? [f.initial[1].id]
+                  : [],
+            done: !["partial", "limit"].includes(scenario),
+            gaps: [],
+          },
+        };
+      },
+    };
+    const result = await createMessageMemoryAgent({
+      retrieval: f.service,
+      api,
+      timeoutMs: scenario === "deadline" ? 10 : 5000,
+      maxCalls: scenario === "limit" ? 1 : 6,
+    })({ identity: userIdentity(), message: "context please" });
+    assert.equal(
+      result.status,
+      scenario === "no_match"
+        ? "no_match"
+        : scenario === "partial"
+          ? "partial"
+          : "unavailable",
+      scenario,
+    );
+    if (scenario !== "partial")
+      assert.equal(result.evidence.length, 0, scenario);
+  }
+});

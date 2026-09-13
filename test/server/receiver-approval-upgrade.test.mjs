@@ -102,7 +102,11 @@ test("approval upgrade rejects unbound pending pairings and preserves connected 
       ssl,
       output: { write() {} },
     }),
-    [migration, "202609090003_conversations.sql"],
+    [
+      migration,
+      "202609090003_conversations.sql",
+      "202609130001_message_memory.sql",
+    ],
   );
   assert.deepEqual(
     await runMigrations({
