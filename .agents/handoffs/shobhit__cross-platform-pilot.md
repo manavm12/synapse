@@ -4,7 +4,7 @@
 - Human owner: `Shobhit Goel`
 - Active agent: `Codex`
 - Base reviewed: `61049f5` (`origin/main`)
-- Last checkpoint: `uncommitted`
+- Last implementation checkpoint: `15175f5` (matrix and documentation)
 - Status: `active`
 
 ## Goal
@@ -33,6 +33,8 @@ the established Mac-to-Mac acceptance behavior and preserving safe evidence.
   receiver connection; no live remote message has been sent.
 - Installed the pinned dependencies with Node 24/npm 11; audit reported zero
   vulnerabilities.
+- Added and linked `docs/cross-platform-pilot.md`, including device directions,
+  preconditions, test scenarios, pass criteria, and a privacy-safe evidence format.
 
 ## Decisions and invariants
 
@@ -51,16 +53,18 @@ the established Mac-to-Mac acceptance behavior and preserving safe evidence.
 - `npm ci --ignore-scripts` — passed; 103 packages, zero vulnerabilities.
 - Windows setup helper `inspect` — returned `connections: []`; local enrollment
   is a live-test prerequisite, not silently manufactured.
+- `npm run format:check` — passed, 159 files.
+- `npm run validate:plugin` — passed.
+- `git diff --check` — passed.
 
 ## Remaining work
 
-1. Commit the acceptance matrix and link it from current conversation docs.
-2. Verify the deployed backend/schema and exact plugin builds before any message.
-3. Enroll the consenting Windows and Mac participants through the installed
+1. Verify the deployed backend/schema and exact plugin builds before any message.
+2. Enroll the consenting Windows and Mac participants through the installed
    setup skill and require `conversations_ready` on each device.
-4. Execute and record Mac-to-Windows, Windows-to-Mac, and Windows-to-Windows.
-5. Reproduce and fix only defects actually exposed by those runs, with tests.
-6. Run the repository release gate, update this handoff, and open a focused PR.
+3. Execute and record Mac-to-Windows, Windows-to-Mac, and Windows-to-Windows.
+4. Reproduce and fix only defects actually exposed by those runs, with tests.
+5. Run the repository release gate, update this handoff, and open a focused PR.
 
 ## Risks or blockers
 
