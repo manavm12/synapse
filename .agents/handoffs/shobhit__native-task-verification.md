@@ -2,154 +2,103 @@
 
 - Branch: `shobhit/native-task-verification`
 - Human owner: `Shobhit Goel`
-- Active agent: `Codex` -- resumed with the user's explicit authorization to
-  complete the minimal metered live verification. Do not share this branch or
-  worktree until it is unassigned again.
+- Active agent: `unassigned`
 - Base reviewed: `027c513` (main, includes merged PR #18)
-- Last checkpoint: `d56920b` (includes an intentional WIP diagnostic commit
-  in `dispatch.mjs` -- see "Risks or blockers", not for merge as-is)
-- Status: `active` -- usage should have reset and the user explicitly authorized
-  completing the live native-task verification.
+- Last implementation checkpoint: `0babc4f` (all code and test changes pushed;
+  this handoff is finalized in the branch HEAD)
+- Status: `ready-for-review`
 
 ## Goal
 
-PR #18 proved Synapse's plugin **hooks execute** correctly on Windows (a
-`commandWindows` PowerShell launcher, verified live with an unconditional
-marker-file write). That is a different, narrower claim than "Synapse can
-receive and deliver a task on Windows." This workstream verifies the
-remaining, still-open piece: does the native app-tools pipe (`codex_app`
-namespace: `list_projects`, `create_thread`, `send_message_to_thread`) that
-`dispatch.mjs`/`native-router.mjs` depend on for actually creating a new
-Codex task also work correctly when invoked from a Windows-launched hook.
-
-This is a live-verification task, not primarily a coding task, though real
-bugs are likely to surface the same way they did in the hook-execution
-investigation (see `.agents/handoffs/shobhit__windows-test-fixes.md` in git
-history, now on `main`, for that full investigation and its methodology).
-
-## File ownership
-
-- `plugins/synapse/lib/dispatch.mjs` -- currently has TEMPORARY diagnostic
-  code at the top of `dispatchPrompt` (see "Remaining work" item 1). Must be
-  removed before this branch merges.
-- `src/client/cli.mjs`, `plugins/synapse/server/control.mjs`,
-  `scripts/migrate.mjs` -- fixed (see "Completed"), already committed and
-  pushed (`b554593`), no longer need work.
-- Likely candidates once the actual native-pipe investigation resumes:
-  `plugins/synapse/lib/native-router.mjs`, `app-tools-client.mjs`,
-  `native-reconcile.mjs`, `hooks/bind-child.mjs`
-
-## Decisions and invariants (carried over from the prior investigation)
-
-- **Each `codex exec` call spends real, metered usage/credits against the
-  connected Codex account.** The user explicitly authorized proceeding with
-  this exact verification in this conversation, but don't spend it
-  carelessly -- do free/code-only research first, form a specific hypothesis,
-  then run the minimum number of live tests needed to confirm or refute it.
-- Prefer proving things conclusively (an unconditional, unambiguous side
-  effect) over "no visible error," which was proven insufficient last time.
-- `--dangerously-bypass-hook-trust` is documented by Codex's own CLI as safe
-  for automation that has read the hook source; use it, don't work around
-  hook trust some other way.
-- The real Windows `codex.exe` on this machine:
-  `C:\Users\DELL\AppData\Local\OpenAI\Codex\bin\7ac07f4ce733f89a\codex.exe`
-  (set as `SYNAPSE_CODEX_BIN` if reinstalling the dev plugin).
-- A disposable dev plugin build (`synapse@synapse-dev-81bbd29df3a5`) is
-  already installed in the real Codex app from the prior investigation, and
-  a throwaway registered test project exists at
-  `C:\Users\DELL\AppData\Local\Temp\synapse-native-test-repo` (alias
-  `synapselivetest` in `~/.synapse/host.sqlite`). Reuse both rather than
-  creating new ones, unless the plugin needs rebuilding for this branch's
-  changes (it will, once anything in `plugins/synapse` changes here).
-- Do not use `git stash` in this repo's worktree setup (shared stash stack).
+Verify that Synapse can create and run a real Codex task through the native
+app-tools pipe on Windows, fix any bugs exposed by that test, and leave the
+installed development plugin free of temporary diagnostics.
 
 ## Completed
 
-- Read `dispatch.mjs`/`native-router.mjs`/`app-tools-client.mjs`. The chain
-  is: `dispatchPrompt()` immediately returns `null` (no-ops entirely) unless
-  `env.CODEX_APP_TOOLS_PIPE_PATH` is set -> if set, eventually calls
-  `native-router.mjs`'s `runReservedDelivery` -> `new AppToolsClient()`
-  (no explicit `pipePath`, so it reads `CODEX_APP_TOOLS_PIPE_PATH` itself
-  too) -> `client.callTool("create_thread", ...)`. **Whether
-  `CODEX_APP_TOOLS_PIPE_PATH` is actually set when Codex spawns a Windows
-  hook via `commandWindows` is the single biggest unknown** -- this is
-  distinct from and untested by the prior hook-execution investigation
-  (that proof used `prompt-memory.mjs`, which never reads this variable).
-- Added a temporary unconditional diagnostic to the top of `dispatchPrompt`
-  (writes `~/.synapse/dispatch-diagnostic.txt` with `hook_event_name`,
-  whether `CODEX_APP_TOOLS_PIPE_PATH` is set, and `cwd`) -- **still present,
-  not yet reverted**, see "Risks or blockers".
-- **Found and fixed a real, separate, significant bug while setting up the
-  test**: `npm run synapse -- send ...` silently did nothing on Windows
-  (exit 0, no output, nothing queued). Root cause: `src/client/cli.mjs`
-  (plus `plugins/synapse/server/control.mjs` and `scripts/migrate.mjs`) used
-  the classic broken idiom `import.meta.url === \`file://${process.argv[1]}\``
-  to detect "is this the directly-executed script" -- this is well-known
-  broken on Windows (`import.meta.url` is a proper encoded `file:///C:/...`
-  URL; `process.argv[1]` is a raw `C:\...` path; naive concatenation can
-  never match), so `main()` was simply never called for **any** CLI command
-  on Windows (`send`, `doctor`, `setup`, `admin`, `recover` -- not just
-  `send`). Fixed all three using `process.argv[1] && import.meta.url ===
-  pathToFileURL(process.argv[1]).href`, matching the pattern already
-  correct in `scripts/backfill-memory.mjs` elsewhere in this codebase.
-  Verified live: `send` now actually queues a message. Committed and pushed
-  as `b554593`, separately from the still-open diagnostic work above.
-  Full suite still 284/0/12 -- no existing test caught this bug, because
-  tests call `main()` directly as a function rather than through a real
-  subprocess, bypassing the guard entirely. That's a real coverage gap,
-  not fixed here.
-- Successfully: reinstalled the dev plugin build with the diagnostic,
-  queued a real message via the now-fixed CLI against the registered
-  throwaway project, then ran `codex exec --cd <repo>
-  --dangerously-bypass-hook-trust --json "..."` to trigger it.
-  **Result: hit the account's Codex usage limit again** before the turn
-  even started processing ("You've hit your usage limit... try again at
-  9:09 PM"). No diagnostic file was written -- the turn appears to have
-  failed early enough that `UserPromptSubmit` hooks never ran at all for
-  it. This attempt produced zero information either way; it is not a
-  negative result, just a non-result.
+- Proved a Windows `UserPromptSubmit` hook receives a real
+  `CODEX_APP_TOOLS_PIPE_PATH` (`\\.\pipe\...`), so native routing is available
+  from `codex exec`; the earlier concern that hooks might be TUI-only was false.
+- Found and fixed three Windows-broken direct-entry guards in
+  `src/client/cli.mjs`, `plugins/synapse/server/control.mjs`, and
+  `scripts/migrate.mjs`. They now compare `import.meta.url` with
+  `pathToFileURL(process.argv[1]).href` instead of concatenating a raw Windows
+  path. The real CLI now executes and queues sends on Windows (`b554593`).
+- Found and fixed a second real Windows bug in
+  `plugins/synapse/lib/native-router.mjs`: Codex reported the saved project as
+  `c:\Shobhit Goel\...`, while Synapse stored `C:\Shobhit Goel\...`.
+  Project selection now compares canonical paths case-insensitively on Windows,
+  including `\\?\` long-path prefixes, while preserving POSIX case sensitivity
+  (`d351f1c`).
+- Added subprocess coverage for the three executable entry points and regression
+  coverage for Windows saved-project path matching. Updated the stale native-pipe
+  comment in `app-tools-client.mjs` (`947590f`).
+- Increased only the setup-helper test deadline from three to five seconds.
+  PowerShell startup exceeded three seconds once under concurrent Windows load;
+  the production timeout is unchanged (`0babc4f`).
+- Removed the temporary `dispatch.mjs` diagnostic from the branch. Reinstalled
+  the clean development plugin as `synapse@synapse-dev-b699c2d4687a`, content
+  hash `b1fdc910d927e84ab25120bf11765e0e49b05152f3f099f10242a50578eac86e`,
+  deleted `C:\Users\DELL\.synapse\dispatch-diagnostic.txt`, and verified the
+  installed `dispatch.mjs` contains no diagnostic code.
 
-## Remaining work
+## Live Windows proof
 
-1. **Get explicit user confirmation before any further live `codex exec`
-   calls** -- the account hit its usage limit again this session (reset
-   "9:09 PM" per the error, timezone unconfirmed). Do not retry live tests
-   without checking in first.
-2. Once usage is available again, repeat the exact same live test (queue a
-   message against `C:\Users\DELL\AppData\Local\Temp\synapse-native-test-repo`,
-   run `codex exec --dangerously-bypass-hook-trust` there, check
-   `~/.synapse/dispatch-diagnostic.txt`). Read the diagnostic to see whether
-   `CODEX_APP_TOOLS_PIPE_PATH` is set:
-   - If unset: this confirms `dispatchPrompt` can never proceed via
-     `codex exec` regardless of platform -- the native-pipe question would
-     then need testing through the interactive TUI or the real desktop app
-     instead of `codex exec`, similar to how the interactive TUI was needed
-     to fully settle the earlier hook-execution question.
-   - If set: extend the diagnostic further down the call chain (before/after
-     the `AppToolsClient`/`create_thread` call) to see exactly how far
-     execution gets, and whether a real native task actually appears.
-3. Once the question is answered, **remove the temporary diagnostic from
-   `dispatch.mjs`** (verify with `git diff`) before committing whatever real
-   fix (if any) is needed.
-4. Update this handoff and push before pausing.
+- Queued job: `aed7d95a-f91c-4688-8326-a643ee80728a`
+- Channel: `windows-native-e2e-20260913`
+- Native delivery: `cfecb0e9-8ea9-401c-84f0-489fe4cd28cc`
+- Temporary task ID returned by `create_thread`:
+  `client-new-thread:b16a741a-3d9c-49b7-8f82-203cb4fd4436`
+- Permanent Codex task ID resolved from desktop state:
+  `01a098c3-1d06-7643-905a-1d1616577834`
+- The created task ran in a Codex worktree, received the exact queued Synapse
+  prompt, made no file changes, and completed with `SYNAPSE_NATIVE_PIPE_OK`.
+
+This proves the complete Windows native path used by the MVP: prompt hook ->
+local inbox reservation -> saved-project selection -> native `create_thread` ->
+real child task execution.
 
 ## Verification
 
-- `npm run lint`, `npm run format:check`, `npm test` all pass (284/0/12)
-  with the entry-point fix in place (commit `b554593`).
-- The `dispatch.mjs` diagnostic itself is unverified/inconclusive -- see
-  "Completed" above.
+- `npm test`: 298 total, 286 passed, 0 failed, 12 skipped. The skips are explicit
+  platform/PostgreSQL integration cases unavailable on this Windows host.
+- Focused entry-point and native-router tests: 20 passed.
+- `npm run lint`: passed.
+- `npm run format:check`: passed.
+- `npm run validate:plugin`: passed.
+- `npm audit`: 0 vulnerabilities.
+- `git diff --check`: passed.
+- `npm run check`: Biome and every runnable test passed, but the aggregate command
+  correctly exited nonzero because `TEST_DATABASE_URL` is absent. The skipped
+  PostgreSQL suites leave line coverage at 80.16%, below the 85% release gate.
+  Do not report the database-backed release gate as passed until CI or a fresh
+  disposable PostgreSQL database runs it.
 
-## Risks or blockers
+## Cross-platform scope
 
-- **`dispatch.mjs` currently has temporary diagnostic code committed in
-  `d56920b`.** It is intentionally pushed for resumability but must be removed
-  before this branch is proposed for merge.
-- **The Codex account is at its usage limit** (reported reset ~9:09 PM).
-  Get explicit confirmation before spending more live-test budget.
-- A disposable dev plugin build (`synapse@synapse-dev-b699c2d4687a`, from
-  this branch/worktree) is installed in the real Codex app, replacing the
-  prior investigation's build (which was removed via
-  `codex plugin remove synapse@synapse-dev-81bbd29df3a5` to free the
-  conflict). Clean up when this workstream concludes.
-- No production/live server changes were made.
+- Windows native task creation is now proven live end-to-end.
+- Windows DPAPI, Task Scheduler, and path/URL/IPC behavior have automated coverage.
+- macOS and Linux implementations and platform selection remain covered by the
+  repository tests; their code paths were not changed by this workstream.
+- No live macOS or Linux host was exercised here, so this handoff does not claim
+  live acceptance on those platforms. Required CI and any live host smoke tests
+  remain review/merge gates, not hidden failures.
+
+## Remaining work
+
+1. Open a focused pull request to `main` and let required CI/security checks run.
+2. Run the PostgreSQL-backed `npm run check` gate in CI or against a fresh
+   disposable test database; expect zero skipped tests before merge.
+3. After the clean plugin install, a fresh Codex task must observe the new build's
+   hooks before setup reports receiving as verified. Existing credentials,
+   destinations, and queues were preserved.
+
+## Risks and retained test artifacts
+
+- The local test inbox retains the accepted verification job above, and the real
+  child task remains in Codex history. They were not destructively rewritten.
+- The clean plugin build is a local development installation, not a production
+  release. No production server, credentials, migrations, or remote messages were
+  changed.
+- Each live `codex exec` spends account usage. The conclusive proof is complete;
+  do not repeat it unless a future code change requires a new acceptance test.
