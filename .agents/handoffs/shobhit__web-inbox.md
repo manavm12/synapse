@@ -7,8 +7,9 @@
 - Base inherited from Claude: `7530d65`
 - Base reviewed at takeover: `40c2a3f` (confirmed both local `HEAD` and
   `origin/shobhit/web-inbox` at this commit before editing)
-- Status: `ready-for-pr` -- all local checks pass; opening the PR to `main` and
-  watching Linux CI is the only remaining step.
+- Status: `pr-open-ci-green` -- [PR #26](https://github.com/manavm12/synapse/pull/26)
+  is open against `main` at commit `5475852`; `verify`, `database`, and
+  `secrets` all passed. Waiting on human review/merge.
 
 ## Goal
 
@@ -173,11 +174,19 @@ environment is available for a genuine end-to-end pass.
 ## Linux CI
 
 - Checked `origin/shobhit/web-inbox` at `40c2a3f` (the commit before this
-  session's changes): only the `secrets` check has run
+  session's changes): only the `secrets` check had run
   (`.github/workflows/security.yml` triggers on any push). `.github/workflows/ci.yml`
   (`verify`) and `.github/workflows/cloud-memory.yml` (`database`) only trigger
-  on `pull_request` to `main` or `push` to `main`, so neither has run against
-  this branch yet -- opening the PR below is what triggers them.
+  on `pull_request` to `main` or `push` to `main`, so neither had run against
+  this branch until the PR below was opened.
+- Opened [PR #26](https://github.com/manavm12/synapse/pull/26) from
+  `shobhit/web-inbox` (`5475852`) to `main`. All required checks are **green**:
+  `verify` passed (48s), `database` passed (1m4s, this is the PostgreSQL-backed
+  gate this sandbox could not run locally), `secrets` passed on both the push
+  and PR triggers (7s each), and CodeRabbit reported "Review skipped: manual
+  review required for this OSS repository" (not a failure -- this repo's
+  CodeRabbit config requires a human to invoke it). This is genuine Linux CI
+  confirmation, run by GitHub Actions, not a claim made from local results.
 - Not claiming macOS validation: no Mac was used in this session. The
   implementation has no OS-specific web-inbox code paths (confirmed by reading
   `inbox.mjs`/`inbox.js`/`inbox-view.js`; the only cross-platform surface in
@@ -185,10 +194,9 @@ environment is available for a genuine end-to-end pass.
 
 ## Next steps
 
-1. Open a focused PR from `shobhit/web-inbox` to `main` and let `CI / verify`,
-   `database`, and `Security / secrets` run for real; address any failures
-   before merge (none are expected given the local results above, but CI has
-   a real PostgreSQL service this sandbox lacks).
+1. [PR #26](https://github.com/manavm12/synapse/pull/26) is open with all CI
+   green; it needs human review/merge approval (CodeRabbit requires a manual
+   invocation on this repo, so that step is still pending a person).
 2. After merge, a genuine live smoke test against a real Supabase project
    (magic-link sign-in) and real Postgres-backed data remains outstanding --
    the browser matrix above proves the UI/API contract works correctly, not
