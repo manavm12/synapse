@@ -158,3 +158,7 @@ Record both plugin versions, receiver readiness results, automatic binding,
 native task counts, busy-turn ordering, and the final round trip. Keep native
 IDs and screenshots containing private task content out of cloud message bodies.
 The live acceptance gate is pending until that evidence has been collected.
+
+Use the [cross-platform conversation pilot](cross-platform-pilot.md) for the
+Mac-to-Windows, Windows-to-Mac, and Windows-to-Windows acceptance matrix and its
+safe evidence boundary.

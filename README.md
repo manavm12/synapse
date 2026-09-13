@@ -9,6 +9,8 @@ task and replies return to the sender's original task. The supervised local
 receiver continues the exchange while Codex is open, queuing messages behind
 active turns. Local paths and native task IDs stay local. See
 [Conversations](docs/conversations.md) for compatibility and the live rollout gate.
+The [cross-platform pilot](docs/cross-platform-pilot.md) defines the remaining
+Windows-involved two-account acceptance matrix.
 
 This is an early private alpha. Cloud memory, local SQLite state, and queued task
 content are sensitive. Feature availability requires the matching server
