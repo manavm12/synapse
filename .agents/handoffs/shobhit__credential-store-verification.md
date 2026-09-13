@@ -5,7 +5,9 @@
 - Active agent: `unassigned`
 - Base reviewed: `a721d6b` (main, includes merged PR #18, #22, #21)
 - Last checkpoint: `6695ab0`
-- Status: `ready-for-review`
+- Status: `ready-to-merge` -- [PR #23](https://github.com/manavm12/synapse/pull/23)
+  has database/secrets/verify all green; only CodeRabbit's non-blocking
+  review is still finishing. Waiting on the user's go-ahead to merge.
 
 ## Goal
 
