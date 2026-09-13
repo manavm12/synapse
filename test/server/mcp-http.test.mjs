@@ -84,7 +84,12 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       };
     },
     async getAccount(userId) {
-      return accounts.get(userId) ?? null;
+      const account = accounts.get(userId);
+      if (account?.simulateDisabledLookup) throw new AccountDisabledError();
+      if (account?.simulateUnavailableLookup) {
+        throw new Error("account lookup exploded");
+      }
+      return account ?? null;
     },
     async registerAccount(userId, account) {
       if (account.username === "taken") throw new UsernameTakenError();
@@ -144,7 +149,10 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
         receiverActionNeeded: true,
       };
     },
-    async listConversations(_user, { before }) {
+    async listConversations(user, { before }) {
+      if (accounts.get(user.userId)?.simulateListFailure) {
+        throw new Error("listConversations exploded");
+      }
       if (before) return { conversations: [], next: null };
       return {
         conversations: [
@@ -170,6 +178,9 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       };
     },
     async getConversation(_user, { conversationId }) {
+      if (conversationId === "00000000-0000-4000-8000-0000000000ff") {
+        throw new Error("getConversation exploded");
+      }
       if (conversationId !== "99999999-9999-4999-8999-999999999999") {
         throw new MessagingError("not_found", "conversation unavailable", {
           status: 404,
@@ -200,7 +211,10 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
         next_sequence: null,
       };
     },
-    async listInbox(_user, { before } = {}) {
+    async listInbox(user, { before } = {}) {
+      if (accounts.get(user.userId)?.simulateListFailure) {
+        throw new Error("listInbox exploded");
+      }
       if (before) return { messages: [], next: null };
       return {
         messages: [
@@ -278,7 +292,13 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       };
     },
   };
-  const logger = { info() {}, error() {} };
+  const logs = [];
+  const logger = {
+    info() {},
+    error(event, data) {
+      logs.push({ event, data });
+    },
+  };
   const application = await createApplication({
     config,
     database,
@@ -307,6 +327,7 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
     saves,
     sentMessages,
     accounts,
+    logs,
   };
 }
 
@@ -1164,6 +1185,21 @@ test("web inbox routes require a signed-in account and map data to the documente
   assert.equal(script.status, 200);
   assert.match(script.headers.get("content-type"), /javascript/);
   assert.match(script.headers.get("cache-control"), /max-age=3600/);
+  const scriptSource = await script.text();
+  const staticImports = [...scriptSource.matchAll(/from\s+"(\.\/[^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  assert.equal(staticImports.length >= 2, true);
+  for (const specifier of staticImports) {
+    const assetUrl = new URL(specifier, `${baseUrl}/assets/inbox.js`);
+    const imported = await fetch(assetUrl);
+    assert.equal(
+      imported.status,
+      200,
+      `inbox.js imports "${specifier}", which must be servable as a real browser module resolves it, but ${assetUrl} returned ${imported.status}`,
+    );
+    assert.match(imported.headers.get("content-type"), /javascript/);
+  }
   const styles = await fetch(`${baseUrl}/assets/inbox.css`);
   assert.equal(styles.status, 200);
   assert.match(styles.headers.get("content-type"), /text\/css/);
@@ -1243,6 +1279,33 @@ test("web inbox routes require a signed-in account and map data to the documente
   );
   assert.equal(conversationBody.next_sequence, null);
 
+  const badConversationDetailQuery = await fetch(
+    `${baseUrl}/inbox/conversations/99999999-9999-4999-8999-999999999999?limit=0`,
+    { headers },
+  );
+  assert.equal(badConversationDetailQuery.status, 422);
+  assert.deepEqual(await badConversationDetailQuery.json(), {
+    error: "invalid_request",
+  });
+
+  const badAfterSequence = await fetch(
+    `${baseUrl}/inbox/conversations/99999999-9999-4999-8999-999999999999?after_sequence=-1`,
+    { headers },
+  );
+  assert.equal(badAfterSequence.status, 422);
+  assert.deepEqual(await badAfterSequence.json(), {
+    error: "invalid_request",
+  });
+
+  const conversationLookupFailure = await fetch(
+    `${baseUrl}/inbox/conversations/00000000-0000-4000-8000-0000000000ff`,
+    { headers },
+  );
+  assert.equal(conversationLookupFailure.status, 503);
+  assert.deepEqual(await conversationLookupFailure.json(), {
+    error: "inbox_unavailable",
+  });
+
   const messages = await fetch(`${baseUrl}/inbox/messages`, { headers });
   assert.equal(messages.status, 200);
   const messagesBody = await messages.json();
@@ -1260,6 +1323,12 @@ test("web inbox routes require a signed-in account and map data to the documente
   assert.equal(badMessagesCursor.status, 422);
   assert.deepEqual(await badMessagesCursor.json(), { error: "invalid_cursor" });
 
+  const badMessagesLimit = await fetch(`${baseUrl}/inbox/messages?limit=0`, {
+    headers,
+  });
+  assert.equal(badMessagesLimit.status, 422);
+  assert.deepEqual(await badMessagesLimit.json(), { error: "invalid_request" });
+
   const badStatus = await fetch(
     `${baseUrl}/inbox/messages?status=not-a-public-status`,
     { headers },
@@ -1275,4 +1344,61 @@ test("web inbox routes require a signed-in account and map data to the documente
   assert.deepEqual(await unexpectedParameter.json(), {
     error: "invalid_request",
   });
+});
+
+test("web inbox routes surface a disabled account without leaking server detail", async (t) => {
+  const { baseUrl, accounts } = await fixture(t);
+  accounts.set("66666666-6666-4666-8666-666666666666", {
+    simulateDisabledLookup: true,
+  });
+  const headers = { authorization: "Bearer session" };
+
+  for (const path of [
+    "/inbox/conversations",
+    "/inbox/conversations/99999999-9999-4999-8999-999999999999",
+    "/inbox/messages",
+  ]) {
+    const response = await fetch(`${baseUrl}${path}`, { headers });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "account_disabled" });
+  }
+});
+
+test("web inbox routes report account_unavailable and log the failure when account lookup throws", async (t) => {
+  const { baseUrl, accounts, logs } = await fixture(t);
+  accounts.set("66666666-6666-4666-8666-666666666666", {
+    simulateUnavailableLookup: true,
+  });
+  const headers = { authorization: "Bearer session" };
+
+  const response = await fetch(`${baseUrl}/inbox/conversations`, {
+    headers,
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "account_unavailable" });
+  assert.equal(
+    logs.some((entry) => entry.event === "inbox_account_lookup_failed"),
+    true,
+  );
+});
+
+test("web inbox conversation and message lists report inbox_unavailable when the database fails", async (t) => {
+  const { baseUrl, accounts } = await fixture(t);
+  accounts.set("66666666-6666-4666-8666-666666666666", {
+    username: "tester",
+    projectId: "22222222-2222-4222-8222-222222222222",
+    projectAlias: "synapse",
+    simulateListFailure: true,
+  });
+  const headers = { authorization: "Bearer session" };
+
+  const conversations = await fetch(`${baseUrl}/inbox/conversations`, {
+    headers,
+  });
+  assert.equal(conversations.status, 503);
+  assert.deepEqual(await conversations.json(), { error: "inbox_unavailable" });
+
+  const messages = await fetch(`${baseUrl}/inbox/messages`, { headers });
+  assert.equal(messages.status, 503);
+  assert.deepEqual(await messages.json(), { error: "inbox_unavailable" });
 });

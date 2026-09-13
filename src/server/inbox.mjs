@@ -173,6 +173,15 @@ export function installInboxRoutes(
       dotfiles: "allow",
     });
   });
+  app.get("/assets/inbox-view.js", (_req, res) => {
+    res.set("Cache-Control", "public, max-age=3600");
+    res.sendFile(
+      fileURLToPath(new URL("./public/inbox-view.js", import.meta.url)),
+      {
+        dotfiles: "allow",
+      },
+    );
+  });
   app.get("/assets/inbox.css", (_req, res) => {
     res.set("Cache-Control", "public, max-age=3600");
     res.sendFile(
