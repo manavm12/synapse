@@ -332,6 +332,34 @@ export function installReceiverRoutes(
     }
   });
 
+  app.post(
+    "/receiver/messages/:message_id/context",
+    receiver,
+    async (req, res) => {
+      if (
+        !UUID.test(req.params.message_id) ||
+        (req.body && Object.keys(req.body).length)
+      ) {
+        res.status(422).json({ error: "invalid_request" });
+        return;
+      }
+      if (!config.messageMemoryEnabled) {
+        res.json({ status: "unavailable", gaps: ["disabled"] });
+        return;
+      }
+      try {
+        res.json(
+          await database.prepareMessageMemory(
+            req.receiverCredential,
+            req.params.message_id,
+          ),
+        );
+      } catch (error) {
+        respondError(res, error);
+      }
+    },
+  );
+
   app.post("/receiver/events", receiver, async (req, res) => {
     const parsed = eventsInput.safeParse(req.body);
     if (!parsed.success) {

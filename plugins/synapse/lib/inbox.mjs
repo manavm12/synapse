@@ -21,7 +21,7 @@ const ACTIVE_STATUSES = "'routing', 'accepted', 'uncertain'";
 const MAX_TASK_BYTES = 64 * 1024;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export function inboxPath(env = process.env) {
   return resolve(
@@ -198,6 +198,7 @@ export function openInbox(path = inboxPath()) {
       ["claim_token", "TEXT"],
       ["cloud_lease_expires_at", "TEXT"],
       ["native_mutation_state", "TEXT"],
+      ["native_prompt", "TEXT"],
       ["protocol_version", "INTEGER NOT NULL DEFAULT 1"],
       ["disposition", "TEXT NOT NULL DEFAULT 'continue'"],
       ["in_reply_to_message_id", "TEXT"],
@@ -301,7 +302,9 @@ function deliveryFromRow(
         : row.task;
   const receipt =
     row.source === "cloud" ? `<!-- ${deliveryMarker} -->\n\n` : "";
-  const nativePrompt = `${receipt}${nativeBody}\n\n<!-- ${deliveryMarker} -->`;
+  const nativePrompt =
+    row.native_prompt ??
+    `${receipt}${nativeBody}\n\n<!-- ${deliveryMarker} -->`;
   if (Buffer.byteLength(nativePrompt, "utf8") > MAX_TASK_BYTES) {
     throw new Error("Rendered native prompt exceeds the 64 KiB limit");
   }
@@ -320,6 +323,7 @@ function deliveryFromRow(
     channelId: row.channel_id,
     task: row.task,
     nativePrompt,
+    nativePromptFrozen: row.native_prompt != null,
     projectRoot: row.project_root,
     source: row.source,
     protocolVersion: row.protocol_version,
@@ -1334,7 +1338,7 @@ export function getReservedDelivery(
 }
 
 export function markNativeMutationIssued(
-  { jobId, deliveryId, receiverIdentity = null },
+  { jobId, deliveryId, receiverIdentity = null, nativePrompt = null },
   { path = inboxPath(), now = Date.now } = {},
 ) {
   requireId(jobId, "job ID");
@@ -1358,6 +1362,18 @@ export function markNativeMutationIssued(
           `Cloud job ${jobId} has no durable native mutation intent`,
         );
       }
+      if (
+        nativePrompt !== null &&
+        (typeof nativePrompt !== "string" ||
+          Buffer.byteLength(nativePrompt) > MAX_TASK_BYTES)
+      )
+        throw new Error("Invalid native prompt");
+      if (
+        job.native_prompt !== null &&
+        nativePrompt !== null &&
+        job.native_prompt !== nativePrompt
+      )
+        throw new Error("Native attempt prompt cannot change");
       const channel = database
         .prepare("SELECT * FROM channels WHERE id=?")
         .get(job.channel_id);
@@ -1371,9 +1387,9 @@ export function markNativeMutationIssued(
       }
       trackResponse(database, job, channel.thread_id, now());
       database
-        .prepare(`UPDATE jobs SET native_mutation_state = 'issued', updated_at = ?
+        .prepare(`UPDATE jobs SET native_mutation_state = 'issued', native_prompt=COALESCE(native_prompt,?), updated_at = ?
           WHERE id = ?`)
-        .run(now(), jobId);
+        .run(nativePrompt, now(), jobId);
       return { jobId, source: "cloud", state: "issued" };
     });
   } finally {

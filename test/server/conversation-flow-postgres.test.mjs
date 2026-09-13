@@ -23,6 +23,13 @@ import { ReceiverWorker } from "../../plugins/synapse/lib/receiver-worker.mjs";
 import { runMigrations } from "../../scripts/migrate.mjs";
 import { createApplication } from "../../src/server/app.mjs";
 import { createDatabase } from "../../src/server/database.mjs";
+import { createMemoryLedgerAdapter } from "../../src/server/memory-organizer/storage.mjs";
+import {
+  createMemoryRetrievalService,
+  createMemorySourceReader,
+} from "../../src/server/memory-retrieval/index.mjs";
+import { createMessageMemoryAgent } from "../../src/server/message-memory/agent.mjs";
+import { runMessageMemoryWorker } from "../../src/server/message-memory/worker.mjs";
 
 const adminUrl = process.env.TEST_DATABASE_URL;
 const ssl = process.env.DATABASE_SSL === "disable" ? false : undefined;
@@ -42,8 +49,14 @@ test("automatic conversation keeps Alice’s original task and Bob’s single ch
   let database;
   let application;
   let listener;
+  let memoryPool, memoryRun;
+  const memoryStop = new AbortController();
+  let inferenceCalls = 0;
   const directory = await mkdtemp(join(tmpdir(), "synapse-message-flow-"));
   t.after(async () => {
+    memoryStop.abort();
+    await memoryRun;
+    await memoryPool?.end();
     if (listener) await new Promise((resolve) => listener.close(resolve));
     await application?.server.close();
     await database?.close();
@@ -86,6 +99,7 @@ test("automatic conversation keeps Alice’s original task and Bob’s single ch
     supabasePublishableKey: "sb_publishable_fixture",
     cookieSecret: "fixture-secret-not-production-".repeat(2),
     publicSignup: true,
+    messageMemoryEnabled: true,
     requiredScopes: ["openid", "email", "profile"],
   };
   application = await createApplication({
@@ -171,7 +185,56 @@ test("automatic conversation keeps Alice’s original task and Bob’s single ch
     });
     assert.equal(registered.status, 201);
     assert.equal(registered.body.username, user);
+    await call(user, "save_session_memory", {
+      capture_id: randomUUID(),
+      session_id: `release-${user}`,
+      project_alias: "demo",
+      capture_reason: "turn_checkpoint",
+      title: "Release context",
+      summary: "Synthetic recipient-specific release fact",
+      markdown: `# Summary\nRelease context.\n# What changed\nRecorded a release.\n# Decisions\nRelease owner phrase: ${user}-private-context.\n# Still unresolved\nNone.\n# Important references\nNone.`,
+    });
   }
+  const workerUrl = new URL(url);
+  workerUrl.searchParams.set("options", "-c role=synapse_memory_worker");
+  memoryPool = new pg.Pool({ connectionString: workerUrl.href, ssl });
+  const retrieval = createMemoryRetrievalService({
+    adapter: createMemoryLedgerAdapter({ pool: memoryPool }),
+    sourceReader: createMemorySourceReader({ pool: memoryPool }),
+  });
+  const api = {
+    model: "scripted-retrieval",
+    async structured(_stage, prompt) {
+      inferenceCalls++;
+      const data = JSON.parse(prompt);
+      return {
+        model: "scripted-retrieval",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        value: data.transcript.length
+          ? {
+              actions: [],
+              selected: data.transcript[0].result.results.map(
+                (s) => s.evidence_id,
+              ),
+              done: true,
+              gaps: [],
+            }
+          : {
+              actions: [{ op: "sources", query: "Release" }],
+              selected: [],
+              done: false,
+              gaps: [],
+            },
+      };
+    },
+  };
+  memoryRun = runMessageMemoryWorker({
+    pool: memoryPool,
+    prepare: createMessageMemoryAgent({ retrieval, api }),
+    signal: memoryStop.signal,
+    pollMs: 5,
+    logger: { info() {}, error() {} },
+  });
   const peers = {};
   const nativeCalls = [];
   for (const user of ["alice", "bob"]) {
@@ -345,6 +408,21 @@ test("automatic conversation keeps Alice’s original task and Bob’s single ch
     assert.equal(peer.native.length, 1);
     const queued = peer.native.shift();
     assert.equal(queued.threadId, expectedTask);
+    assert.match(queued.prompt, new RegExp(`${user}-private-context`));
+    for (const other of users.keys())
+      if (other !== user)
+        assert.ok(!queued.prompt.includes(`${other}-private-context`));
+    assert.ok(
+      withInbox(
+        (db) =>
+          db
+            .prepare(
+              "SELECT 1 FROM jobs WHERE native_prompt=? AND native_mutation_state='issued'",
+            )
+            .get(queued.prompt),
+        peer.inboxOptions,
+      ),
+    );
     const context = await peer.hook("UserPromptSubmit", expectedTask, {
       prompt: queued.prompt,
     });
@@ -369,6 +447,19 @@ test("automatic conversation keeps Alice’s original task and Bob’s single ch
     true,
   );
   await deliver("bob", "bob-child");
+  const preparedContext = await peers.bob.receiver.prepareContext(
+    request.message_id,
+  );
+  const callsBeforeReplay = inferenceCalls;
+  assert.deepEqual(
+    await peers.bob.receiver.prepareContext(request.message_id),
+    preparedContext,
+  );
+  assert.equal(inferenceCalls, callsBeforeReplay);
+  await assert.rejects(
+    () => peers.alice.receiver.prepareContext(request.message_id),
+    (error) => error.status === 403,
+  );
   await peers.bob.worker.tick();
   await peers.bob.receiver.sendEvents([
     {
@@ -524,5 +615,90 @@ test("automatic conversation keeps Alice’s original task and Bob’s single ch
     (await call("alice", "list_conversations", { cursor: page.next_cursor }))
       .conversations.length,
     1,
+  );
+  // Expired attempts stay unavailable, stale leases cannot publish, and no
+  // receiver receives generic queue or memory-table privileges.
+  memoryStop.abort();
+  await memoryRun;
+  assert.equal(
+    (
+      await seed.query(
+        "select has_function_privilege('synapse_runtime','synapse_private.claim_message_memory()','execute') as allowed",
+      )
+    ).rows[0].allowed,
+    false,
+  );
+  assert.equal(
+    (
+      await seed.query(
+        "select has_table_privilege('synapse_runtime','synapse_private.message_memory_contexts','select') as allowed",
+      )
+    ).rows[0].allowed,
+    false,
+  );
+  await assert.rejects(
+    () => peers.bob.receiver.prepareContext(second.message_id),
+    (e) => e.status === 403,
+  );
+  const claim = await peers.bob.receiver.claim(10, 2);
+  const next = claim.messages.find((m) => m.message_id === second.message_id);
+  await peers.bob.receiver.confirmImport(next.message_id, next.claim_token);
+  assert.equal(
+    (await peers.bob.receiver.prepareContext(next.message_id)).status,
+    "pending",
+  );
+  const job = (
+    await memoryPool.query(
+      "select synapse_private.claim_message_memory() as job",
+    )
+  ).rows[0].job;
+  assert.equal(job.message_id, next.message_id);
+  assert.equal(
+    (
+      await memoryPool.query(
+        "select synapse_private.claim_message_memory() as job",
+      )
+    ).rows[0].job,
+    null,
+  );
+  assert.equal(
+    (
+      await memoryPool.query(
+        "select synapse_private.finish_message_memory($1,$2,$3) as saved",
+        [job.message_id, randomUUID(), { status: "no_match" }],
+      )
+    ).rows[0].saved,
+    false,
+  );
+  await seed.query(
+    "update synapse_private.message_memory_contexts set deadline_at=now()-interval '1 second' where message_id=$1",
+    [job.message_id],
+  );
+  assert.equal(
+    (
+      await memoryPool.query(
+        "select synapse_private.finish_message_memory($1,$2,$3) as saved",
+        [job.message_id, job.lease_token, { status: "no_match" }],
+      )
+    ).rows[0].saved,
+    false,
+  );
+  assert.equal(
+    (await peers.bob.receiver.prepareContext(job.message_id)).status,
+    "unavailable",
+  );
+  const bobIdentity = peers.bob.connection.identity;
+  await seed.query(
+    "insert into synapse_private.memory_ledger_projects(owner_id,project_id,generation,core_version,projection_version) values($1,$2,1,'test','test')",
+    [bobIdentity.userId, bobIdentity.projectId],
+  );
+  assert.deepEqual(
+    (await peers.bob.receiver.prepareContext(request.message_id)).gaps,
+    ["generation_changed"],
+  );
+  await peers.bob.receiver.disconnect();
+  await assert.rejects(
+    () => peers.bob.receiver.prepareContext(request.message_id),
+    (e) => e.status === 401,
   );
 });

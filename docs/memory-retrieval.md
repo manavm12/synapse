@@ -85,3 +85,58 @@ const memoryRetrieval = createMemoryRetrievalService({
 Pass `memoryRetrieval` into `createApplication`. The application deliberately keeps
 this dependency injectable so startup composition and the final shared MCP registry
 can be resolved when the organizer storage and messaging branches are integrated.
+
+## Automatic context for incoming messages
+
+A separate retrieval model navigates the recipient's existing memory before a
+cloud message is submitted to a native task. Each response chooses searches,
+topic browsing, claim/note/source reads, or source-text searches; later decisions
+see those results. The model selects returned evidence IDs. The service verifies
+citations and code preserves conflict, successor and canonical-claim groups.
+The original peer message remains intact and the context is explicitly untrusted.
+
+The receiver calls `POST /receiver/messages/:message_id/context` after durable
+import. The only input is the stored message ID. The database derives recipient
+and project from the authenticated installation and stored message, schedules one
+durable attempt, and returns `pending` until it finishes. Neither sender nor
+receiver credentials acquire general memory-search permissions. Earlier messages
+come only from the same conversation (latest four, at most 8 KiB to the model).
+
+Enable with migration `202609130001_message_memory.sql`,
+`MESSAGE_MEMORY_ENABLED=true` on the HTTP service, and a separate process running
+`npm run worker:message-memory`. That worker uses `DATABASE_WORKER_URL`, existing
+verified-TLS configuration, `OPENAI_API_KEY`, and `MESSAGE_MEMORY_MODEL` (default
+`gpt-5-mini`, low reasoning). The HTTP service does not need an inference key.
+Both service and worker are disabled by default. Deploy the migration/backend
+before refreshing receivers; older servers preserve ordinary delivery.
+
+Limits are six model requests, twelve retrieval actions, thirty seconds from the
+context request, and 8 KiB injected context within the native 64 KiB limit.
+Timeouts, outages, stale generations, and crashed attempts deliver the original
+message with an explicit unavailable indication. Completed searches can report
+`no_match`; verified incomplete context reports `partial`. Paid attempts are not
+silently retried after a crash. Scale workers to handle concurrent arrivals;
+queued preparation that exceeds the deadline falls back to normal delivery.
+
+Before native submission, the receiver verifies the message, recipient,
+installation and content bindings and renews normal delivery authorization. The
+exact rendered prompt is stored atomically with the native-attempt record
+(SQLite schema 5). Duplicate deliveries and uncertain native outcomes retain the
+same prompt and existing fencing. Both initial child creation and existing-task
+queuing use this path. Context is timestamped; a long native queue delay can make
+it old by execution time.
+
+The model uses the shared Responses adapter with strict JSON actions; see the
+[OpenAI function-calling guide](https://developers.openai.com/api/docs/guides/function-calling)
+for the model/tool execution boundary. This is a bounded navigation loop, not an
+embedding requirement. Current ledger loading and literal source search are
+suitable for modest graphs; larger deployments need measured indexing work.
+Tests use compact existing fixtures and mock inference/native submission with
+real PostgreSQL authorization. They do not establish model recall on real memory
+or replace a live two-account desktop rollout check. No private graph, embedding
+cache, expanded benchmark or API credential is committed.
+
+Rollback: disable `MESSAGE_MEMORY_ENABLED` on HTTP and stop the context worker;
+ordinary message delivery continues. Keep the additive migration and native prompt
+records so uncertain submissions retain their identity. Do not downgrade the local
+receiver to a build that cannot read SQLite schema 5.

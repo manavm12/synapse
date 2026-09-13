@@ -359,6 +359,16 @@ export function createMessagingDatabase(pool, withUser) {
       });
     },
 
+    async prepareMessageMemory(credential, messageId) {
+      return translated(async () => {
+        const result = await pool.query(
+          "select synapse_private.prepare_message_memory($1,$2) as context",
+          [credentialHash(credential), messageId],
+        );
+        return result.rows[0].context;
+      });
+    },
+
     async getReceiverMessage(credential, messageId) {
       return translated(async () => {
         const result = await pool.query(

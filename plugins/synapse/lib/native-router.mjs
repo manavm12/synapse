@@ -8,6 +8,7 @@ import {
   markNativeMutationUncertain,
   retryRoutingMessage,
 } from "./inbox.mjs";
+import { prepareCloudMemory, renderMemoryContext } from "./message-memory.mjs";
 import { NativeQueueClient } from "./native-queue.mjs";
 import { ReceiverClient } from "./receiver-client.mjs";
 import { validateReceiverIdentity } from "./receiver-contract.mjs";
@@ -147,6 +148,7 @@ export async function routeDelivery(
     cloudAuthorizationOptions,
     createQueueClient = () => new NativeQueueClient(),
     assertLease = () => {},
+    prepareMemory = prepareCloudMemory,
   } = {},
 ) {
   const client = createClient();
@@ -173,6 +175,17 @@ export async function routeDelivery(
         `Channel ${delivery.channelId} belongs to another Codex project`,
       );
     }
+    const enrich = async () => {
+      if (delivery.nativePromptFrozen) return;
+      const context = await prepareMemory(delivery, {
+        ...cloudAuthorizationOptions,
+        signal,
+      });
+      delivery = {
+        ...delivery,
+        nativePrompt: renderMemoryContext(delivery.nativePrompt, context),
+      };
+    };
 
     if (delivery.channel.threadId) {
       if (delivery.protocolVersion === 2) {
@@ -194,6 +207,7 @@ export async function routeDelivery(
           );
       }
       if (delivery.source === "cloud") {
+        await enrich();
         await authorizeCloud(delivery, {
           ...cloudAuthorizationOptions,
           signal,
@@ -210,6 +224,7 @@ export async function routeDelivery(
               jobId: delivery.jobId,
               deliveryId: delivery.deliveryId,
               receiverIdentity: delivery.receiverAuthorization,
+              nativePrompt: delivery.nativePrompt,
             });
             mutationIssued = true;
             return marked;
@@ -248,6 +263,7 @@ export async function routeDelivery(
     }
 
     if (delivery.source === "cloud") {
+      await enrich();
       await authorizeCloud(delivery, { ...cloudAuthorizationOptions, signal });
       signal?.throwIfAborted();
       assertLease();
@@ -261,6 +277,7 @@ export async function routeDelivery(
             jobId: delivery.jobId,
             deliveryId: delivery.deliveryId,
             receiverIdentity: delivery.receiverAuthorization,
+            nativePrompt: delivery.nativePrompt,
           });
           mutationIssued = true;
           return marked;

@@ -21,6 +21,7 @@
     "lint": "biome lint .",
     "start": "node src/server/index.mjs",
     "worker": "node src/server/worker/index.mjs",
+    "worker:message-memory": "node src/server/message-memory/index.mjs",
     "worker:canary": "node src/server/worker/index.mjs --canary",
     "validate:plugin": "node scripts/validate-plugin.mjs",
     "synapse": "node src/client/cli.mjs",

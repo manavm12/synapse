@@ -167,6 +167,13 @@ export class ReceiverClient {
     );
   }
 
+  async prepareContext(messageId) {
+    return this.#request(
+      "POST",
+      `/receiver/messages/${encodeURIComponent(messageId)}/context`,
+    );
+  }
+
   async sendEvents(events) {
     return this.#request("POST", "/receiver/events", { body: { events } });
   }
