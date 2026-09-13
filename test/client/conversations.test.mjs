@@ -655,7 +655,7 @@ test("SQLite upgrade preserves proven bindings and fences unproven established c
   );
   assert.equal(
     f.store((db) => db.prepare("PRAGMA user_version").get().user_version),
-    4,
+    5,
   );
   assert.ok(
     listPendingCloudEvents(

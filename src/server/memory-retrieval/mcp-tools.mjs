@@ -247,6 +247,7 @@ export const readMemoryOutputSchema = baseOutputSchema.extend({
       recorded_at: z.string(),
       source_revision_id: z.string(),
       relations: z.array(relationSchema),
+      relations_truncated: z.boolean().optional(),
     })
     .nullable()
     .optional(),

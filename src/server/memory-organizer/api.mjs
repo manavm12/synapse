@@ -14,7 +14,7 @@ export class MemoryInferenceError extends Error {
     // Only fixed enums and nonnegative token counts may reach operational logs.
     const safe = {};
     for (const [key, allowed] of Object.entries({
-      inference_stage: ["extract", "reconcile", "review"],
+      inference_stage: ["extract", "reconcile", "review", "retrieve"],
       response_status: [
         "completed",
         "failed",
@@ -119,8 +119,8 @@ export function createMemoryInferenceAPI({
     model,
     reviewer,
     extractionFormat: "source-groups-v1",
-    async structured(stage, prompt, schema, { signal } = {}) {
-      if (!["extract", "reconcile", "review"].includes(stage))
+    async structured(stage, prompt, schema, { signal, instructions } = {}) {
+      if (!["extract", "reconcile", "review", "retrieve"].includes(stage))
         throw new TypeError("Unknown inference stage");
       if (
         typeof prompt !== "string" ||
@@ -171,6 +171,7 @@ export function createMemoryInferenceAPI({
                   store: false,
                   truncation: "disabled",
                   input: [{ role: "user", content: prompt }],
+                  ...(instructions ? { instructions } : {}),
                   ...(reasoningEffort === null
                     ? {}
                     : { reasoning: { effort: reasoningEffort } }),
@@ -250,7 +251,7 @@ export function createMemoryInferenceAPI({
                 : 0;
             return {
               value,
-              model: selectedModel,
+              model: raw.model ?? selectedModel,
               usage: {
                 input_tokens: count("input_tokens"),
                 output_tokens: count("output_tokens"),

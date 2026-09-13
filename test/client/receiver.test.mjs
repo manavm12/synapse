@@ -1627,3 +1627,192 @@ test("enrollment stores only a credential hash locally and resumes completion", 
   await disconnectReceiver({ project: root }, dependencies);
   assert.equal(secrets.size, 0);
 });
+
+test("memory context preserves delivery text/markers and freezes with the native attempt", async () => {
+  const { renderMemoryContext } = await import(
+    "../../plugins/synapse/lib/message-memory.mjs"
+  );
+  const { getReservedDelivery } = await import(
+    "../../plugins/synapse/lib/inbox.mjs"
+  );
+  const { inbox } = await paths();
+  const message = cloudMessage();
+  stage(inbox, message);
+  confirmCloudImport(
+    { messageId: message.messageId, installationId: identity.installationId },
+    { path: inbox },
+  );
+  const delivery = reserveNextMessage(
+    { projectRoot: "/project", ownerSessionId: "owner" },
+    { path: inbox, receiverIdentity: identity },
+  );
+  const enriched = renderMemoryContext(delivery.nativePrompt, {
+    status: "ready",
+    generation: 3,
+    evidence: [
+      {
+        status: "historical",
+        current: false,
+        scope: "staging",
+        citations: [{ quote: "old policy" }],
+      },
+    ],
+  });
+  assert.ok(enriched.includes(message.message));
+  assert.ok(enriched.endsWith(`<!-- ${delivery.deliveryMarker} -->`));
+  assert.match(enriched, /historical/);
+  markNativeMutationIssued(
+    {
+      jobId: delivery.jobId,
+      deliveryId: delivery.deliveryId,
+      receiverIdentity: identity,
+      nativePrompt: enriched,
+    },
+    { path: inbox },
+  );
+  const stored = getReservedDelivery(
+    {
+      jobId: delivery.jobId,
+      deliveryId: delivery.deliveryId,
+      receiverIdentity: identity,
+    },
+    { path: inbox },
+  );
+  assert.equal(stored.nativePrompt, enriched);
+  assert.equal(stored.nativePromptFrozen, true);
+  assert.throws(
+    () =>
+      markNativeMutationIssued(
+        {
+          jobId: delivery.jobId,
+          deliveryId: delivery.deliveryId,
+          receiverIdentity: identity,
+          nativePrompt: "changed",
+        },
+        { path: inbox },
+      ),
+    /no durable native mutation intent/,
+  );
+  assert.equal(
+    renderMemoryContext("x".repeat(65536), { status: "ready", evidence: [] })
+      .length,
+    65536,
+  );
+  assert.equal(
+    renderMemoryContext("hello", { status: "unavailable", gaps: ["disabled"] }),
+    "hello",
+  );
+  const bounded = renderMemoryContext("🍀".repeat(16000), {
+    status: "ready",
+    evidence: [{ text: "y".repeat(8000) }],
+  });
+  assert.ok(Buffer.byteLength(bounded) <= 65536);
+  assert.match(bounded, /unavailable/);
+});
+
+test("context polling rejects foreign bindings, errors and unsupported versions; frozen prompts do not retrieve again", async () => {
+  const { prepareCloudMemory } = await import(
+    "../../plugins/synapse/lib/message-memory.mjs"
+  );
+  const { createHash } = await import("node:crypto");
+  const { registry } = await paths();
+  beginReceiverConnection(
+    {
+      connectionId: "memory-test",
+      projectRoot: "/project",
+      projectAlias: "demo",
+      serverUrl: "https://example.test",
+      credentialAccount: "receiver:memory-test",
+      credentialHash: "0".repeat(64),
+    },
+    { path: registry },
+  );
+  recordReceiverPairing(
+    {
+      connectionId: "memory-test",
+      pairingId: "memory-pair",
+      verificationUrl: "https://example.test/pair",
+      expiresAt: identity.expiresAt,
+    },
+    { path: registry },
+  );
+  completeReceiverConnection(
+    { connectionId: "memory-test", identity },
+    { path: registry },
+  );
+  const message = cloudMessage();
+  const delivery = {
+    jobId: message.messageId,
+    source: "cloud",
+    projectRoot: "/project",
+    receiverAuthorization: identity,
+    task: message.message,
+    cloud: { contentHash: message.contentHash },
+  };
+  const valid = {
+    version: "incoming-memory-v1",
+    status: "no_match",
+    message_id: message.messageId,
+    recipient_id: identity.userId,
+    project_id: identity.projectId,
+    installation_id: identity.installationId,
+    content_hash: message.contentHash,
+    message_hash: createHash("sha256").update(message.message).digest("hex"),
+    evidence: [],
+  };
+  const options = {
+    registryPath: registry,
+    secretStore: { get: async () => "synthetic" },
+  };
+  for (const overrides of [
+    { recipient_id: "foreign" },
+    { project_id: "foreign" },
+    { message_id: "foreign" },
+    { installation_id: "foreign" },
+    { content_hash: "foreign" },
+    { message_hash: "foreign" },
+    { version: "old" },
+    { status: "unknown" },
+    { evidence: "bad" },
+  ]) {
+    const result = await prepareCloudMemory(delivery, {
+      ...options,
+      createReceiverClient: () => ({
+        prepareContext: async () => ({ ...valid, ...overrides }),
+      }),
+    });
+    assert.equal(result.status, "unavailable");
+    assert.equal(result.evidence, undefined);
+  }
+  let polls = 0;
+  assert.deepEqual(
+    await prepareCloudMemory(delivery, {
+      ...options,
+      createReceiverClient: () => ({
+        prepareContext: async () =>
+          ++polls === 1 ? { status: "pending" } : valid,
+      }),
+    }),
+    valid,
+  );
+  assert.equal(polls, 2);
+  assert.equal(
+    (
+      await prepareCloudMemory(delivery, {
+        ...options,
+        timeoutMs: 10,
+        createReceiverClient: () => ({
+          prepareContext: async () => ({ status: "pending" }),
+        }),
+      })
+    ).status,
+    "unavailable",
+  );
+  assert.equal(
+    await prepareCloudMemory(
+      { ...delivery, nativePromptFrozen: true },
+      options,
+    ),
+    null,
+  );
+});

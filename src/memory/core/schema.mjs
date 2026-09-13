@@ -13,6 +13,11 @@ export const records = (properties) => ({
 });
 
 export function validateSchema(value, schema, path = "proposal") {
+  if (schema.type === "boolean") {
+    if (typeof value !== "boolean")
+      throw new Error(`${path} must be a boolean`);
+    return;
+  }
   if (schema.type === "object") {
     if (!value || typeof value !== "object" || Array.isArray(value))
       throw new Error(`${path} must be an object`);
