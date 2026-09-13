@@ -3,7 +3,11 @@ import test from "node:test";
 
 import {
   buildQuery,
+  formatTimestamp,
+  inboxErrorMessage,
   nextConversationParams,
+  participantName,
+  shortenId,
   statusBadge,
 } from "../../src/server/public/inbox-view.js";
 
@@ -51,4 +55,36 @@ test("buildQuery only includes provided parameters", () => {
 test("nextConversationParams is null once a conversation has no more pages", () => {
   assert.equal(nextConversationParams(null), null);
   assert.deepEqual(nextConversationParams(42), { after_sequence: 42 });
+});
+
+test("formatTimestamp is locale-aware and handles missing or invalid values", () => {
+  assert.equal(formatTimestamp(null), "—");
+  assert.equal(formatTimestamp("not-a-date"), "—");
+  assert.match(formatTimestamp("2026-09-07T12:30:00.000Z", "en-US"), /2026/);
+});
+
+test("participantName prefers usernames and safely shortens unknown IDs", () => {
+  const participants = [{ user_id: "user-1", username: "alice" }];
+  assert.equal(participantName(participants, "user-1"), "@alice");
+  assert.equal(
+    participantName(participants, "12345678-1234-1234-1234-123456789abc"),
+    "12345678…",
+  );
+  assert.equal(shortenId(null), "Unknown");
+  assert.equal(shortenId("short-id"), "short-id");
+});
+
+test("inboxErrorMessage maps safe API errors without exposing server detail", () => {
+  assert.equal(
+    inboxErrorMessage("unauthorized", 401),
+    "Your sign-in expired. Sign in again to continue.",
+  );
+  assert.equal(
+    inboxErrorMessage("account_disabled", 403),
+    "This Synapse account is disabled.",
+  );
+  assert.equal(
+    inboxErrorMessage("unexpected_internal_value", 503),
+    "Inbox request failed (503).",
+  );
 });

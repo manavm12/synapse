@@ -171,11 +171,9 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
     },
     async getConversation(_user, { conversationId }) {
       if (conversationId !== "99999999-9999-4999-8999-999999999999") {
-        throw new MessagingError(
-          "not_found",
-          "conversation unavailable",
-          { status: 404 },
-        );
+        throw new MessagingError("not_found", "conversation unavailable", {
+          status: 404,
+        });
       }
       return {
         conversation_id: conversationId,
@@ -1151,12 +1149,24 @@ test("web inbox routes require a signed-in account and map data to the documente
     page.headers.get("content-security-policy").includes("default-src 'none'"),
     true,
   );
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(page.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(page.headers.get("x-frame-options"), "DENY");
+  assert.match(page.headers.get("permissions-policy"), /camera=\(\)/);
   const pageHtml = await page.text();
   assert.match(pageHtml, /\/assets\/inbox\.js/);
   assert.match(pageHtml, /\/assets\/inbox\.css/);
+  assert.match(pageHtml, /role="tablist"/);
+  assert.match(pageHtml, /aria-live="polite"/);
 
-  assert.equal((await fetch(`${baseUrl}/assets/inbox.js`)).status, 200);
-  assert.equal((await fetch(`${baseUrl}/assets/inbox.css`)).status, 200);
+  const script = await fetch(`${baseUrl}/assets/inbox.js`);
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get("content-type"), /javascript/);
+  assert.match(script.headers.get("cache-control"), /max-age=3600/);
+  const styles = await fetch(`${baseUrl}/assets/inbox.css`);
+  assert.equal(styles.status, 200);
+  assert.match(styles.headers.get("content-type"), /text\/css/);
 
   const noAuth = await fetch(`${baseUrl}/inbox/conversations`);
   assert.equal(noAuth.status, 401);
@@ -1199,6 +1209,15 @@ test("web inbox routes require a signed-in account and map data to the documente
   assert.equal(badCursor.status, 422);
   assert.deepEqual(await badCursor.json(), { error: "invalid_cursor" });
 
+  const badConversationQuery = await fetch(
+    `${baseUrl}/inbox/conversations?limit=0`,
+    { headers },
+  );
+  assert.equal(badConversationQuery.status, 422);
+  assert.deepEqual(await badConversationQuery.json(), {
+    error: "invalid_request",
+  });
+
   const notFoundId = await fetch(`${baseUrl}/inbox/conversations/not-a-uuid`, {
     headers,
   });
@@ -1218,14 +1237,20 @@ test("web inbox routes require a signed-in account and map data to the documente
   );
   assert.equal(conversation.status, 200);
   const conversationBody = await conversation.json();
-  assert.equal(conversationBody.messages[0].message_id, "88888888-8888-4888-8888-888888888888");
+  assert.equal(
+    conversationBody.messages[0].message_id,
+    "88888888-8888-4888-8888-888888888888",
+  );
   assert.equal(conversationBody.next_sequence, null);
 
   const messages = await fetch(`${baseUrl}/inbox/messages`, { headers });
   assert.equal(messages.status, 200);
   const messagesBody = await messages.json();
   assert.equal(messagesBody.messages.length, 1);
-  assert.equal(messagesBody.messages[0].message_id, "88888888-8888-4888-8888-888888888888");
+  assert.equal(
+    messagesBody.messages[0].message_id,
+    "88888888-8888-4888-8888-888888888888",
+  );
   assert.equal(messagesBody.messages[0].queued_at, "2026-09-07T00:00:00.000Z");
 
   const badMessagesCursor = await fetch(
@@ -1234,4 +1259,20 @@ test("web inbox routes require a signed-in account and map data to the documente
   );
   assert.equal(badMessagesCursor.status, 422);
   assert.deepEqual(await badMessagesCursor.json(), { error: "invalid_cursor" });
+
+  const badStatus = await fetch(
+    `${baseUrl}/inbox/messages?status=not-a-public-status`,
+    { headers },
+  );
+  assert.equal(badStatus.status, 422);
+  assert.deepEqual(await badStatus.json(), { error: "invalid_request" });
+
+  const unexpectedParameter = await fetch(
+    `${baseUrl}/inbox/messages?unexpected=true`,
+    { headers },
+  );
+  assert.equal(unexpectedParameter.status, 422);
+  assert.deepEqual(await unexpectedParameter.json(), {
+    error: "invalid_request",
+  });
 });

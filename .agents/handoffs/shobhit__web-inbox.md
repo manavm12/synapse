@@ -2,10 +2,10 @@
 
 - Branch: `shobhit/web-inbox`
 - Human owner: `Shobhit Goel`
-- Active agent: `Codex`
+- Active agent: `unassigned` (prepared for Claude takeover)
 - Base inherited from Claude: `7530d65`
-- Last checkpoint: none yet; Claude's local WIP is being preserved before integration
-- Status: `active`
+- Last pushed checkpoint before this handoff: `f0601d6` (current `main` merged)
+- Status: `handed_off`
 
 ## Goal
 
@@ -27,15 +27,25 @@ supported browsers and operating-system-independent server behavior.
 - `test/server/mcp-http.test.mjs` only for web-inbox HTTP coverage
 - Web-inbox documentation and this handoff
 
-## Inherited work
+## Completed work
 
-- Claude created an uncommitted first implementation with authenticated browser
-  routes, conversation and message feeds, pagination, status filtering, a
-  responsive page shell, and focused tests.
-- Claude stopped before creating a handoff, committing, pushing, testing, or
-  integrating the two newer main commits.
-- The inherited base contains PR #21. Current `origin/main` subsequently reverted
-  that experiment in PR #24 and added its compact replacement in PR #25.
+- Preserved Claude's original uncommitted implementation as commit `2fe2430`.
+- Merged current `origin/main` (including PR #24 and PR #25) in `f0601d6`; the
+  shared `receiver.mjs` authentication refactor merged without conflict.
+- Added authenticated, account-scoped, read-only conversation/detail/message
+  endpoints and a browser inbox using the existing Supabase web session.
+- Fixed the inherited HTTP 400 asset bug in hidden worktree paths by explicitly
+  allowing dotfile path components in the two `sendFile` calls.
+- Added CSP, no-store, no-referrer, nosniff, frame-deny, and permissions-policy
+  headers to the inbox document.
+- Added responsive horizontal table containers, mobile spacing, visible focus,
+  keyboard-operable conversation rows, ARIA tabs/live status, empty states,
+  safe API error messages, sign-out, localized dates, participant labels, and
+  duplicate-load fencing.
+- All server-sourced values are still rendered only with `textContent`.
+- Expanded pure view-helper tests and HTTP coverage for assets, headers,
+  accessibility markup, strict query validation, auth, account scope,
+  pagination, and response wire shapes.
 
 ## Decisions and invariants
 
@@ -48,29 +58,48 @@ supported browsers and operating-system-independent server behavior.
   context behavior while integrating latest `main`.
 - Browser behavior must not depend on Windows, macOS, or Linux filesystem paths.
 
-## Initial verification of inherited WIP
+## Verification at handoff
 
-- Focused Node tests: 12 passed, 1 failed. The web-inbox route test expected
-  HTTP 200 for an asset and received HTTP 400.
-- Biome found formatting-only differences in `inbox.mjs`, `inbox.js`, and
-  `mcp-http.test.mjs`.
-- These findings are recorded before any behavioral repair so the first pushed
-  checkpoint accurately preserves Claude's stopping point.
+- `biome check .`: passed (165 files).
+- `node --test test/server/inbox-view.test.mjs test/server/mcp-http.test.mjs`:
+  passed, 16/16, 0 skipped.
+- `npm run check`: Biome passed and the full coverage suite was progressing with
+  no failures when the human requested this stopping checkpoint. It was then
+  interrupted cleanly. The observed Windows-only skips were existing intentional
+  platform cases (POSIX permissions/signals/shebangs and symlink privileges), not
+  web-inbox failures. The full coverage gate still needs an uninterrupted run.
 
 ## Next steps
 
-1. Run focused checks and commit/push the inherited WIP unchanged as a recovery
-   checkpoint.
-2. Merge current `origin/main` and resolve the known `receiver.mjs` overlap.
-3. Complete security, accessibility, responsive UI, empty/loading/error states,
-   pagination, and browser behavior.
-4. Add focused browser/HTTP tests, run the full PostgreSQL-backed release gate,
-   dependency audit, plugin validation, and production image smoke test.
-5. Update this handoff, push, and open a focused pull request.
+1. Fetch origin and confirm this handoff commit is the branch tip.
+2. Review the current diff, especially `src/server/inbox.mjs` and
+   `src/server/public/inbox.js`, and add any missing failure-path tests.
+3. Run an uninterrupted `npm run check` with Node 24/npm 11 on `PATH`.
+4. Run `npm run test:sql` against the documented PostgreSQL test environment,
+   `npm run audit`, and `npm run validate:plugin`.
+5. Perform a browser smoke test for signed-out, setup-required, ready/empty,
+   populated, filtering, paging, keyboard use, narrow viewport, and sign-out.
+6. Confirm Linux CI is green. Do not claim live macOS validation without a Mac
+   run; the implementation contains no OS-specific web-inbox paths.
+7. Update this handoff, commit/push, and open a focused PR to `main`.
 
 ## Risks
 
-- Until the first checkpoint is pushed, Claude's WIP exists only in this local
-  worktree.
-- The branch is two main commits behind and must not be reviewed or deployed
-  before integration.
+- The full release gate and live authenticated browser matrix have not completed.
+- Inbox-feed sender names are displayed as shortened stable IDs because the
+  existing `listInbox` database wire shape does not include usernames. Conversation
+  detail resolves participant usernames without changing shared database code.
+- This is a read-only MVP by design; reply/retry/state mutations remain out of scope.
+
+## Exact local verification commands
+
+From this worktree in PowerShell, ensure the bundled Node runtime is on `PATH`:
+
+```powershell
+$runtimeBin = 'C:\Users\DELL\AppData\Local\OpenAI\Codex\runtimes\cua_node\e7fe122ad3cbcd58\bin'
+$env:Path = "$runtimeBin;$env:Path"
+npm run check
+npm run test:sql
+npm run audit
+npm run validate:plugin
+```
