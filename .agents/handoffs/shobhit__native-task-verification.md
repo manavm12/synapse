@@ -2,12 +2,13 @@
 
 - Branch: `shobhit/native-task-verification`
 - Human owner: `Shobhit Goel`
-- Active agent: `Claude` -- claimed to open the PR and drive CI/review per
-  "Remaining work" below; will unassign again once that's done.
+- Active agent: `Claude` -- driving PR #22 through CI/review; will unassign
+  once merged or once stopping for any other reason.
 - Base reviewed: `027c513` (main, includes merged PR #18)
 - Last implementation checkpoint: `0babc4f` (all code and test changes pushed;
   this handoff is finalized in the branch HEAD); handoff itself at `00bef8d`
-- Status: `ready-for-review`
+- Status: `in-review` -- [PR #22](https://github.com/manavm12/synapse/pull/22)
+  is open, CI running.
 
 ## Goal
 
@@ -87,9 +88,18 @@ real child task execution.
 
 ## Remaining work
 
-1. Open a focused pull request to `main` and let required CI/security checks run.
-2. Run the PostgreSQL-backed `npm run check` gate in CI or against a fresh
-   disposable test database; expect zero skipped tests before merge.
+1. **Done**: opened [PR #22](https://github.com/manavm12/synapse/pull/22)
+   to `main`. Before opening it, independently re-verified every claim in
+   this handoff rather than taking them on faith: reinstalled dependencies
+   fresh, reran `npx biome check .`, `npm test` (confirmed exactly
+   298/286/0/12), `npm audit` (0 vulnerabilities), `git diff --check` (clean),
+   read every line of the actual diff, and directly inspected both the repo
+   source and the real installed plugin build on disk to confirm no
+   diagnostic code survived anywhere. All confirmed accurate.
+2. CI is now running on PR #22 (`database`, `verify`, `secrets`,
+   CodeRabbit) -- this is what runs the PostgreSQL-backed gate, since no
+   disposable test database was available in this environment. Monitor and
+   address any failures before merge.
 3. After the clean plugin install, a fresh Codex task must observe the new build's
    hooks before setup reports receiving as verified. Existing credentials,
    destinations, and queues were preserved.
