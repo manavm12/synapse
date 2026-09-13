@@ -7,8 +7,9 @@
 - Base reviewed: `027c513` (main, includes merged PR #18)
 - Last implementation checkpoint: `0babc4f` (all code and test changes pushed;
   this handoff is finalized in the branch HEAD); handoff itself at `00bef8d`
-- Status: `in-review` -- [PR #22](https://github.com/manavm12/synapse/pull/22)
-  is open, CI running.
+- Status: `ready-to-merge` -- [PR #22](https://github.com/manavm12/synapse/pull/22)
+  has database/secrets/verify all green; only CodeRabbit's non-blocking
+  review is still finishing. Waiting on the user's go-ahead to merge.
 
 ## Goal
 
