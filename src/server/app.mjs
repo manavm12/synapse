@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/express";
 
 import { installConsentRoutes } from "./consent.mjs";
+import { installInboxRoutes } from "./inbox.mjs";
 import { createMcpRuntime } from "./mcp.mjs";
 import { installReceiverRoutes } from "./messaging/receiver.mjs";
 import { installOnboardingRoutes } from "./onboarding.mjs";
@@ -131,6 +132,11 @@ export async function createApplication({
     logger,
   });
   installReceiverRoutes(app, config, {
+    database,
+    sessionVerifier,
+    logger,
+  });
+  installInboxRoutes(app, config, {
     database,
     sessionVerifier,
     logger,

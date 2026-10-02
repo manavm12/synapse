@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
 
+import { createBrowserSessionAuth } from "./browser-session.mjs";
 import { AccountDisabledError, UsernameTakenError } from "./database.mjs";
 import { privateIdentifier } from "./logger.mjs";
 
@@ -22,12 +23,6 @@ const accountInput = z
   })
   .strict();
 
-function bearerToken(header) {
-  if (typeof header !== "string" || !header.startsWith("Bearer ")) return null;
-  const token = header.slice("Bearer ".length).trim();
-  return token || null;
-}
-
 function accountResponse(account) {
   return {
     status: "ready",
@@ -41,24 +36,11 @@ export function installOnboardingRoutes(
   config,
   { database, sessionVerifier, logger },
 ) {
-  const authenticate = async (req, res, next) => {
-    res.set("Cache-Control", "no-store");
-    const token = bearerToken(req.headers.authorization);
-    if (!token) {
-      res.status(401).json({ error: "unauthorized" });
-      return;
-    }
-    try {
-      req.synapseSession = await sessionVerifier.verifyAccessToken(token);
-      next();
-    } catch (error) {
-      logger.info("account_authentication_rejected", {
-        request_id: req.requestId ?? null,
-        error_type: error.name,
-      });
-      res.status(401).json({ error: "unauthorized" });
-    }
-  };
+  const authenticate = createBrowserSessionAuth({
+    sessionVerifier,
+    logger,
+    event: "account_authentication_rejected",
+  });
 
   app.get("/auth/account", authenticate, async (req, res) => {
     try {

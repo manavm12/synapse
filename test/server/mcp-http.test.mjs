@@ -10,6 +10,7 @@ import {
   AuthorizationStateCooldownError,
   UsernameTakenError,
 } from "../../src/server/database.mjs";
+import { MessagingError } from "../../src/server/messaging/errors.mjs";
 
 const identity = Object.freeze({
   principalType: "user",
@@ -83,7 +84,12 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       };
     },
     async getAccount(userId) {
-      return accounts.get(userId) ?? null;
+      const account = accounts.get(userId);
+      if (account?.simulateDisabledLookup) throw new AccountDisabledError();
+      if (account?.simulateUnavailableLookup) {
+        throw new Error("account lookup exploded");
+      }
+      return account ?? null;
     },
     async registerAccount(userId, account) {
       if (account.username === "taken") throw new UsernameTakenError();
@@ -143,8 +149,88 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
         receiverActionNeeded: true,
       };
     },
-    async listInbox() {
-      return { messages: [], next: null };
+    async listConversations(user, { before }) {
+      if (accounts.get(user.userId)?.simulateListFailure) {
+        throw new Error("listConversations exploded");
+      }
+      if (before) return { conversations: [], next: null };
+      return {
+        conversations: [
+          {
+            conversation_id: "99999999-9999-4999-8999-999999999999",
+            participants: [
+              {
+                user_id: "66666666-6666-4666-8666-666666666666",
+                username: "tester",
+              },
+            ],
+            preview: "hello there",
+            updated_at: "2026-09-07T00:00:00.000Z",
+            disposition: "continue",
+            outstanding_replies: 1,
+            activity_state: "awaiting_reply",
+          },
+        ],
+        next: {
+          queuedAt: "2026-09-07T00:00:00.000Z",
+          messageId: "99999999-9999-4999-8999-999999999999",
+        },
+      };
+    },
+    async getConversation(_user, { conversationId }) {
+      if (conversationId === "00000000-0000-4000-8000-0000000000ff") {
+        throw new Error("getConversation exploded");
+      }
+      if (conversationId !== "99999999-9999-4999-8999-999999999999") {
+        throw new MessagingError("not_found", "conversation unavailable", {
+          status: 404,
+        });
+      }
+      return {
+        conversation_id: conversationId,
+        participants: [
+          {
+            user_id: "66666666-6666-4666-8666-666666666666",
+            username: "tester",
+          },
+        ],
+        messages: [
+          {
+            message_id: "88888888-8888-4888-8888-888888888888",
+            sequence: 1,
+            sender_id: "66666666-6666-4666-8666-666666666666",
+            recipient_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            message: "hi",
+            disposition: "continue",
+            in_reply_to_message_id: null,
+            status: "queued",
+            queued_at: "2026-09-07T00:00:00.000Z",
+            response_state: "awaiting_reply",
+          },
+        ],
+        next_sequence: null,
+      };
+    },
+    async listInbox(user, { before } = {}) {
+      if (accounts.get(user.userId)?.simulateListFailure) {
+        throw new Error("listInbox exploded");
+      }
+      if (before) return { messages: [], next: null };
+      return {
+        messages: [
+          {
+            messageId: "88888888-8888-4888-8888-888888888888",
+            conversationId: "99999999-9999-4999-8999-999999999999",
+            sequence: 1,
+            senderId: "66666666-6666-4666-8666-666666666666",
+            message: "hi",
+            contentHash: "a".repeat(64),
+            status: "queued",
+            queuedAt: new Date("2026-09-07T00:00:00Z"),
+          },
+        ],
+        next: null,
+      };
     },
     async createReceiverPairing() {
       return {
@@ -206,7 +292,13 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
       };
     },
   };
-  const logger = { info() {}, error() {} };
+  const logs = [];
+  const logger = {
+    info() {},
+    error(event, data) {
+      logs.push({ event, data });
+    },
+  };
   const application = await createApplication({
     config,
     database,
@@ -235,6 +327,7 @@ async function fixture(t, { publicSignup = true, memoryRetrieval } = {}) {
     saves,
     sentMessages,
     accounts,
+    logs,
   };
 }
 
@@ -1066,4 +1159,246 @@ test("save rejects a memory that omits the durable-memory headings", async (t) =
   });
   assert.equal(result.body.result.isError, true);
   assert.equal(saves.length, 0);
+});
+
+test("web inbox routes require a signed-in account and map data to the documented wire shape", async (t) => {
+  const { baseUrl, accounts } = await fixture(t);
+
+  const page = await fetch(`${baseUrl}/inbox`);
+  assert.equal(page.status, 200);
+  assert.equal(
+    page.headers.get("content-security-policy").includes("default-src 'none'"),
+    true,
+  );
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(page.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(page.headers.get("x-frame-options"), "DENY");
+  assert.match(page.headers.get("permissions-policy"), /camera=\(\)/);
+  const pageHtml = await page.text();
+  assert.match(pageHtml, /\/assets\/inbox\.js/);
+  assert.match(pageHtml, /\/assets\/inbox\.css/);
+  assert.match(pageHtml, /role="tablist"/);
+  assert.match(pageHtml, /aria-live="polite"/);
+
+  const script = await fetch(`${baseUrl}/assets/inbox.js`);
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get("content-type"), /javascript/);
+  assert.match(script.headers.get("cache-control"), /max-age=3600/);
+  const scriptSource = await script.text();
+  const staticImports = [...scriptSource.matchAll(/from\s+"(\.\/[^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  assert.equal(staticImports.length >= 2, true);
+  for (const specifier of staticImports) {
+    const assetUrl = new URL(specifier, `${baseUrl}/assets/inbox.js`);
+    const imported = await fetch(assetUrl);
+    assert.equal(
+      imported.status,
+      200,
+      `inbox.js imports "${specifier}", which must be servable as a real browser module resolves it, but ${assetUrl} returned ${imported.status}`,
+    );
+    assert.match(imported.headers.get("content-type"), /javascript/);
+  }
+  const styles = await fetch(`${baseUrl}/assets/inbox.css`);
+  assert.equal(styles.status, 200);
+  assert.match(styles.headers.get("content-type"), /text\/css/);
+
+  const noAuth = await fetch(`${baseUrl}/inbox/conversations`);
+  assert.equal(noAuth.status, 401);
+  assert.deepEqual(await noAuth.json(), { error: "unauthorized" });
+
+  const headers = { authorization: "Bearer session" };
+  const noAccount = await fetch(`${baseUrl}/inbox/conversations`, { headers });
+  assert.equal(noAccount.status, 403);
+  assert.deepEqual(await noAccount.json(), { error: "setup_required" });
+
+  accounts.set("66666666-6666-4666-8666-666666666666", {
+    username: "tester",
+    projectId: "22222222-2222-4222-8222-222222222222",
+    projectAlias: "synapse",
+  });
+
+  const conversations = await fetch(`${baseUrl}/inbox/conversations`, {
+    headers,
+  });
+  assert.equal(conversations.status, 200);
+  const conversationsBody = await conversations.json();
+  assert.equal(conversationsBody.conversations.length, 1);
+  assert.equal(
+    conversationsBody.conversations[0].conversation_id,
+    "99999999-9999-4999-8999-999999999999",
+  );
+  assert.equal(typeof conversationsBody.next_cursor, "string");
+
+  const nextPage = await fetch(
+    `${baseUrl}/inbox/conversations?cursor=${conversationsBody.next_cursor}`,
+    { headers },
+  );
+  assert.equal(nextPage.status, 200);
+  assert.deepEqual((await nextPage.json()).conversations, []);
+
+  const badCursor = await fetch(
+    `${baseUrl}/inbox/conversations?cursor=not-a-real-cursor`,
+    { headers },
+  );
+  assert.equal(badCursor.status, 422);
+  assert.deepEqual(await badCursor.json(), { error: "invalid_cursor" });
+
+  const badConversationQuery = await fetch(
+    `${baseUrl}/inbox/conversations?limit=0`,
+    { headers },
+  );
+  assert.equal(badConversationQuery.status, 422);
+  assert.deepEqual(await badConversationQuery.json(), {
+    error: "invalid_request",
+  });
+
+  const notFoundId = await fetch(`${baseUrl}/inbox/conversations/not-a-uuid`, {
+    headers,
+  });
+  assert.equal(notFoundId.status, 404);
+  assert.deepEqual(await notFoundId.json(), { error: "not_found" });
+
+  const missingConversation = await fetch(
+    `${baseUrl}/inbox/conversations/00000000-0000-4000-8000-000000000000`,
+    { headers },
+  );
+  assert.equal(missingConversation.status, 404);
+  assert.deepEqual(await missingConversation.json(), { error: "not_found" });
+
+  const conversation = await fetch(
+    `${baseUrl}/inbox/conversations/99999999-9999-4999-8999-999999999999`,
+    { headers },
+  );
+  assert.equal(conversation.status, 200);
+  const conversationBody = await conversation.json();
+  assert.equal(
+    conversationBody.messages[0].message_id,
+    "88888888-8888-4888-8888-888888888888",
+  );
+  assert.equal(conversationBody.next_sequence, null);
+
+  const badConversationDetailQuery = await fetch(
+    `${baseUrl}/inbox/conversations/99999999-9999-4999-8999-999999999999?limit=0`,
+    { headers },
+  );
+  assert.equal(badConversationDetailQuery.status, 422);
+  assert.deepEqual(await badConversationDetailQuery.json(), {
+    error: "invalid_request",
+  });
+
+  const badAfterSequence = await fetch(
+    `${baseUrl}/inbox/conversations/99999999-9999-4999-8999-999999999999?after_sequence=-1`,
+    { headers },
+  );
+  assert.equal(badAfterSequence.status, 422);
+  assert.deepEqual(await badAfterSequence.json(), {
+    error: "invalid_request",
+  });
+
+  const conversationLookupFailure = await fetch(
+    `${baseUrl}/inbox/conversations/00000000-0000-4000-8000-0000000000ff`,
+    { headers },
+  );
+  assert.equal(conversationLookupFailure.status, 503);
+  assert.deepEqual(await conversationLookupFailure.json(), {
+    error: "inbox_unavailable",
+  });
+
+  const messages = await fetch(`${baseUrl}/inbox/messages`, { headers });
+  assert.equal(messages.status, 200);
+  const messagesBody = await messages.json();
+  assert.equal(messagesBody.messages.length, 1);
+  assert.equal(
+    messagesBody.messages[0].message_id,
+    "88888888-8888-4888-8888-888888888888",
+  );
+  assert.equal(messagesBody.messages[0].queued_at, "2026-09-07T00:00:00.000Z");
+
+  const badMessagesCursor = await fetch(
+    `${baseUrl}/inbox/messages?cursor=not-a-real-cursor`,
+    { headers },
+  );
+  assert.equal(badMessagesCursor.status, 422);
+  assert.deepEqual(await badMessagesCursor.json(), { error: "invalid_cursor" });
+
+  const badMessagesLimit = await fetch(`${baseUrl}/inbox/messages?limit=0`, {
+    headers,
+  });
+  assert.equal(badMessagesLimit.status, 422);
+  assert.deepEqual(await badMessagesLimit.json(), { error: "invalid_request" });
+
+  const badStatus = await fetch(
+    `${baseUrl}/inbox/messages?status=not-a-public-status`,
+    { headers },
+  );
+  assert.equal(badStatus.status, 422);
+  assert.deepEqual(await badStatus.json(), { error: "invalid_request" });
+
+  const unexpectedParameter = await fetch(
+    `${baseUrl}/inbox/messages?unexpected=true`,
+    { headers },
+  );
+  assert.equal(unexpectedParameter.status, 422);
+  assert.deepEqual(await unexpectedParameter.json(), {
+    error: "invalid_request",
+  });
+});
+
+test("web inbox routes surface a disabled account without leaking server detail", async (t) => {
+  const { baseUrl, accounts } = await fixture(t);
+  accounts.set("66666666-6666-4666-8666-666666666666", {
+    simulateDisabledLookup: true,
+  });
+  const headers = { authorization: "Bearer session" };
+
+  for (const path of [
+    "/inbox/conversations",
+    "/inbox/conversations/99999999-9999-4999-8999-999999999999",
+    "/inbox/messages",
+  ]) {
+    const response = await fetch(`${baseUrl}${path}`, { headers });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "account_disabled" });
+  }
+});
+
+test("web inbox routes report account_unavailable and log the failure when account lookup throws", async (t) => {
+  const { baseUrl, accounts, logs } = await fixture(t);
+  accounts.set("66666666-6666-4666-8666-666666666666", {
+    simulateUnavailableLookup: true,
+  });
+  const headers = { authorization: "Bearer session" };
+
+  const response = await fetch(`${baseUrl}/inbox/conversations`, {
+    headers,
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "account_unavailable" });
+  assert.equal(
+    logs.some((entry) => entry.event === "inbox_account_lookup_failed"),
+    true,
+  );
+});
+
+test("web inbox conversation and message lists report inbox_unavailable when the database fails", async (t) => {
+  const { baseUrl, accounts } = await fixture(t);
+  accounts.set("66666666-6666-4666-8666-666666666666", {
+    username: "tester",
+    projectId: "22222222-2222-4222-8222-222222222222",
+    projectAlias: "synapse",
+    simulateListFailure: true,
+  });
+  const headers = { authorization: "Bearer session" };
+
+  const conversations = await fetch(`${baseUrl}/inbox/conversations`, {
+    headers,
+  });
+  assert.equal(conversations.status, 503);
+  assert.deepEqual(await conversations.json(), { error: "inbox_unavailable" });
+
+  const messages = await fetch(`${baseUrl}/inbox/messages`, { headers });
+  assert.equal(messages.status, 503);
+  assert.deepEqual(await messages.json(), { error: "inbox_unavailable" });
 });

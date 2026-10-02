@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import * as z from "zod/v4";
 
+import { createBrowserSessionAuth } from "../browser-session.mjs";
 import { MessagingError } from "./errors.mjs";
 
 const UUID =
@@ -153,24 +154,7 @@ export function installReceiverRoutes(
       res.status(401).json({ error: "unauthorized" });
     }
   };
-  const browserSession = async (req, res, next) => {
-    res.set("Cache-Control", "no-store");
-    const value = req.headers.authorization;
-    const token =
-      typeof value === "string" && value.startsWith("Bearer ")
-        ? value.slice(7).trim()
-        : null;
-    if (!token) {
-      res.status(401).json({ error: "unauthorized" });
-      return;
-    }
-    try {
-      req.synapseSession = await sessionVerifier.verifyAccessToken(token);
-      next();
-    } catch {
-      res.status(401).json({ error: "unauthorized" });
-    }
-  };
+  const browserSession = createBrowserSessionAuth({ sessionVerifier });
 
   app.get("/assets/receiver-pairing.js", (_req, res) => {
     res.set("Cache-Control", "public, max-age=3600");
