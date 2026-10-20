@@ -32,7 +32,7 @@
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "@supabase/supabase-js": "^2.115.0",
     "express": "^5.2.1",
     "jose": "^6.2.12",
